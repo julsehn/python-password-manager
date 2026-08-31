@@ -1,0 +1,11 @@
+__pycache__/
+*.py[cod]
+.Python
+venv/
+env/
+vault.json
+.DS_Store
+node_modules/
+dist/
+src-tauri/target/
+src-tauri/gen/

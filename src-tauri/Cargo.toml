@@ -1,0 +1,29 @@
+[package]
+name = "caixa-forta"
+version = "0.1.0"
+description = "Gestor local de contrasenyes"
+authors = ["juls"]
+edition = "2021"
+
+[lib]
+name = "caixa_forta_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.4", features = [] }
+
+[dependencies]
+tauri = { version = "2.8", features = [] }
+tauri-plugin-opener = "2.5"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+aes-gcm = "0.10"
+argon2 = "0.5"
+base64 = "0.22"
+rand = "0.8"
+uuid = { version = "1", features = ["v4", "serde"] }
+zeroize = "1"
+
+[features]
+custom-protocol = ["tauri/custom-protocol"]
+default = ["custom-protocol"]
