@@ -495,10 +495,6 @@ class MainWindow(QMainWindow):
         if "." in url and not url.startswith(("http://", "https://")):
             return "https://" + url
 
-        # If it looks like a domain, prefix with https
-        if len(url) > 2 and "." in url:
-            return "https://" + url
-
         return ""
 
     def copy_to_clipboard(self, value: str, message: str):
