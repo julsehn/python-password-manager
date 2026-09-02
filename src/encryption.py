@@ -51,3 +51,39 @@ def encrypt(plaintext: bytes, key: bytes) -> tuple[bytes, bytes]:
 def decrypt(nonce: bytes, ciphertext: bytes, key: bytes) -> bytes:
     aesgcm = AESGCM(key)
     return aesgcm.decrypt(nonce, ciphertext, associated_data=None)
+
+
+def derive_key_from_hotspots(hotspots: list[dict], salt_hex: str, iterations: int = DEFAULT_ITERATIONS) -> Tuple[bytes, bytes]:
+    """Derive an AES key from biometric hotspot coordinates.
+
+    This function converts a sequence of (x, y) percentage coordinates into
+    a deterministic key using PBKDF2. The coordinates act as the "password" input,
+    and the salt provides key stretching to prevent brute-force attacks.
+
+    This is used for image-based biometric authentication where the user's
+    drawn pattern (hotspots) serves as their "password".
+
+    Args:
+        hotspots: List of {"x_pct": float, "y_pct": float} representing the user's drawn pattern
+        salt_hex: Hex-encoded random salt bytes (32 bytes encoded as hex)
+        iterations: PBKDF2 iteration count for key derivation
+
+    Returns:
+        Tuple of (derived_32_byte_key, salt_bytes) for use with encrypt/decrypt
+    """
+    # Convert hotspot coordinates to a deterministic string
+    coords_str = ";".join(f"{hp['x_pct']:.6f},{hp['y_pct']:.6f}" for hp in hotspots)
+    salt = bytes.fromhex(salt_hex)
+
+    # Create the key derivation input from coordinates
+    password_string = f"hotspots:{coords_str};salt:{salt.hex()}"
+
+    kdf = PBKDF2HMAC(
+        algorithm=hashes.SHA256(),
+        length=32,
+        salt=salt,
+        iterations=iterations,
+    )
+    key = kdf.derive(password_string.encode("utf-8"))
+
+    return key, salt

@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    body {
+      width: 300px;
+      padding: 10px;
+      font-family: Arial, sans-serif;
+    }
+    
+    .header {
+      text-align: center;
+      margin-bottom: 15px;
+      color: #2c3e50;
+    }
+    
+    .status {
+      padding: 8px;
+      margin-bottom: 10px;
+      border-radius: 4px;
+      text-align: center;
+    }
+    
+    .connected {
+      background-color: #d4edda;
+      color: #155724;
+      border: 1px solid #c3e6cb;
+    }
+    
+    .disconnected {
+      background-color: #f8d7da;
+      color: #721c24;
+      border: 1px solid #f5c6cb;
+    }
+    
+    .controls {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    
+    button {
+      padding: 8px 12px;
+      background-color: #3498db;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 14px;
+      transition: background-color 0.3s;
+    }
+    
+    button:hover {
+      background-color: #2980b9;
+    }
+    
+    button:disabled {
+      background-color: #bdc3c7;
+      cursor: not-allowed;
+    }
+    
+    .status-info {
+      margin-top: 10px;
+      font-size: 12px;
+      color: #6c757d;
+    }
+    
+    input {
+      padding: 8px;
+      margin: 5px 0;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      width: calc(100% - 10px);
+      box-sizing: border-box;
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h3>Caixa Forta Manager</h3>
+  </div>
+  
+  <div class="status connected">
+    Connected to local app
+  </div>
+  
+  <div class="controls">
+    <button id="fillForm">Autofill Login</button>
+    <button id="saveForm">Save Credentials</button>
+    <button id="settings">Settings</button>
+  </div>
+  
+  <div class="status-info">
+    <p>Version: 1.0</p>
+    <p>Connected to local password manager</p>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

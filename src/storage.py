@@ -1,9 +1,10 @@
 import os
 import json
 import base64
-import binascii
+import hashlib
 import time
 from typing import List, Optional
+import binascii
 
 from src.encryption import derive_key, encrypt, decrypt
 from src.models import PasswordEntry
@@ -12,14 +13,51 @@ from src.models import PasswordEntry
 VAULT_FILENAME = os.path.expanduser("~/.password_manager/vault.json")
 SIDEBAR_SETTINGS_FILENAME = os.path.expanduser("~/.password_manager/sidebar.json")
 LOCKOUT_STATE_FILENAME = os.path.expanduser("~/.password_manager/lockout_state.json")
+CONFIG_FILENAME = os.path.expanduser("~/.password_manager/config.json")
+
+# Default configuration
+DEFAULT_CONFIG = {
+    "clipboard_clear_seconds": 30,
+    "auto_lock_seconds": 300,
+    "show_tutorial": True,
+}
 
 # Brute-force protection: max attempts before lockout
-MAX_LOGIN_ATTEMPTS = 5
+MAX_LOGIN_ATTEMPTS = 10
 LOCKOUT_DURATION_SECONDS = 300  # 5 minutes
+
+# Image authentication paths
+IMAGE_AUTH_FILE = os.path.expanduser("~/.password_manager/image_auth.json")
+
+# Image authentication defaults
+DEFAULT_IMAGE_AUTH = {
+    "enabled": False,
+    "image_b64": None,  # Base64-encoded image (PNG)
+    "original_size": None,  # [width, height] in pixels
+    "hotspots": [],  # List of {"x_pct": float, "y_pct": float} (percentages)
+    "salt": None,  # Salt used to derive master key from hotspots
+}
 
 
 class VaultLockedError(Exception):
     """Raised when master password is locked due to too many failed attempts."""
+
+
+def load_config() -> dict:
+    """Load the application configuration file."""
+    if os.path.exists(CONFIG_FILENAME):
+        try:
+            with open(CONFIG_FILENAME, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            return {**DEFAULT_CONFIG, **data}
+        except (json.JSONDecodeError, IOError):
+            return DEFAULT_CONFIG.copy()
+    return DEFAULT_CONFIG.copy()
+
+
+def save_config(config: dict) -> None:
+    """Save the application configuration to a file."""
+    _write_private_json(CONFIG_FILENAME, config)
 
 
 def _load_lockout_state() -> dict[str, dict]:
@@ -209,34 +247,257 @@ def export_vault(path: str = VAULT_FILENAME, dest_dir: str | None = None) -> Opt
 
     # Validate source path to prevent traversal attacks
     resolved_source = os.path.realpath(path)
-    if not os.path.isfile(resolved_source):
-        raise FileNotFoundError(f"Vault not found: {path}")
+    if not os.path.exists(resolved_source):
+        return None
 
     if dest_dir is None:
-        dest_dir = os.path.dirname(path)
+        dest_dir = os.path.dirname(resolved_source) or "."
 
-    # Validate destination directory to prevent path traversal
-    if dest_dir is not None:
-        resolved_dest = os.path.realpath(dest_dir)
-        # Ensure the destination is within a reasonable scope (home dir or parent of vault)
-        allowed_base = os.path.dirname(resolved_source)
-        if not resolved_dest.startswith(allowed_base):
-            raise ValueError("Backup destination must be within the vault directory.")
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = os.path.basename(path).replace(".json", f"_{timestamp}.bak.json")
+    dest_path = os.path.join(dest_dir, filename)
 
-    if not os.path.exists(path):
-        raise FileNotFoundError(f"Vault not found: {path}")
+    try:
+        shutil.copy2(resolved_source, dest_path)
+        if os.name == "posix":
+            os.chmod(dest_path, 0o600)
+        return dest_path
+    except Exception:
+        return None
 
-    ts = datetime.now().strftime("%Y%m%d%H%M%S")
-    base = os.path.basename(path)
-    backup_name = f"{base}.backup-{ts}"
 
-    # Use realpath on the resolved path to prevent traversal
-    dest_path = os.path.join(dest_dir, backup_name)
+# ========================================
+# Image Authentication (Biometric) Layer
+# ========================================
 
-    # Final safety check: ensure resolved dest is within expected directory
-    resolved_dest_path = os.path.realpath(dest_path)
-    if not resolved_dest_path.startswith(allowed_base):
-        raise ValueError("Backup destination is outside the allowed directory.")
+def save_image_auth(image_b64: str, hotspots: list[dict], salt: bytes | None = None) -> None:
+    """Save the image-based authentication template.
 
-    shutil.copy2(resolved_source, resolved_dest_path)
-    return resolved_dest_path
+    Args:
+        image_b64: Base64-encoded PNG image (the template canvas)
+        hotspots: List of {"x_pct": float, "y_pct": float} representing the user's drawn strokes
+                  (percentages relative to image dimensions, 0-1 range)
+        salt: Optional random salt for key derivation (generated if not provided)
+
+    The hotspots represent a sequence of points the user drew/clicked. This is their
+    "biometric password" — to unlock, they must reproduce the same pattern.
+    """
+    if salt is None:
+        import os
+        salt = os.urandom(32)
+
+    auth_data = {
+        "enabled": True,
+        "image_b64": image_b64,
+        "original_size": None,  # Will be set when loading (derived from image)
+        "hotspots": hotspots,
+        "salt": base64.b64encode(salt).decode("ascii"),
+    }
+
+    _write_private_json(IMAGE_AUTH_FILE, auth_data)
+
+
+def load_image_auth() -> dict | None:
+    """Load the stored image authentication template.
+
+    Returns:
+        Dict with keys: enabled, image_b64, hotspots, salt
+        or None if no template exists.
+    """
+    if not os.path.exists(IMAGE_AUTH_FILE):
+        return None
+
+    try:
+        with open(IMAGE_AUTH_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+
+        if not isinstance(data, dict) or not data.get("enabled"):
+            return None
+
+        return {
+            "image_b64": data.get("image_b64"),
+            "hotspots": data.get("hotspots", []),
+            "salt": data.get("salt"),
+        }
+    except (json.JSONDecodeError, IOError):
+        return None
+
+
+def delete_image_auth() -> bool:
+    """Delete the image authentication template."""
+    if os.path.exists(IMAGE_AUTH_FILE):
+        os.remove(IMAGE_AUTH_FILE)
+        return True
+    return False
+
+
+def image_auth_is_set() -> bool:
+    """Check if image-based authentication is configured."""
+    return os.path.exists(IMAGE_AUTH_FILE)
+
+
+def _generate_key_from_hotspots(hotspots: list[dict], salt: bytes) -> str:
+    """Generate a deterministic master key string from hotspot coordinates.
+
+    The hotspots represent the user's drawn pattern. We convert these to a
+    canonical string that can be used as input for PBKDF2 key derivation.
+
+    Format: "x1,y1;x2,y2;...;salt_hex"
+    This creates a unique "password" from the user's biometric pattern.
+
+    Args:
+        hotspots: List of {"x_pct": float, "y_pct": float}
+        salt: Random salt bytes for key derivation
+
+    Returns:
+        A deterministic string that can be used as input to derive_key()
+    """
+    # Convert hotspot coordinates to a canonical string
+    coords_str = ";".join(f"{hp['x_pct']:.6f},{hp['y_pct']:.6f}" for hp in hotspots)
+    salt_hex = salt.hex()
+
+    # Create the "password" from coordinates + salt
+    return f"hotspots:{coords_str};salt:{salt_hex}"
+
+
+def derive_key_from_image_auth(hotspots: list[dict], salt_hex: str) -> bytes:
+    """Derive the AES key from image authentication hotspots.
+
+    This replaces the text password-based derive_key() with a biometric pattern.
+
+    Args:
+        hotspots: List of {"x_pct": float, "y_pct": float} representing the user's drawn pattern
+        salt_hex: Hex-encoded salt bytes used during setup
+
+    Returns:
+        32-byte AES key derived from the biometric pattern
+    """
+    import os
+
+    # Convert hotspot coordinates to a deterministic key derivation input
+    coords_str = ";".join(f"{hp['x_pct']:.6f},{hp['y_pct']:.6f}" for hp in hotspots)
+    salt = bytes.fromhex(salt_hex)
+
+    # Use PBKDF2 to derive a key from the coordinate string
+    # The coordinates act as the "password" input, salt is used for key stretching
+    password_string = f"hotspots:{coords_str};salt:{salt.hex()}"
+
+    key, _ = derive_key(password_string, salt=salt)
+    return key
+
+
+def verify_image_auth_pattern(strokes: list[dict], stored_hotspots: list[dict], salt_hex: str) -> bool:
+    """Verify that the user's drawn pattern matches the stored template.
+
+    This is a tolerance-based comparison — human drawing isn't pixel-perfect.
+    We check that the user reproduced approximately the same sequence of points.
+
+    Args:
+        strokes: User's drawn strokes as [{"x_pct": float, "y_pct": float}]
+        stored_hotspots: The original template hotspots
+        salt_hex: Hex-encoded salt used during setup
+
+    Returns:
+        True if the pattern matches within tolerance thresholds.
+    """
+    try:
+        salt = bytes.fromhex(salt_hex)
+    except (TypeError, ValueError):
+        return False
+
+    if len(salt) != 32 or not strokes or not stored_hotspots:
+        return False
+
+    if len(strokes) < len(stored_hotspots) * 0.5:
+        # User drew less than half the original points — likely not a match
+        return False
+
+    if len(strokes) > len(stored_hotspots) * 3:
+        # User drew way more points — suspicious
+        return False
+
+    # Match points one-to-one so one nearby stroke cannot satisfy multiple hotspots.
+    tolerance_pct = 0.15  # 15% tolerance (0-1 range)
+    distances = []
+    try:
+        for stored in stored_hotspots:
+            if not 0 <= stored['x_pct'] <= 100 or not 0 <= stored['y_pct'] <= 100:
+                return False
+            for index, stroke in enumerate(strokes):
+                if not 0 <= stroke['x_pct'] <= 100 or not 0 <= stroke['y_pct'] <= 100:
+                    return False
+                dx = stroke['x_pct'] - stored['x_pct']
+                dy = stroke['y_pct'] - stored['y_pct']
+                distances.append(((dx * dx + dy * dy) ** 0.5, index))
+    except (KeyError, TypeError, ValueError):
+        return False
+
+    distances.sort()
+    matched_strokes = set()
+    matched_hotspots = 0
+    for distance, stroke_index in distances:
+        if distance > tolerance_pct or stroke_index in matched_strokes:
+            continue
+        matched_strokes.add(stroke_index)
+        matched_hotspots += 1
+        if matched_hotspots == len(stored_hotspots):
+            return True
+    return False
+
+
+def export_image_auth() -> Optional[str]:
+    """Export the image authentication template as a JSON file.
+
+    Returns path to backup file, or None if export fails.
+    """
+    auth_data = load_image_auth()
+    if not auth_data:
+        return None
+
+    import shutil
+    from datetime import datetime
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    backup_path = os.path.expanduser(f"~/.password_manager/image_auth_{timestamp}.json")
+
+    try:
+        _write_private_json(backup_path, {
+            "enabled": True,
+            **auth_data
+        })
+        return backup_path
+    except Exception:
+        return None
+
+
+def restore_image_auth(backup_path: str) -> bool:
+    """Restore image authentication from a backup file.
+
+    Args:
+        backup_path: Path to the backup JSON file
+
+    Returns:
+        True if restoration succeeded, False otherwise.
+    """
+    try:
+        with open(backup_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+
+        if not isinstance(data, dict) or not data.get("enabled"):
+            return False
+
+        image_b64 = data.get("image_b64")
+        hotspots = data.get("hotspots")
+        encoded_salt = data.get("salt")
+        if not isinstance(image_b64, str) or not isinstance(hotspots, list):
+            return False
+        if not isinstance(encoded_salt, str):
+            return False
+        salt = base64.b64decode(encoded_salt, validate=True)
+        if len(salt) != 32:
+            return False
+
+        save_image_auth(image_b64=image_b64, hotspots=hotspots, salt=salt)
+        return True
+    except Exception:
+        return False

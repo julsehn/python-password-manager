@@ -1,5 +1,6 @@
 import os
 import time
+
 from src.ui.qt_compat import (
     QMainWindow,
     QLabel,
@@ -34,22 +35,26 @@ from src.ui.qt_compat import (
 
 from src.password_manager import PasswordManager
 from src.ui.dialogs import AddEditDialog, GeneratePasswordDialog, LoginDialog
+from src.ui.tutorial_dialog import TutorialDialog
 from src.storage import (
     save_vault,
     load_vault,
     export_vault,
     VAULT_FILENAME,
+    SIDEBAR_SETTINGS_FILENAME,
+    LOCKOUT_STATE_FILENAME,
+    save_config,
     load_sidebar_settings,
     save_sidebar_settings,
+    load_config,
 )
 from pathlib import Path
 import webbrowser
 
-# Security: Auto-lock timeout in seconds (5 minutes)
-SESSION_TIMEOUT_SECONDS = 300
-
-# Security: Clear clipboard after this many seconds (15 seconds)
-CLIPBOARD_CLEAR_SECONDS = 15
+# Load configuration
+CONFIG = load_config()
+SESSION_TIMEOUT_SECONDS = CONFIG.get("auto_lock_seconds", 300)
+CLIPBOARD_CLEAR_SECONDS = CONFIG.get("clipboard_clear_seconds", 30)
 
 CARD_STYLE = """
 QWidget.card { background: #ffffff; border: 1px solid #dbe3eb; border-radius: 12px; }
@@ -371,6 +376,130 @@ class MainWindow(QMainWindow):
         self.nav_settings.setChecked(True)
         self.status.setText("Configuració")
 
+        # Create a configuration dialog
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Configuració")
+        layout = QVBoxLayout(dlg)
+
+        layout.addWidget(QLabel("Tèrmins de seguretat"))
+        
+        self.clip_spin = QSpinBox()
+        self.clip_spin.setRange(1, 3600)
+        self.clip_spin.setValue(CONFIG.get("clipboard_clear_seconds", 30))
+        layout.addWidget(QLabel("Segons per netejar la ténegua:"))
+        layout.addWidget(self.clip_spin)
+
+        self.lock_spin = QSpinBox()
+        self.lock_spin.setRange(1, 3600)
+        self.lock_spin.setValue(CONFIG.get("auto_lock_seconds", 300))
+        layout.addWidget(QLabel("Segons d'inactivitat per bloqueig automàtic:"))
+        layout.addWidget(self.lock_spin)
+
+        # Separator before destructive actions
+        separator = QFrame()
+        separator.setFixedHeight(1)
+        separator.setStyleSheet("background: #dfe4e1; margin: 20px 0;")
+        layout.addWidget(separator)
+
+        # Warning label for delete all data button
+        danger_label = QLabel("⚠ Aquestes accions són irreversibles")
+        danger_label.setStyleSheet("color: #ef4444; font-weight: 600; margin-top: 8px;")
+        layout.addWidget(danger_label)
+
+        # Delete all data button
+        delete_btn = QPushButton("🗑 Eliminar totes les dades")
+        delete_btn.setStyleSheet("""
+            QPushButton {
+                background: #dc2626; 
+                color: white; 
+                padding: 8px 12px; 
+                border-radius: 6px;
+                font-weight: 500;
+            }
+            QPushButton:hover { background: #b91c1c; }
+            QPushButton:pressed { background: #991b1b; }
+        """)
+        delete_btn.clicked.connect(self._on_delete_all_data)
+        layout.addWidget(delete_btn)
+
+        # Button row at the bottom
+        btns = QHBoxLayout()
+        save_btn = QPushButton("Guardar")
+        save_btn.clicked.connect(lambda: self.save_settings(dlg))
+        cancel_btn = QPushButton("Cancel·la")
+        cancel_btn.clicked.connect(dlg.reject)
+        btns.addWidget(save_btn)
+        btns.addWidget(cancel_btn)
+        layout.addLayout(btns)
+
+        dlg.exec()
+
+    def _on_delete_all_data(self):
+        """Delete all data for starting over."""
+        global CONFIG, SESSION_TIMEOUT_SECONDS, CLIPBOARD_CLEAR_SECONDS
+        confirm = QMessageBox.warning(
+            self,
+            "⚠ Advertència",
+            "Vols eliminar TOTES les dades de la caixa forta?\n\n"
+            "Aquesta acció és IRREVERSIBLE i eliminarà:\n"
+            "• Totes les contrasenyes\n"
+            "• Totes les informacions\n"
+            "• Totes les configuracions personalitzades\n\n\n"
+            "Si continues, no podrés recuperar les dades perdudes.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
+        )
+
+        if confirm == QMessageBox.StandardButton.Yes:
+            # Double-confirm for safety
+            final_confirm = QMessageBox.warning(
+                self,
+                "⚠ Confirmació Final",
+                "Ets segur/a que vols eliminar TOTES les dades?\n\n"
+                "Escréu 'DELETE' per confirmació.",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No
+            )
+
+            if final_confirm == QMessageBox.StandardButton.Yes:
+                # Delete all data files
+                try:
+                    if os.path.exists(VAULT_FILENAME):
+                        os.remove(VAULT_FILENAME)
+                    if os.path.exists(SIDEBAR_SETTINGS_FILENAME):
+                        os.remove(SIDEBAR_SETTINGS_FILENAME)
+                    if os.path.exists(LOCKOUT_STATE_FILENAME):
+                        os.remove(LOCKOUT_STATE_FILENAME)
+
+                    QMessageBox.information(
+                        self,
+                        "Dades eliminades",
+                        "Totes les dades s'han eliminat.\n\n"
+                        "La caixa forta ha estat reiniciada."
+                    )
+                    
+                    # Reset to defaults (globals already declared at top)
+                    CONFIG.update(load_config())
+                    SESSION_TIMEOUT_SECONDS = CONFIG.get("auto_lock_seconds", 300)
+                    CLIPBOARD_CLEAR_SECONDS = CONFIG.get("clipboard_clear_seconds", 30)
+
+                except Exception as e:
+                    QMessageBox.critical(self, "Error", f"No s'ha pogut eliminar les dades:\n{str(e)}")
+
+    def save_settings(self, dlg):
+        global CONFIG  # noqa: F826
+        new_config = {
+            "clipboard_clear_seconds": self.clip_spin.value(),
+            "auto_lock_seconds": self.lock_spin.value(),
+            "show_tutorial": CONFIG.get("show_tutorial", True)
+        }
+        save_config(new_config)
+        # Refresh the main window's constants
+        CONFIG.update(new_config)
+        SESSION_TIMEOUT_SECONDS = CONFIG.get("auto_lock_seconds", 300)
+        CLIPBOARD_CLEAR_SECONDS = CONFIG.get("clipboard_clear_seconds", 30)
+        dlg.accept()
+
     def refresh_cards(self):
         """Refresh cards with security improvements."""
         self.list_area.clear()
@@ -539,7 +668,7 @@ class MainWindow(QMainWindow):
 
         # Additional validation before opening
         if "javascript:" in site.lower() or "vbscript:" in site.lower():
-            QMessageBox.warning(self, "Error de seguretat", "URL no permetada.")
+            QMessageBox.warning(self, "Error de seguretat", "URL no permitada.")
             return
 
         if not site.startswith(("http://", "https://")):
@@ -561,7 +690,7 @@ class MainWindow(QMainWindow):
 
             # Input validation
             if not data["site"]:
-                QMessageBox.warning(self, "No vàlid", "El nom de l'accés és obligatori.")
+                QMessageBox.warning(self, "No valid", "El nom de l'accés és obligatori.")
                 return
 
             if not data["password"]:

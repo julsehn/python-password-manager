@@ -1,0 +1,35 @@
+{
+  "manifest_version": 2,
+  "name": "Caixa Forta Manager",
+  "version": "1.0",
+  "description": "Extension for autofill and communication with Caixa Forta password manager",
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "permissions": [
+    "activeTab",
+    "storage",
+    "contextMenus"
+  ],
+  "browser_action": {
+    "default_popup": "popup.html",
+    "default_title": "Caixa Forta Manager"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "css": ["content.css"]
+    }
+  ],
+  "background": {
+    "scripts": ["background.js"]
+  },
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "caixa-forta@juls.com"
+    }
+  }
+}

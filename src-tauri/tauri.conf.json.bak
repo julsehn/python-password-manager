@@ -17,9 +17,7 @@
         "height": 760,
         "minWidth": 880,
         "minHeight": 620,
-        "resizable": true,
-        "fullscreen": false,
-        "decorations": true
+        "resizable": true
       }
     ],
     "security": {
@@ -29,14 +27,6 @@
   "bundle": {
     "active": true,
     "targets": "all",
-    "macOS": { 
-      "minimumSystemVersion": "11.0",
-      "signingIdentity": null
-    },
-    "windows": {
-      "wix": {
-        "language": "en-US"
-      }
-    }
+    "macOS": { "minimumSystemVersion": "11.0" }
   }
 }
