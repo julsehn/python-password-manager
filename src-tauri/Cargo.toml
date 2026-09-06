@@ -16,7 +16,6 @@ tauri-build = { version = "2.4", features = [] }
 tauri = { version = "2.8", features = [] }
 tauri-plugin-opener = "2.5"
 serde = { version = "1", features = ["derive"] }
-
 serde_json = "1"
 serde_yaml = "0.9"
 tokio = { version = "1", features = ["full"] }
@@ -24,6 +23,18 @@ reqwest = { version = "0.12", features = ["json", "multipart"] }
 tokio-util = "0.7"
 chrono = "0.4"
 ring = "0.17"
-[features]
-custom-protocol = ["tauri/custom-protocol"]
-default = ["custom-protocol"]
+base64 = "0.22"
+aes-gcm = "0.10"
+hex = "0.4"
+pbkdf2 = "0.12"
+argon2 = "0.5"
+rand = "0.8"
+sha2 = "0.10"
+uuid = { version = "1", features = ["v4", "serde"] }
+unicode-segmentation = "1.11"
+hex-literal = "0.4"
+tauri-plugin-http = "2.4"
+
+[[bin]]
+name = "caixa-forta"
+path = "src/main.rs"

@@ -3,6 +3,17 @@
 PROJECT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$PROJECT_DIR" || exit 1
 
+cleanup_project_vite() {
+    local vite_pid
+    vite_pid="$(lsof -tiTCP:1420 -sTCP:LISTEN 2>/dev/null | head -n 1)"
+    if [[ -n "$vite_pid" ]] && ps -p "$vite_pid" -o command= | grep -q "$PROJECT_DIR/node_modules"; then
+        kill "$vite_pid" 2>/dev/null || true
+    fi
+}
+
+cleanup_project_vite
+trap cleanup_project_vite EXIT
+
 export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
 [[ -f "$HOME/.cargo/env" ]] && source "$HOME/.cargo/env"
 if [[ -d "$HOME/.rustup/toolchains" ]]; then

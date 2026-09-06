@@ -47,6 +47,7 @@ class LoginDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("Entrar a la caixa forta")
         self.setModal(True)
+        self.remote = remote
 
         layout = QVBoxLayout()
         layout.setSpacing(16)
@@ -54,8 +55,9 @@ class LoginDialog(QDialog):
         # Title
         title = QLabel("La teva caixa forta")
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        title.setFont(title.font().copied())
-        title.setFontWeight(750)
+        font = title.font()
+        font.setWeight(750)
+        title.setFont(font)
         layout.addWidget(title)
 
         # Subtitle
@@ -128,21 +130,17 @@ class LoginDialog(QDialog):
             self.error_label.setText("Escriu una contrasenya.")
             return
 
-        # Validate password length (minimum 8 characters)
-        if len(password) < 8:
-            self.error_label.setText("La contrasenya ha de ser d'almenys 8 characters.")
+        # Validate password length (minimum 16 characters per OWASP for vault encryption)
+        if len(password) < 16:
+            self.error_label.setText("La contrasenya mestra ha de tenir com a mínim 16 caràcters.")
             return
 
-        # Try to load the vault with this password
+        # Validate the password against the selected vault backend.
         try:
             from src.storage import VaultLockedError
-
             load_vault(password, VAULT_FILENAME)
-        except VaultLockedError as e:
-            self.error_label.setText(str(e))
-            return
         except Exception as e:
-            self.error_label.setText(f"Contrasenya incorrecta: {str(e)}")
+            self.error_label.setText(str(e))
             return
 
         self.accept()
@@ -179,8 +177,9 @@ class ImageAuthSetupDialog(QDialog):
         # Step indicator
         self.step_label = QLabel("Pass 1 de 2: Selecciona una imatge")
         self.step_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.step_label.setFont(self.step_label.font().copied())
-        self.step_label.setFontWeight(600)
+        font = self.step_label.font()
+        font.setWeight(600)
+        self.step_label.setFont(font)
         layout.addWidget(self.step_label)
 
         # Step 1: Image selection and preview
@@ -252,8 +251,9 @@ class ImageAuthSetupDialog(QDialog):
             # Add a "Finish setup" button that's hidden until image is selected
             finish_btn = QPushButton("✅ Finalitzar configuració")
             self.finish_button = finish_btn
-            finish_btn.setFont(finish_btn.font().copied())
-            finish_btn.setFontWeight(500)
+            font = finish_btn.font()
+            font.setWeight(500)
+            finish_btn.setFont(font)
             finish_btn.setStyleSheet("""
                 QPushButton {
                     background: #10b981; 
@@ -338,8 +338,9 @@ class BiometricLoginDialog(QDialog):
         # Title
         title = QLabel("Entrar a la caixa forta")
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        title.setFont(title.font().copied())
-        title.setFontWeight(750)
+        font = title.font()
+        font.setWeight(750)
+        title.setFont(font)
         layout.addWidget(title)
 
         subtitle = QLabel("Dibuixa el teu patró d'autentificació")
@@ -540,8 +541,9 @@ class BiometricLoginPrompt(QDialog):
         # Title
         title = QLabel("La teva caixa forta")
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        title.setFont(title.font().copied())
-        title.setFontWeight(700)
+        font = title.font()
+        font.setWeight(700)
+        title.setFont(font)
         layout.addWidget(title)
 
         subtitle = QLabel("Entrada la contrasenya mestra per desbloquejar les teves contrasenyes.")
@@ -551,8 +553,9 @@ class BiometricLoginPrompt(QDialog):
 
         # Image auth button (primary method)
         self.btn_image_auth = QPushButton("🖼 Autentar amb imatge")
-        self.btn_image_auth.setFont(self.btn_image_auth.font().copied())
-        self.btn_image_auth.setFontWeight(500)
+        font = self.btn_image_auth.font()
+        font.setWeight(500)
+        self.btn_image_auth.setFont(font)
         self.btn_image_auth.clicked.connect(self._on_use_image_auth)
         layout.addWidget(self.btn_image_auth)
 
@@ -580,7 +583,7 @@ class BiometricLoginPrompt(QDialog):
         layout.addWidget(self.error_label)
 
         # Buttons
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonButtonBox.StandardButton.Cancel)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         buttons.button(QDialogButtonBox.StandardButton.Ok).setText("Entrar")
         buttons.button(QDialogButtonBox.StandardButton.Cancel).setText("Cancel·la")
         buttons.accepted.connect(self._on_accept)
@@ -627,7 +630,7 @@ class BiometricLoginPrompt(QDialog):
 class AddEditDialog(QDialog):
     """Diàleg per afegir o editar una entrada de contrasenya."""
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, entry=None):
         super().__init__(parent)
         self.setWindowTitle("Afegir/editar entrada")
         self.setFixedSize(400, 250)
@@ -657,8 +660,13 @@ class AddEditDialog(QDialog):
         self.pass_field.setEchoMode(QLineEdit.EchoMode.Password)
         layout.addWidget(self.pass_field)
 
+        if entry:
+            self.site_field.setText(entry.get("site", ""))
+            self.user_field.setText(entry.get("username", ""))
+            self.pass_field.setText(entry.get("password", ""))
+
         # Buttons
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonButtonBox.StandardButton.Cancel)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
@@ -669,8 +677,9 @@ class AddEditDialog(QDialog):
         """Return the data from this dialog as a dict."""
         return {
             "site": self.site_field.text(),
-            "user": self.user_field.text(),
+            "username": self.user_field.text(),
             "password": self.pass_field.text(),
+            "notes": "",
         }
 
 
@@ -688,8 +697,9 @@ class GeneratePasswordDialog(QDialog):
         # Title
         title = QLabel("Genera una contrasenya segura")
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        title.setFont(title.font().copied())
-        title.setFontWeight(600)
+        font = title.font()
+        font.setWeight(600)
+        title.setFont(font)
         layout.addWidget(title)
 
         # Password length selector
@@ -714,7 +724,7 @@ class GeneratePasswordDialog(QDialog):
         self.btn_copy.clicked.connect(self._on_copy)
         btn_row.addWidget(self.btn_copy)
 
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonButtonBox.StandardButton.Cancel)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         btn_row.addWidget(buttons.button(QDialogButtonBox.StandardButton.Ok))

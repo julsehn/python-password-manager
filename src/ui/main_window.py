@@ -31,9 +31,12 @@ from src.ui.qt_compat import (
     QColor,
     QCursor,
     QTimer,
+    QSpinBox,
+    QColorDialog,
 )
 
 from src.password_manager import PasswordManager
+from src.remote_vault import RemoteVaultStore
 from src.ui.dialogs import AddEditDialog, GeneratePasswordDialog, LoginDialog
 from src.ui.tutorial_dialog import TutorialDialog
 from src.storage import (
@@ -47,6 +50,7 @@ from src.storage import (
     load_sidebar_settings,
     save_sidebar_settings,
     load_config,
+    DEFAULT_CONFIG,
 )
 from pathlib import Path
 import webbrowser
@@ -141,10 +145,64 @@ class MainWindow(QMainWindow):
         self._auto_lock_timer.timeout.connect(self._on_session_timeout)
 
         self.manager = PasswordManager()
+        self.remote_store = RemoteVaultStore(CONFIG)
         self._initialized = False
+        self._master_password = None
+        self._init_ui()
 
         # Security: Initialize login state (authenticate on startup)
         self._init_login_state()
+
+    def _init_ui(self):
+        self.status = QLabel("Preparat")
+        self.status.setObjectName("status")
+        self.status.setToolTip("Ready - Click for status details")
+        self.sidebar_settings = load_sidebar_settings()
+        self.sidebar = QListWidget()
+        self.sidebar.setObjectName("sidebar")
+        self.sidebar.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.sidebar.customContextMenuRequested.connect(self._on_sidebar_menu)
+
+        self.search = QLineEdit()
+        self.search.setObjectName("search")
+        self.search.setPlaceholderText("Cerca accessos")
+        self.search.textChanged.connect(self.on_search)
+        self.list_area = QListWidget()
+        self.list_area.setSpacing(8)
+        self.list_area.setFrameShape(QFrame.Shape.NoFrame)
+
+        add_button = QPushButton("Afegir accés")
+        add_button.clicked.connect(self.on_add)
+        self.nav_vault = self._create_nav_tab("Caixa forta", Path())
+        self.nav_vault.setChecked(True)
+        self.nav_vault.clicked.connect(self.show_vault)
+        self.nav_settings = self._create_nav_tab("Configuració", Path())
+        self.nav_settings.clicked.connect(self.show_settings)
+
+        sidebar_layout = QVBoxLayout()
+        sidebar_layout.addWidget(self.sidebar)
+        sidebar_layout.addWidget(self.nav_settings)
+        sidebar_widget = QWidget()
+        sidebar_widget.setLayout(sidebar_layout)
+
+        content_layout = QVBoxLayout()
+        content_layout.addWidget(self.search)
+        content_layout.addWidget(add_button)
+        content_layout.addWidget(self.list_area)
+        content_layout.addWidget(self.status)
+        content_widget = QWidget()
+        content_widget.setLayout(content_layout)
+
+        splitter = QSplitter()
+        splitter.addWidget(sidebar_widget)
+        splitter.addWidget(content_widget)
+        splitter.setStretchFactor(1, 1)
+        self.setCentralWidget(splitter)
+        self._init_sidebar()
+
+        remote_menu = self.menuBar().addMenu("Remot")
+        remote_menu.addAction(QAction("Puja la caixa forta", self, triggered=self._sync_upload))
+        remote_menu.addAction(QAction("Descarrega la caixa forta", self, triggered=self._sync_download))
 
     def _on_session_timeout(self):
         """Auto-lock after inactivity."""
@@ -164,27 +222,41 @@ class MainWindow(QMainWindow):
         else:
             self.status.setText("Entrada la contrasenya mestra per començar.")
 
-        dlg = LoginDialog(self)
+        dlg = LoginDialog(self, remote=self.remote_store.configured)
         if dlg.exec() == QDialog.DialogCode.Accepted:
-            self._load_vault()
-        else:
-            # If no vault exists, just proceed (first-time setup)
+            self._load_vault(dlg.password_field.text())
+        elif not self._initialized and not self.remote_store.configured and not os.path.exists(VAULT_FILENAME):
             self._initialize_new_vault()
 
-    def _load_vault(self):
+    def _load_vault(self, master_password=None):
         """Load vault after successful login."""
-        # Get master password from user (we need to re-prompt or cache it)
-        # For simplicity, we'll prompt again - in production you'd want a secure credential store
-        dlg = LoginDialog(self)
-        if dlg.exec() == QDialog.DialogCode.Accepted:
-            try:
-                entries = load_vault(dlg.password_field.text())
+        if not master_password:
+            return False
+        try:
+            if self.remote_store.configured:
+                # Auto-download from remote server
+                entries, version = self.remote_store.load(master_password)
+                CONFIG["railway_version"] = version
+                save_config(CONFIG)
                 self.manager.entries = entries
-                self._initialized = True
-                self.refresh_cards()
-                self.status.setText("Caixa forta - Accés correct")
-            except Exception as e:
-                self.status.setText(f"Error: {str(e)}")
+            else:
+                entries = load_vault(master_password)
+            self._master_password = master_password
+            self._initialized = True
+            self.refresh_cards()
+            status_msg = "Caixa forta remota - Accés correcte" if self.remote_store.configured else "Caixa forta - Accés correcte"
+            self.status.setText(status_msg)
+            
+            # Check for sync indicators
+            if self.remote_store.configured and entries:
+                self.status.setStyleSheet("color: #16803c; font-weight: 600;")
+            
+            return True
+        except Exception as error:
+            self._show_remote_error("No s'ha pogut carregar la caixa forta", error)
+            self.status.setText("Error de càrrega")
+            self.status.setStyleSheet("color: #dc2626; font-weight: 600;")
+            return False
 
     def _initialize_new_vault(self):
         """Initialize a new vault with master password prompt."""
@@ -229,7 +301,12 @@ class MainWindow(QMainWindow):
                 error_label.setText("Les contrasenyes no coincideixen.")
                 return
 
-            save_vault([], pw)
+            if self.remote_store.has_server:
+                self.remote_store.save([], pw)
+                save_config(CONFIG)
+            else:
+                save_vault([], pw)
+            self._master_password = pw
             self._initialized = True
             dlg.accept()
 
@@ -244,7 +321,7 @@ class MainWindow(QMainWindow):
         """Check if vault exists and show login dialog."""
         from src.storage import VAULT_FILENAME, load_vault
 
-        if os.path.exists(VAULT_FILENAME):
+        if self.remote_store.configured or os.path.exists(VAULT_FILENAME):
             self.show_login_dialog()
         else:
             # First-time setup: create new vault
@@ -395,6 +472,32 @@ class MainWindow(QMainWindow):
         layout.addWidget(QLabel("Segons d'inactivitat per bloqueig automàtic:"))
         layout.addWidget(self.lock_spin)
 
+        layout.addWidget(QLabel("URL del servidor Railway (opcional):"))
+        self.railway_url_edit = QLineEdit(CONFIG.get("railway_url", ""))
+        self.railway_url_edit.setPlaceholderText("https://your-project.up.railway.app")
+        tooltip = QLabel("Auto-generate després de crear el projecte a Railway")
+        tooltip.setAlignment(Qt.AlignmentFlag.AlignRight)
+        tooltip.setStyleSheet("color: #68706c; font-size: 11px; padding-left: 8px;")
+        layout.addWidget(tooltip)
+        layout.addWidget(self.railway_url_edit)
+
+        layout.addWidget(QLabel("Identificador de la caixa forta Railway:"))
+        tooltip = QLabel("Crea una caixa forta al llançar l'app")
+        tooltip.setAlignment(Qt.AlignmentFlag.AlignRight)
+        tooltip.setStyleSheet("color: #68706c; font-size: 11px; padding-left: 8px;")
+        layout.addWidget(tooltip)
+        self.railway_vault_id_edit = QLineEdit(CONFIG.get("railway_vault_id", ""))
+        layout.addWidget(self.railway_vault_id_edit)
+
+        layout.addWidget(QLabel("Credencial d'accés Railway:"))
+        tooltip = QLabel("S'genera automàticament al crear la caixa forta")
+        tooltip.setAlignment(Qt.AlignmentFlag.AlignRight)
+        tooltip.setStyleSheet("color: #68706c; font-size: 11px; padding-left: 8px;")
+        layout.addWidget(tooltip)
+        self.railway_token_edit = QLineEdit(CONFIG.get("railway_token", ""))
+        self.railway_token_edit.setEchoMode(QLineEdit.EchoMode.Password)
+        layout.addWidget(self.railway_token_edit)
+
         # Separator before destructive actions
         separator = QFrame()
         separator.setFixedHeight(1)
@@ -452,18 +555,17 @@ class MainWindow(QMainWindow):
 
         if confirm == QMessageBox.StandardButton.Yes:
             # Double-confirm for safety
-            final_confirm = QMessageBox.warning(
+            typed, ok = QInputDialog.getText(
                 self,
                 "⚠ Confirmació Final",
-                "Ets segur/a que vols eliminar TOTES les dades?\n\n"
-                "Escréu 'DELETE' per confirmació.",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.No
+                "Escriu DELETE per confirmar l'eliminació total:",
             )
 
-            if final_confirm == QMessageBox.StandardButton.Yes:
+            if ok and typed == "DELETE":
                 # Delete all data files
                 try:
+                    if self.remote_store.configured:
+                        self.remote_store.delete()
                     if os.path.exists(VAULT_FILENAME):
                         os.remove(VAULT_FILENAME)
                     if os.path.exists(SIDEBAR_SETTINGS_FILENAME):
@@ -479,26 +581,104 @@ class MainWindow(QMainWindow):
                     )
                     
                     # Reset to defaults (globals already declared at top)
-                    CONFIG.update(load_config())
+                    CONFIG.clear()
+                    CONFIG.update(DEFAULT_CONFIG)
+                    save_config(CONFIG)
+                    self.remote_store = RemoteVaultStore(CONFIG)
+                    self.manager.entries = []
+                    self._master_password = None
+                    self._initialized = False
                     SESSION_TIMEOUT_SECONDS = CONFIG.get("auto_lock_seconds", 300)
                     CLIPBOARD_CLEAR_SECONDS = CONFIG.get("clipboard_clear_seconds", 30)
 
                 except Exception as e:
-                    QMessageBox.critical(self, "Error", f"No s'ha pogut eliminar les dades:\n{str(e)}")
+                    self._show_remote_error("No s'han pogut eliminar les dades", e)
+
+    def _show_remote_error(self, title: str, error: Exception):
+        """Show error message to user."""
+        message = f"{title}\n\n{str(error) or 'Error desconegut'}"
+        self.status.setText(f"Error: {str(error)[:100]}")
+        self.status.setStyleSheet("color: #dc2626; font-weight: 600;")
+        QMessageBox.critical(self, title, message)
+
+    def _show_sync_status(self):
+        """Show current sync status."""
+        if self.remote_store.configured:
+            if self._master_password and self.manager.entries:
+                status = "Sync: Active"
+                self.status.setStyleSheet("color: #16803c; font-weight: 600;")
+            elif self._master_password:
+                status = "Sync: Ready"
+                self.status.setStyleSheet("color: #3b82f6; font-weight: 600;")
+            else:
+                status = "Sync: Unlocked"
+                self.status.setStyleSheet("color: #68706c; font-weight: 600;")
+        else:
+            if self._master_password:
+                status = "Local Only"
+                self.status.setStyleSheet("color: #f59e0b; font-weight: 600;")
+            else:
+                status = "Preparat"
+                self.status.setStyleSheet("")
+        self.status.setText(status)
+
+    def _sync_upload(self):
+        if not self.remote_store.configured:
+            QMessageBox.information(self, "Remot no configurat", "Configura l'URL, l'identificador i el testimoni Railway.")
+            return
+        if not self._master_password:
+            QMessageBox.warning(self, "Caixa forta bloquejada", "Desbloqueja la caixa forta abans de sincronitzar.")
+            return
+        try:
+            self.remote_store.save(self.manager.get_entries(), self._master_password)
+            save_config(CONFIG)
+            self.status.setText(f"Pujada remota completada (versió {CONFIG['railway_version']})")
+        except Exception as error:
+            self._show_remote_error("No s'ha pogut pujar la caixa forta", error)
+
+    def _sync_download(self):
+        if not self.remote_store.configured:
+            QMessageBox.information(self, "Remot no configurat", "Configura l'URL, l'identificador i el testimoni Railway.")
+            return
+        if not self._master_password:
+            QMessageBox.warning(self, "Caixa forta bloquejada", "Desbloqueja la caixa forta abans de sincronitzar.")
+            return
+        try:
+            entries, version = self.remote_store.load(self._master_password)
+            self.manager.entries = entries
+            CONFIG["railway_version"] = version
+            save_config(CONFIG)
+            self.refresh_cards()
+            self.status.setText(f"Descarrega remota completada (versió {version})")
+        except Exception as error:
+            self._show_remote_error("No s'ha pogut descarregar la caixa forta", error)
 
     def save_settings(self, dlg):
         global CONFIG  # noqa: F826
         new_config = {
             "clipboard_clear_seconds": self.clip_spin.value(),
             "auto_lock_seconds": self.lock_spin.value(),
-            "show_tutorial": CONFIG.get("show_tutorial", True)
+            "show_tutorial": CONFIG.get("show_tutorial", True),
+            "railway_url": self.railway_url_edit.text().strip().rstrip("/") or "",
+            "railway_vault_id": self.railway_vault_id_edit.text().strip() or "",
+            "railway_token": self.railway_token_edit.text().strip() or "",
         }
+        
+        # Update with version if available
+        if CONFIG.get("railway_version") is not None:
+            new_config["railway_version"] = CONFIG["railway_version"]
+        
         save_config(new_config)
+        
         # Refresh the main window's constants
         CONFIG.update(new_config)
+        self.remote_store = RemoteVaultStore(CONFIG)
         SESSION_TIMEOUT_SECONDS = CONFIG.get("auto_lock_seconds", 300)
         CLIPBOARD_CLEAR_SECONDS = CONFIG.get("clipboard_clear_seconds", 30)
-        dlg.accept()
+        self._show_sync_status()
+        
+        if dlg.windowTitle() == "Configuració":
+            dlg.accept()
 
     def refresh_cards(self):
         """Refresh cards with security improvements."""
@@ -560,10 +740,14 @@ class MainWindow(QMainWindow):
             btn_copy.setStyleSheet("QToolButton { background: #fbfdff; border: 1px solid #e6eef5; border-radius: 8px; } QToolButton:hover { background: #f1f5f9; }")
             btn_copy.setCursor(Qt.CursorShape.PointingHandCursor)
 
-            def _show_copy_menu(_checked=False, b=btn_copy, pw=e.password, user=e.username):
+            btn_copy.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+            btn_copy.customContextMenuRequested.connect(lambda: self._show_copy_menu(btn_copy))
+
+            def _show_copy_menu(self, b: QToolButton):
+                """Show copy menu with secure labels (password shown as 🔒)."""
                 m = QMenu(self)
-                m.addAction(QAction("Copiar l'usuari", m, triggered=lambda: self.copy_to_clipboard(user, "Usuari copiat")))
-                m.addAction(QAction("Copiar la contrasenya", m, triggered=lambda: self.copy_to_clipboard(pw, "Contrasenya copiada")))
+                m.addAction(QAction("Copiar l'usuari", m, triggered=lambda: self.copy_to_clipboard(e.username, "Usuari copiat")))
+                m.addAction(QAction("🔒 Copiar contrasenya", m, triggered=lambda: self.copy_to_clipboard(e.password, "Contrasenya copiada")))
                 m.exec(b.mapToGlobal(b.rect().bottomLeft()))
 
             btn_copy.clicked.connect(_show_copy_menu)
@@ -658,6 +842,7 @@ class MainWindow(QMainWindow):
             return
         # Security: generate new ID for cloned entries
         self.manager.add_entry(entry.site, entry.username, entry.password, entry.notes)
+        self.save_vault_with_master_password()
         self.refresh_cards()
         self.status.setText("Accés clonat")
 
@@ -710,17 +895,33 @@ class MainWindow(QMainWindow):
             self._on_last_activity()
             self.save_vault_with_master_password()
             self.refresh_cards()
-            self.status.setText("Accés afegit")
+            self.status.setText("Accés afegit - Síncronitzat" if self.remote_store.configured else "Accés afegit")
 
     def save_vault_with_master_password(self):
         """Save vault with master password prompt."""
-        # In a real app, you'd cache the master password securely
-        dlg = LoginDialog(self)
-        if dlg.exec() == QDialog.DialogCode.Accepted:
-            try:
-                save_vault(self.manager.get_entries(), dlg.password_field.text())
-            except Exception as e:
-                QMessageBox.critical(self, "Error", f"No s'ha pogut Guardar: {str(e)}")
+        if not self._master_password:
+            self.show_login_dialog()
+            return
+        
+        # Validate version before upload to prevent stale version conflicts
+        if self.remote_store.has_server and self.remote_store._status.version is not None:
+            # Check if version is reasonable (not too old)
+            if self.remote_store._status.version > 10000:
+                self.status.setText("Warning: Version stale, try deleting and recreating vault")
+                self.status.setStyleSheet("color: #f59e0b; font-weight: 600;")
+                return
+        
+        try:
+            if self.remote_store.has_server:
+                self.remote_store.save(self.manager.get_entries(), self._master_password)
+                save_config(CONFIG)
+                self.status.setText("Guardat - Síncronitzat amb el núvol")
+            else:
+                save_vault(self.manager.get_entries(), self._master_password)
+                self.status.setText("Guardat localment")
+        except Exception as error:
+            self._show_remote_error("No s'ha pogut guardar", error)
+            self.status.setText("Error al guardar")
 
     def on_edit_by_id(self, entry_id: str):
         self._on_last_activity()
@@ -765,8 +966,9 @@ class MainWindow(QMainWindow):
 
         if confirm == QMessageBox.StandardButton.Yes:
             self.manager.delete_entry(entry_id)
+            self.save_vault_with_master_password()
             self.refresh_cards()
-            self.status.setText("Accés eliminat")
+            self.status.setText("Accés eliminat - Síncronitzat" if self.remote_store.configured else "Accés eliminat")
 
     def on_search(self, text: str):
         self._on_last_activity()

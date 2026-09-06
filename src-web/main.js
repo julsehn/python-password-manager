@@ -50,6 +50,7 @@ import {
   Monitor,
   RotateCcw,
   Pencil,
+  Cloud,
 } from "lucide";
 import "./styles.css";
 import "./secure.css";
@@ -103,6 +104,7 @@ const icons = {
   Monitor,
   RotateCcw,
   Pencil,
+  Cloud,
 };
 
 /* ==========================================================================
@@ -168,6 +170,14 @@ const savedSettings = (() => {
   }
 })();
 
+const savedCloudConfig = (() => {
+  try {
+    return JSON.parse(localStorage.getItem("caixa-forta-cloud") || "{}");
+  } catch {
+    return {};
+  }
+})();
+
 const state = {
   locked: true,
   loading: false,
@@ -188,6 +198,10 @@ const state = {
   editingFolderId: null,
   returnToEntryForm: false,
   settings: savedSettings,
+  cloudConfig: { railwayUrl: "", vaultId: "", token: "", ...savedCloudConfig },
+  showCloudLogin: false,
+  cloudLoading: false,
+  cloudError: "",
   formError: "",
   masterChangeError: "",
   folderFormError: "",
@@ -282,7 +296,6 @@ function resetAutoLock() {
 
 async function lockVault() {
   if (state.locked) return;
-  clearTimeout(autoLockTimer);
   try {
     await invoke("lock_vault");
   } catch (error) {
@@ -318,6 +331,149 @@ async function copySensitiveText(value, message) {
     }
   }, 30_000);
   showToast(message);
+}
+
+// Lock screen check
+async function checkVaultLocked() {
+  try {
+    const info = await invoke("get_vault_info");
+    if (info.exists) {
+      // Try to unlock - if it fails with wrong password, user will be shown error
+      try {
+        await invoke("unlock_vault", { masterPassword: "" });
+      } catch (error) {
+        // Vault exists but is locked (wrong password or just locked)
+        return true;
+      }
+    }
+  } catch (error) {
+    // Vault doesn't exist yet
+  }
+  return false;
+}
+
+function cloudFormConfig() {
+  return {
+    railwayUrl: document.querySelector("#railway-url")?.value.trim() || "",
+    vaultId: document.querySelector("#railway-vault-id")?.value.trim() || "",
+    token: document.querySelector("#railway-token")?.value.trim() || "",
+  };
+}
+
+function rustCloudConfig(config) {
+  return {
+    railway_url: config.railwayUrl,
+    vault_id: config.vaultId,
+    token: config.token,
+  };
+}
+
+async function saveCloudConfig(event) {
+  event.preventDefault();
+  const config = cloudFormConfig();
+  state.cloudLoading = true;
+  state.cloudError = "";
+  render();
+  try {
+    await invoke("set_railway_sync_config", rustCloudConfig(config));
+    state.cloudConfig = config;
+    localStorage.setItem("caixa-forta-cloud", JSON.stringify(config));
+    state.showCloudLogin = false;
+    showToast("Connexió amb Railway desada.");
+  } catch (error) {
+    state.cloudError = String(error);
+  } finally {
+    state.cloudLoading = false;
+    render();
+  }
+}
+
+async function downloadCloudVault() {
+  const config = cloudFormConfig();
+  const masterPassword = prompt("Contrasenya mestra del vault del núvol:");
+  if (!masterPassword) return;
+  state.cloudLoading = true;
+  state.cloudError = "";
+  render();
+  try {
+    const serialized = await invoke("sync_download_vault", {
+      masterPassword,
+      config: rustCloudConfig(config),
+    });
+    const vault = JSON.parse(serialized);
+    state.cloudConfig = config;
+    localStorage.setItem("caixa-forta-cloud", JSON.stringify(config));
+    state.entries = (vault.entries || []).map((entry) => ({
+      ...entry,
+      folderId: entry.folder_id || null,
+      createdAt: entry.created_at,
+      updatedAt: entry.updated_at,
+    }));
+    state.folders = vault.folders || [];
+    state.trash = (vault.deleted_entries || []).map((entry) => ({
+      ...entry,
+      folderId: entry.folder_id || null,
+      createdAt: entry.created_at,
+      updatedAt: entry.updated_at,
+      deletedAt: entry.deleted_at,
+    }));
+    state.history = (vault.history || []).map((item) => ({
+      ...item,
+      type: item.kind,
+      createdAt: item.created_at,
+    }));
+    state.locked = false;
+    state.showCloudLogin = false;
+    showToast("Vault descarregat del núvol.");
+  } catch (error) {
+    state.cloudError = String(error);
+  } finally {
+    state.cloudLoading = false;
+    render();
+  }
+}
+
+async function registerCloudVault() {
+  const config = cloudFormConfig();
+  const masterPassword = prompt("Contrasenya mestra per al nou vault del núvol:");
+  if (!masterPassword) return;
+  state.cloudLoading = true;
+  state.cloudError = "";
+  render();
+  try {
+    await invoke("register_vault", {
+      masterPassword,
+      config: rustCloudConfig(config),
+    });
+    await invoke("set_railway_sync_config", rustCloudConfig(config));
+    state.cloudConfig = config;
+    localStorage.setItem("caixa-forta-cloud", JSON.stringify(config));
+    state.showCloudLogin = false;
+    showToast("Vault creat al núvol. Ara pots crear la caixa forta local.");
+  } catch (error) {
+    state.cloudError = String(error);
+  } finally {
+    state.cloudLoading = false;
+    render();
+  }
+}
+
+async function resetLocalVault() {
+  if (prompt('Escriu "ELIMINAR" per confirmar:') !== "ELIMINAR") return;
+  try {
+    await invoke("reset_vault");
+    localStorage.removeItem("caixa-forta-master-password");
+    state.entries = [];
+    state.folders = [];
+    state.trash = [];
+    state.history = [];
+    state.locked = true;
+    state.view = "vault";
+    showToast("Dades locals eliminades.");
+  } catch (error) {
+    state.error = String(error);
+  }
+  render();
 }
 
 /* ==========================================================================
@@ -496,7 +652,9 @@ function sidebarComponent() {
 }
 
 function folderItem(folder) {
-  const count = state.entries.filter((entry) => entry.folderId === folder.id).length;
+  const count = state.entries.filter(
+    (entry) => entry.folderId === folder.id,
+  ).length;
   return `
     <button class="folder ${state.activeFolderId === folder.id ? "active" : ""}" data-folder="${escapeHtml(folder.id)}">
       <span class="folder-icon" style="color:${escapeHtml(folder.color)};background:${escapeHtml(folder.color)}1f">${icon(folder.icon, 17)}</span>
@@ -564,18 +722,23 @@ function lockScreen() {
             ${state.loading ? "Desbloquejant..." : "Crear o desbloquejar la caixa forta"}
           </button>
         </form>
+        <button class="secondary full" id="open-cloud-login">
+          ${icon("Cloud", 17)} Descarregar des del núvol
+        </button>
         <p class="security-note">
           ${icon("ShieldCheck", 15)} Xifratge local amb Argon2id i AES-256-GCM
         </p>
       </div>
     </main>
+    ${state.showCloudLogin ? cloudLoginModal() : ""}
   `;
 }
 
 function vaultScreen() {
-  const filtered = state.entries.filter((entry) =>
-    (!state.activeFolderId || entry.folderId === state.activeFolderId) &&
-    `${entry.site} ${entry.username}`.toLowerCase().includes(state.query),
+  const filtered = state.entries.filter(
+    (entry) =>
+      (!state.activeFolderId || entry.folderId === state.activeFolderId) &&
+      `${entry.site} ${entry.username}`.toLowerCase().includes(state.query),
   );
 
   return `
@@ -782,8 +945,22 @@ function settingsScreen() {
             <button class="setting-action" id="open-trash">
               ${icon("Trash2", 18)} Paperera <b>${state.trash.length}</b>
             </button>
+            <button class="setting-action danger-btn" id="reset-vault">
+              ${icon("RotateCcw", 18)} Eliminar dades locals i començar de nou
+            </button>
           </div>
           <input id="import-file" type="file" accept=".json,.csv,application/json,text/csv" hidden />
+        </section>
+
+        <section class="settings-section">
+          <div class="settings-section-title">
+            ${icon("Cloud", 19)}
+            <h2>Inici de sessió al núvol</h2>
+          </div>
+          <p class="helper">Connecta amb el teu vault de Railway per descarregar-lo o sincronitzar-lo.</p>
+          <button class="setting-action" id="open-cloud-login">
+            ${icon("Cloud", 18)} Configura Railway
+          </button>
         </section>
 
         <section class="settings-section">
@@ -839,6 +1016,7 @@ function settingsScreen() {
 
     ${state.showTrashModal ? trashModal() : ""}
     ${state.showChangeMasterModal ? changeMasterPasswordModal() : ""}
+    ${state.showCloudLogin ? cloudLoginModal() : ""}
     ${state.toast ? `<div class="toast show">${escapeHtml(state.toast)}</div>` : ""}
   `;
 }
@@ -1159,8 +1337,44 @@ function changeMasterPasswordModal() {
   `;
 }
 
+function cloudLoginModal() {
+  const config = state.cloudConfig;
+  return `
+    <div class="modal-backdrop">
+      <section class="entry-modal" role="dialog" aria-modal="true" aria-labelledby="cloud-login-title">
+        <header class="modal-header">
+          <button class="modal-icon" id="cancel-cloud-login" title="Tancar">${icon("X", 20)}</button>
+          <h2 id="cloud-login-title">Inici de sessió al núvol</h2>
+        </header>
+        <form id="cloud-login-form">
+          <div class="modal-scroll">
+            <section class="form-section master-password-section">
+              <p class="helper">Necessites l'URL de Railway, l'identificador del vault i el token d'accés.</p>
+              <label class="form-label" for="railway-url">URL de Railway</label>
+              <input class="form-input" id="railway-url" name="railwayUrl" type="url" required value="${escapeHtml(config.railwayUrl)}" placeholder="https://el-teu-servei.up.railway.app" />
+              <label class="form-label" for="railway-vault-id">Identificador del vault</label>
+              <input class="form-input" id="railway-vault-id" name="vaultId" required minlength="16" value="${escapeHtml(config.vaultId)}" />
+              <label class="form-label" for="railway-token">Token d'accés</label>
+              <input class="form-input" id="railway-token" name="token" type="password" required minlength="32" value="${escapeHtml(config.token)}" autocomplete="off" />
+              ${state.cloudError ? `<p class="error form-error">${escapeHtml(state.cloudError)}</p>` : ""}
+            </section>
+          </div>
+          <footer class="modal-footer">
+            <button type="button" class="secondary" id="cancel-cloud-login">Cancel·la</button>
+            <button type="button" class="secondary" id="register-cloud-vault" ${state.cloudLoading ? "disabled" : ""}>Crea vault nou</button>
+            <button type="button" class="secondary" id="download-cloud-vault" ${state.cloudLoading ? "disabled" : ""}>Descarrega vault</button>
+            <button type="submit" class="primary" ${state.cloudLoading ? "disabled" : ""}>${state.cloudLoading ? "Connectant..." : "Desa i connecta"}</button>
+          </footer>
+        </form>
+      </section>
+    </div>
+  `;
+}
+
 function folderModal() {
-  const folder = state.folders.find((item) => item.id === state.editingFolderId) || {
+  const folder = state.folders.find(
+    (item) => item.id === state.editingFolderId,
+  ) || {
     name: "",
     icon: "Folder",
     color: folderColors[0],
@@ -1422,7 +1636,8 @@ function randomItem(items) {
 }
 
 function secureRandomIndex(max) {
-  if (!Number.isSafeInteger(max) || max < 1) throw new Error("Límit aleatori no vàlid.");
+  if (!Number.isSafeInteger(max) || max < 1)
+    throw new Error("Límit aleatori no vàlid.");
   const limit = Math.floor(0x1_0000_0000 / max) * max;
   const values = new Uint32Array(1);
   do {
@@ -1458,7 +1673,9 @@ function generateValue() {
       state.generatorOptions.numbers && "23456789",
       state.generatorOptions.symbols && "!@#$%^&*",
     ].filter(Boolean);
-    const sets = characterSets.length ? characterSets : ["abcdefghijkmnopqrstuvwxyz"];
+    const sets = characterSets.length
+      ? characterSets
+      : ["abcdefghijkmnopqrstuvwxyz"];
     const alphabet = sets.join("");
     const characters = sets.map((set) => set[secureRandomIndex(set.length)]);
     while (characters.length < state.generatorOptions.length) {
@@ -1466,7 +1683,10 @@ function generateValue() {
     }
     for (let index = characters.length - 1; index > 0; index -= 1) {
       const swapIndex = secureRandomIndex(index + 1);
-      [characters[index], characters[swapIndex]] = [characters[swapIndex], characters[index]];
+      [characters[index], characters[swapIndex]] = [
+        characters[swapIndex],
+        characters[index],
+      ];
     }
     return characters.join("");
   }
@@ -1600,7 +1820,7 @@ async function unlock(event) {
   event.preventDefault();
   if (!isTauriRuntime()) {
     state.error =
-      "Obre la Caixa Forta amb “Obrir_Caixa_Forta.command” per crear o desbloquejar la caixa forta.";
+      "Obre la Caixa Forta amb `Obrir_Caixa_Forta.command` per crear o desbloquejar la caixa forta.";
     render();
     return;
   }
@@ -1611,14 +1831,28 @@ async function unlock(event) {
   render();
   try {
     const result = await invoke("unlock_vault", { masterPassword });
-    state.entries = result.entries;
+    state.entries = result.entries || [];
     state.history = result.history || [];
     state.trash = result.trash || [];
     state.folders = result.folders || [];
     state.activeFolderId = "";
     state.locked = false;
     resetAutoLock();
-    if (result.isNew) await saveVault();
+    if (result.isNew) {
+      // Create initial folder structure
+      const defaultFolders = [
+        {
+          id: "default",
+          name: "Tots els elements",
+          icon: "ShieldCheck",
+          color: "#2563eb",
+        },
+        { id: "favorits", name: "Favorits", icon: "Star", color: "#fbbf24" },
+        { id: "social", name: "Social", icon: "Heart", color: "#ec4899" },
+      ];
+      state.folders = defaultFolders;
+      await saveVault(masterPassword, true); // Enable sync for new vault
+    }
   } catch (error) {
     state.error = String(error);
   } finally {
@@ -1627,13 +1861,85 @@ async function unlock(event) {
   }
 }
 
-async function saveVault() {
-  await invoke("save_vault", {
-    entries: state.entries,
-    history: state.history,
-    trash: state.trash,
-    folders: state.folders,
-  });
+async function saveVault(masterPassword = null, syncToRailway = false) {
+  // Convert entries to the expected format
+  const entries = state.entries.map((e) => ({
+    id: e.id,
+    site: e.site,
+    username: e.username,
+    password: e.password,
+    notes: e.notes,
+    folder_id: e.folderId || null,
+    created_at: e.createdAt,
+    updated_at: e.updatedAt || null,
+    deleted_at: null,
+  }));
+
+  const folders = state.folders.map((f) => ({
+    id: f.id,
+    name: f.name,
+    icon: f.icon,
+    color: f.color,
+  }));
+
+  const trash = state.trash.map((t) => ({
+    id: t.id,
+    site: t.site,
+    username: t.username,
+    password: t.password,
+    notes: t.notes,
+    folder_id: t.folderId || null,
+    created_at: t.createdAt,
+    updated_at: t.updatedAt || null,
+    deleted_at: t.deletedAt,
+  }));
+
+  const history = state.history.map((h) => ({
+    id: h.id,
+    kind: h.type,
+    value: h.value,
+    language: h.language,
+    created_at: h.createdAt,
+  }));
+
+  // Get master password from secure storage if not provided
+  let password = masterPassword;
+  if (!password) {
+    try {
+      const stored = localStorage.getItem("caixa-forta-master-password");
+      password = stored ? stored : prompt("Please enter your master password:");
+    } catch (e) {
+      showToast("Cannot access secure storage. Please re-enter password.");
+      throw new Error("Secure storage not available");
+    }
+  }
+
+  if (!password || password.length < 12) {
+    showToast("Master password is too short");
+    throw new Error("Master password must be at least 12 characters");
+  }
+
+  try {
+    await invoke("save_vault", {
+      masterPassword: password,
+      entries,
+      history,
+      trash,
+      folders,
+      syncToRailway,
+    });
+    // Store password for next save (auto-save)
+    if (masterPassword === null) {
+      try {
+        localStorage.setItem("caixa-forta-master-password", password);
+      } catch (e) {
+        // Storage might be disabled
+      }
+    }
+  } catch (error) {
+    showToast(`Error saving vault: ${error}`);
+    throw error;
+  }
 }
 
 function readImportValue(record, keys) {
@@ -1674,11 +1980,19 @@ function parseCsv(text) {
   row.push(field);
   if (row.some((value) => value.trim())) rows.push(row);
   if (quoted) throw new Error("El CSV conté cometes sense tancar.");
-  if (rows.length < 2) throw new Error("El CSV no conté cap accés per importar.");
+  if (rows.length < 2)
+    throw new Error("El CSV no conté cap accés per importar.");
 
-  const headers = rows.shift().map((header) => header.trim().replace(/^\uFEFF/, "").toLowerCase());
+  const headers = rows.shift().map((header) =>
+    header
+      .trim()
+      .replace(/^\uFEFF/, "")
+      .toLowerCase(),
+  );
   return rows.map((values) =>
-    Object.fromEntries(headers.map((header, index) => [header, values[index] || ""])),
+    Object.fromEntries(
+      headers.map((header, index) => [header, values[index] || ""]),
+    ),
   );
 }
 
@@ -1694,58 +2008,93 @@ function normalizeImportedEntries(records) {
       skipped += 1;
       return [];
     }
-    const login = record.login && typeof record.login === "object" ? record.login : {};
+    const login =
+      record.login && typeof record.login === "object" ? record.login : {};
     const url = (
       readImportValue(record, ["url", "website", "uri", "formactionorigin"]) ||
       readImportValue(login, ["uri", "url"]) ||
       String(login.uris?.[0]?.uri || "")
     ).trim();
-    const password = readImportValue(record, ["password", "pass"]) || readImportValue(login, ["password"]);
-    const site = (readImportValue(record, ["site", "name", "title"]) || url || "Accés importat").trim();
-    const username = readImportValue(record, ["username", "user", "email", "login"]) || readImportValue(login, ["username"]);
+    const password =
+      readImportValue(record, ["password", "pass"]) ||
+      readImportValue(login, ["password"]);
+    const site = (
+      readImportValue(record, ["site", "name", "title"]) ||
+      url ||
+      "Accés importat"
+    ).trim();
+    const username =
+      readImportValue(record, ["username", "user", "email", "login"]) ||
+      readImportValue(login, ["username"]);
     const notes = readImportValue(record, ["notes", "note"]);
     const savedNotes = url ? `URL: ${url}${notes ? `\n${notes}` : ""}` : notes;
-    if (!password || site.length > 4_096 || username.length > 4_096 || password.length > 16_384 || savedNotes.length > 32_768 || url.length > 4_000) {
+    if (
+      !password ||
+      site.length > 4_096 ||
+      username.length > 4_096 ||
+      password.length > 16_384 ||
+      savedNotes.length > 32_768 ||
+      url.length > 4_000
+    ) {
       skipped += 1;
       return [];
     }
     let id = readImportValue(record, ["id"]).trim();
     if (!id || ids.has(id)) id = crypto.randomUUID();
     ids.add(id);
-    return [{
-      id,
-      site,
-      username,
-      password,
-      notes: savedNotes,
-      folderId: readImportValue(record, ["folderId", "folderid"]),
-      createdAt: readImportValue(record, ["createdat"]) || now,
-      updatedAt: readImportValue(record, ["updatedat"]) || now,
-    }];
+    return [
+      {
+        id,
+        site,
+        username,
+        password,
+        notes: savedNotes,
+        folderId: readImportValue(record, ["folderId", "folderid"]),
+        createdAt: readImportValue(record, ["createdat"]) || now,
+        updatedAt: readImportValue(record, ["updatedat"]) || now,
+      },
+    ];
   });
-  if (!entries.length) throw new Error("No s'ha trobat cap accés vàlid al fitxer.");
+  if (!entries.length)
+    throw new Error("No s'ha trobat cap accés vàlid al fitxer.");
   return { entries, skipped };
 }
 
 function normalizeImportedFolders(folders) {
   if (!Array.isArray(folders)) return [];
   const ids = new Set();
-  return folders.flatMap((folder) => {
-    const id = String(folder?.id || "").trim();
-    const name = String(folder?.name || "").trim();
-    if (!id || !name || ids.has(id) || name.length > 80) return [];
-    ids.add(id);
-    return [{
-      id,
-      name,
-      icon: folderIcons.includes(folder.icon) ? folder.icon : "Folder",
-      color: folderColors.includes(folder.color) ? folder.color : folderColors[0],
-    }];
-  }).slice(0, 100);
+  return folders
+    .flatMap((folder) => {
+      const id = String(folder?.id || "").trim();
+      const name = String(folder?.name || "").trim();
+      if (!id || !name || ids.has(id) || name.length > 80) return [];
+      ids.add(id);
+      return [
+        {
+          id,
+          name,
+          icon: folderIcons.includes(folder.icon) ? folder.icon : "Folder",
+          color: folderColors.includes(folder.color)
+            ? folder.color
+            : folderColors[0],
+        },
+      ];
+    })
+    .slice(0, 100);
 }
 
-async function persistImportedVault(entries, history, trash, folders) {
-  await invoke("save_vault", { entries, history, trash, folders });
+async function persistImportedVault(
+  entries,
+  history,
+  trash,
+  folders,
+  masterPassword,
+) {
+  if (masterPassword) {
+    await saveVault(masterPassword);
+  } else {
+    await invoke("save_vault", { entries, history, trash, folders });
+  }
 }
 
 async function changeMasterPassword(event) {
@@ -1756,7 +2105,8 @@ async function changeMasterPassword(event) {
   const confirmPassword = String(form.get("confirmPassword") || "");
 
   if (newPassword.length < 12) {
-    state.masterChangeError = "La contrasenya nova ha de tenir com a mínim 12 caràcters.";
+    state.masterChangeError =
+      "La contrasenya nova ha de tenir com a mínim 12 caràcters.";
     render();
     return;
   }
@@ -1770,6 +2120,7 @@ async function changeMasterPassword(event) {
   state.changingMaster = true;
   render();
   try {
+    // Use the Rust implementation that handles re-encryption
     await invoke("change_master_password", {
       currentPassword,
       newPassword,
@@ -1778,6 +2129,12 @@ async function changeMasterPassword(event) {
       trash: state.trash,
       folders: state.folders,
     });
+    // Clear stored password for security
+    try {
+      localStorage.removeItem("caixa-forta-master-password");
+    } catch (e) {
+      // Storage might be disabled
+    }
     state.showChangeMasterModal = false;
     showToast("Contrasenya mestra canviada correctament.");
   } catch (error) {
@@ -1814,17 +2171,25 @@ async function importVault(event) {
   const file = event.target.files?.[0];
   if (!file) return;
   try {
-    if (file.size > 5 * 1024 * 1024) throw new Error("El fitxer és massa gran (màxim 5 MB).");
+    if (file.size > 5 * 1024 * 1024)
+      throw new Error("El fitxer és massa gran (màxim 5 MB).");
     const text = await file.text();
-    const isCsv = file.name.toLowerCase().endsWith(".csv") || file.type === "text/csv";
+    const isCsv =
+      file.name.toLowerCase().endsWith(".csv") || file.type === "text/csv";
     const data = isCsv ? parseCsv(text) : JSON.parse(text);
     const records = Array.isArray(data) ? data : data.entries || data.items;
     const { entries, skipped } = normalizeImportedEntries(records);
-    const history = !Array.isArray(data) && Array.isArray(data.history) ? data.history.slice(0, 50) : [];
-    const trash = !Array.isArray(data) && Array.isArray(data.trash)
-      ? normalizeImportedEntries(data.trash).entries
+    const history =
+      !Array.isArray(data) && Array.isArray(data.history)
+        ? data.history.slice(0, 50)
+        : [];
+    const trash =
+      !Array.isArray(data) && Array.isArray(data.trash)
+        ? normalizeImportedEntries(data.trash).entries
+        : [];
+    const folders = !Array.isArray(data)
+      ? normalizeImportedFolders(data.folders)
       : [];
-    const folders = !Array.isArray(data) ? normalizeImportedFolders(data.folders) : [];
     const folderIds = new Set(folders.map((folder) => folder.id));
     entries.forEach((entry) => {
       if (!folderIds.has(entry.folderId)) entry.folderId = "";
@@ -1836,7 +2201,9 @@ async function importVault(event) {
     state.folders = folders;
     state.activeFolderId = "";
     state.view = "vault";
-    showToast(`${entries.length} accessos importats${skipped ? `; ${skipped} ignorats perquè no eren vàlids` : ""}.`);
+    showToast(
+      `${entries.length} accessos importats${skipped ? `; ${skipped} ignorats perquè no eren vàlids` : ""}.`,
+    );
   } catch (error) {
     showToast(`No s'ha pogut importar: ${error.message || error}`);
   } finally {
@@ -1907,7 +2274,13 @@ async function saveFolder(event) {
     render();
     return;
   }
-  if (state.folders.some((folder) => folder.name.toLowerCase() === name.toLowerCase() && folder.id !== state.editingFolderId)) {
+  if (
+    state.folders.some(
+      (folder) =>
+        folder.name.toLowerCase() === name.toLowerCase() &&
+        folder.id !== state.editingFolderId,
+    )
+  ) {
     state.folderFormError = "Ja existeix una carpeta amb aquest nom.";
     render();
     return;
@@ -1915,7 +2288,9 @@ async function saveFolder(event) {
   const previousFolders = state.folders;
   let id = state.editingFolderId;
   if (id) {
-    state.folders = state.folders.map((folder) => folder.id === id ? { ...folder, name, icon: iconName, color } : folder);
+    state.folders = state.folders.map((folder) =>
+      folder.id === id ? { ...folder, name, icon: iconName, color } : folder,
+    );
   } else {
     id = crypto.randomUUID();
     state.folders = [...state.folders, { id, name, icon: iconName, color }];
@@ -1958,27 +2333,23 @@ async function saveEntry(event) {
       (e) => e.id === state.editingEntryId,
     );
     if (existingIndex !== -1) {
-      const existing = state.entries[existingIndex];
-      const updated = {
-        ...existing,
-        site: name,
-        username,
-        password,
-        notes: url ? `URL: ${url}${notes ? `\n${notes}` : ""}` : notes,
-        folderId,
-        updatedAt: now,
-      };
-      state.entries[existingIndex] = updated;
       try {
-        await saveVault();
+        await invoke("update_entry", {
+          entryId: state.editingEntryId,
+          site: name,
+          username,
+          password,
+          notes: url ? `URL: ${url}${notes ? `\n${notes}` : ""}` : notes,
+          folderId: folderId || null,
+        });
         state.showEntryForm = false;
         state.editingEntryId = null;
         state.saving = false;
+        await saveVault(); // Save encrypted vault after update
         render();
         showToast("Accés actualitzat correctament.");
         return;
       } catch (error) {
-        state.entries[existingIndex] = existing;
         state.saving = false;
         state.formError = String(error);
         render();
@@ -2000,7 +2371,7 @@ async function saveEntry(event) {
 
   state.entries.push(entry);
   try {
-    await saveVault();
+    await saveVault(); // Save encrypted vault after creation
     state.showEntryForm = false;
     state.editingEntryId = null;
     state.saving = false;
@@ -2121,6 +2492,24 @@ function bindEvents() {
     const input = document.querySelector("#master-password");
     input.type = input.type === "password" ? "text" : "password";
   });
+  document.querySelectorAll("#open-cloud-login").forEach((button) =>
+    button.addEventListener("click", () => {
+      state.cloudError = "";
+      state.showCloudLogin = true;
+      render();
+    }),
+  );
+  document.querySelector("#cloud-login-form")?.addEventListener("submit", saveCloudConfig);
+  document.querySelectorAll("#cancel-cloud-login").forEach((button) =>
+    button.addEventListener("click", () => {
+      state.showCloudLogin = false;
+      state.cloudError = "";
+      render();
+    }),
+  );
+  document.querySelector("#download-cloud-vault")?.addEventListener("click", downloadCloudVault);
+  document.querySelector("#register-cloud-vault")?.addEventListener("click", registerCloudVault);
+  document.querySelector("#reset-vault")?.addEventListener("click", resetLocalVault);
 
   // Cercador
   document.querySelector("#search")?.addEventListener("input", (event) => {
@@ -2138,22 +2527,33 @@ function bindEvents() {
       render();
     }),
   );
-  document.querySelector("#new-folder")?.addEventListener("click", () => openFolderModal());
-  document.querySelector("#edit-folder")?.addEventListener("click", () => openFolderModal(state.activeFolderId));
-  document.querySelector("#folder-form")?.addEventListener("submit", saveFolder);
-  document.querySelectorAll("#cancel-folder, #cancel-folder-bottom").forEach((button) =>
-    button.addEventListener("click", closeFolderModal),
-  );
+  document
+    .querySelector("#new-folder")
+    ?.addEventListener("click", () => openFolderModal());
+  document
+    .querySelector("#edit-folder")
+    ?.addEventListener("click", () => openFolderModal(state.activeFolderId));
+  document
+    .querySelector("#folder-form")
+    ?.addEventListener("submit", saveFolder);
+  document
+    .querySelectorAll("#cancel-folder, #cancel-folder-bottom")
+    .forEach((button) => button.addEventListener("click", closeFolderModal));
   document.querySelectorAll("[data-folder-icon]").forEach((button) =>
     button.addEventListener("click", () => {
       document.querySelector("#folder-icon").value = button.dataset.folderIcon;
-      document.querySelectorAll("[data-folder-icon]").forEach((item) => item.classList.toggle("selected", item === button));
+      document
+        .querySelectorAll("[data-folder-icon]")
+        .forEach((item) => item.classList.toggle("selected", item === button));
     }),
   );
   document.querySelectorAll("[data-folder-color]").forEach((button) =>
     button.addEventListener("click", () => {
-      document.querySelector("#folder-color").value = button.dataset.folderColor;
-      document.querySelectorAll("[data-folder-color]").forEach((item) => item.classList.toggle("selected", item === button));
+      document.querySelector("#folder-color").value =
+        button.dataset.folderColor;
+      document
+        .querySelectorAll("[data-folder-color]")
+        .forEach((item) => item.classList.toggle("selected", item === button));
     }),
   );
 
@@ -2211,13 +2611,11 @@ function bindEvents() {
     }),
   );
 
-  document
-    .querySelector("#change-master")
-    ?.addEventListener("click", () => {
-      state.masterChangeError = "";
-      state.showChangeMasterModal = true;
-      render();
-    });
+  document.querySelector("#change-master")?.addEventListener("click", () => {
+    state.masterChangeError = "";
+    state.showChangeMasterModal = true;
+    render();
+  });
 
   document
     .querySelector("#change-master-form")
@@ -2314,9 +2712,10 @@ function bindEvents() {
     .querySelectorAll("[data-copy-history]")
     .forEach((button) =>
       button.addEventListener("click", () =>
-        copySensitiveText(button.dataset.copyHistory, "Generació copiada.").catch(
-          (error) => showToast(`No s'ha pogut copiar: ${error}`),
-        ),
+        copySensitiveText(
+          button.dataset.copyHistory,
+          "Generació copiada.",
+        ).catch((error) => showToast(`No s'ha pogut copiar: ${error}`)),
       ),
     );
 
@@ -2470,10 +2869,8 @@ try {
 }
 
 // Inicialització de la interfície
-[
-  "pointerdown",
-  "keydown",
-  "touchstart",
-].forEach((eventName) => window.addEventListener(eventName, resetAutoLock, { passive: true }));
+["pointerdown", "keydown", "touchstart"].forEach((eventName) =>
+  window.addEventListener(eventName, resetAutoLock, { passive: true }),
+);
 
 render();

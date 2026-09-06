@@ -5,7 +5,7 @@ import hashlib
 import time
 from typing import List, Optional
 import binascii
-
+from cryptography.exceptions import InvalidTag
 from src.encryption import derive_key, encrypt, decrypt
 from src.models import PasswordEntry
 
@@ -20,6 +20,10 @@ DEFAULT_CONFIG = {
     "clipboard_clear_seconds": 30,
     "auto_lock_seconds": 300,
     "show_tutorial": True,
+    "railway_url": "",
+    "railway_vault_id": "",
+    "railway_token": "",
+    "railway_version": None,
 }
 
 # Brute-force protection: max attempts before lockout
@@ -172,8 +176,8 @@ def load_sidebar_settings(path: str = SIDEBAR_SETTINGS_FILENAME) -> list[dict]:
         return []
 
 
-def save_vault(entries: List[PasswordEntry], master_password: str, path: str = VAULT_FILENAME) -> None:
-    """Serialize entries to JSON, encrypt with key derived from master_password, and save to path."""
+def serialize_vault(entries: List[PasswordEntry], master_password: str) -> str:
+    """Return the encrypted vault envelope without writing it to disk."""
     if len(master_password) < 16:
         raise ValueError("La contrasenya mestra ha de tenir com a mínim 16 caràcters")
 
@@ -190,50 +194,48 @@ def save_vault(entries: List[PasswordEntry], master_password: str, path: str = V
         "version": "1",
     }
 
-    _write_private_json(path, payload)
+    return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+
+
+def save_vault(entries: List[PasswordEntry], master_password: str, path: str = VAULT_FILENAME) -> None:
+    """Serialize entries to JSON, encrypt with key derived from master_password, and save to path."""
+    _write_private_json(path, json.loads(serialize_vault(entries, master_password)))
+
+
+def deserialize_vault(blob: str, master_password: str, lockout_key: str = VAULT_FILENAME) -> List[PasswordEntry]:
+    """Decrypt an encrypted vault envelope received from local or remote storage."""
+    if len(master_password) < 16:
+        raise ValueError("La contrasenya mestra ha de tenir com a mínim 16 caràcters")
+    if is_vault_locked(lockout_key):
+        raise VaultLockedError("Vault is locked due to too many failed attempts.")
+
+    try:
+        payload = json.loads(blob)
+        if not isinstance(payload, dict) or payload.get("version") != "1":
+            raise ValueError("Format de caixa forta no compatible")
+        salt = base64.b64decode(payload["salt"], validate=True)
+        nonce = base64.b64decode(payload["nonce"], validate=True)
+        ciphertext = base64.b64decode(payload["ciphertext"], validate=True)
+        if len(salt) != 16 or len(nonce) != 12:
+            raise ValueError("Format de caixa forta invàlid")
+        key, _ = derive_key(master_password, salt=salt)
+        data = json.loads(decrypt(nonce, ciphertext, key).decode("utf-8"))
+        entries = data.get("entries", []) if isinstance(data, dict) else []
+        if not isinstance(entries, list) or len(entries) > 10_000:
+            raise ValueError("Contingut de caixa forta invàlid")
+        result = [PasswordEntry.from_dict(d) for d in entries if isinstance(d, dict)]
+    except (KeyError, TypeError, ValueError, InvalidTag, binascii.Error, json.JSONDecodeError) as error:
+        _record_failed_attempt(lockout_key)
+        raise ValueError("No s'ha pogut desxifrar la caixa forta") from error
+
+    _record_successful_login(lockout_key)
+    return result
 
 
 def load_vault(master_password: str, path: str = VAULT_FILENAME) -> List[PasswordEntry]:
     """Load vault from path, decrypt with master_password, and return entries list."""
-    if len(master_password) < 16:
-        raise ValueError("La contrasenya mestra ha de tenir com a mínim 16 caràcters")
-
-    # Check for lockout
-    if is_vault_locked(path):
-        raise VaultLockedError("Vault is locked due to too many failed attempts.")
-
     with open(path, "r", encoding="utf-8") as f:
-        payload = json.load(f)
-
-    if not isinstance(payload, dict) or payload.get("version") != "1":
-        _record_failed_attempt(path)
-        raise ValueError("Format de caixa forta no compatible")
-
-    # decode base64 fields to bytes
-    try:
-        salt = base64.b64decode(payload["salt"], validate=True)
-        nonce = base64.b64decode(payload["nonce"], validate=True)
-        ciphertext = base64.b64decode(payload["ciphertext"], validate=True)
-    except (KeyError, TypeError, binascii.Error) as error:
-        _record_failed_attempt(path)
-        raise ValueError("Format de caixa forta invàlid") from error
-
-    if len(salt) != 16 or len(nonce) != 12:
-        _record_failed_attempt(path)
-        raise ValueError("Format de caixa forta invàlid")
-
-    key, _ = derive_key(master_password, salt=salt)
-    plaintext = decrypt(nonce, ciphertext, key)
-    data = json.loads(plaintext.decode("utf-8"))
-    entries = data.get("entries", []) if isinstance(data, dict) else []
-
-    if not isinstance(entries, list) or len(entries) > 10_000:
-        raise ValueError("Contingut de caixa forta invàlid")
-
-    # Success! Clear lockout state
-    _record_successful_login(path)
-
-    return [PasswordEntry.from_dict(d) for d in entries if isinstance(d, dict)]
+        return deserialize_vault(f.read(), master_password, lockout_key=path)
 
 
 def export_vault(path: str = VAULT_FILENAME, dest_dir: str | None = None) -> Optional[str]:
