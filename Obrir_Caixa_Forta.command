@@ -11,8 +11,20 @@ cleanup_project_vite() {
     fi
 }
 
+cleanup_project_app() {
+    local app_pids
+    app_pids="$(pgrep -f "$PROJECT_DIR/src-tauri/target/debug/caixa-forta" 2>/dev/null || true)"
+    if [[ -n "$app_pids" ]]; then
+        kill $app_pids 2>/dev/null || true
+    fi
+}
+
 cleanup_project_vite
+cleanup_project_app
 trap cleanup_project_vite EXIT
+
+# Remove generated frontend state so the launcher always uses the current source.
+rm -rf "$PROJECT_DIR/dist" "$PROJECT_DIR/node_modules/.vite"
 
 export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
 [[ -f "$HOME/.cargo/env" ]] && source "$HOME/.cargo/env"
@@ -41,12 +53,20 @@ if [[ ! -d "$PROJECT_DIR/node_modules" ]]; then
     }
 fi
 
+if [[ -x "$PROJECT_DIR/browser-extension/build.sh" ]]; then
+    echo "Actualitzant l'extensio del navegador..."
+    "$PROJECT_DIR/browser-extension/build.sh" || {
+        echo "No s'ha pogut construir l'extensio del navegador."
+        read -k 1 "?Prem qualsevol tecla per continuar..."
+    }
+fi
+
 if [[ -n "$(command -v cargo)" ]]; then
     echo "Iniciant Caixa forta amb Tauri..."
-    "$NPM" run tauri dev
+    "$PROJECT_DIR/node_modules/.bin/tauri" dev
 elif [[ -n "$CARGO" && -x "$CARGO" ]]; then
     echo "Iniciant Caixa forta amb Tauri..."
-    "$NPM" run tauri dev
+    "$PROJECT_DIR/node_modules/.bin/tauri" dev
 else
     echo "Rust/Cargo encara no està disponible."
     echo "Obrint la interfície web al navegador com a alternativa..."

@@ -1119,6 +1119,12 @@
   display: flex;
   flex-wrap: wrap;
   gap: 10px;
+  margin-bottom: 14px;
+}
+
+.settings-section > .danger-btn {
+  margin-top: 12px;
+  margin-bottom: 8px;
 }
 
 .setting-action {

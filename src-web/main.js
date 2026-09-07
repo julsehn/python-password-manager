@@ -180,6 +180,7 @@ const savedCloudConfig = (() => {
 
 const state = {
   locked: true,
+  masterPassword: "",
   loading: false,
   entries: [],
   folders: [],
@@ -303,6 +304,7 @@ async function lockVault() {
     return;
   }
   state.locked = true;
+  state.masterPassword = "";
   state.entries = [];
   state.history = [];
   state.trash = [];
@@ -435,7 +437,9 @@ async function downloadCloudVault() {
 
 async function registerCloudVault() {
   const config = cloudFormConfig();
-  const masterPassword = prompt("Contrasenya mestra per al nou vault del núvol:");
+  const masterPassword = prompt(
+    "Contrasenya mestra per al nou vault del núvol:",
+  );
   if (!masterPassword) return;
   state.cloudLoading = true;
   state.cloudError = "";
@@ -473,6 +477,7 @@ async function resetLocalVault() {
   } catch (error) {
     state.error = String(error);
   }
+  state.masterPassword = "";
   render();
 }
 
@@ -945,10 +950,10 @@ function settingsScreen() {
             <button class="setting-action" id="open-trash">
               ${icon("Trash2", 18)} Paperera <b>${state.trash.length}</b>
             </button>
-            <button class="setting-action danger-btn" id="reset-vault">
-              ${icon("RotateCcw", 18)} Eliminar dades locals i començar de nou
-            </button>
           </div>
+          <button type="button" class="setting-action danger-btn" id="reset-vault">
+            ${icon("RotateCcw", 18)} Eliminar dades locals i començar de nou
+          </button>
           <input id="import-file" type="file" accept=".json,.csv,application/json,text/csv" hidden />
         </section>
 
@@ -1042,7 +1047,7 @@ function entryDetailsModal() {
             <button class="modal-icon" id="edit-entry-btn" title="Editar l'accés">
               ${icon("Pencil", 19)}
             </button>
-            <button class="modal-icon danger" id="delete-entry-btn" title="Moure a la paperera">
+            <button type="button" class="modal-icon danger" id="delete-entry-btn" title="Moure a la paperera">
               ${icon("Trash2", 19)}
             </button>
           </div>
@@ -1831,6 +1836,7 @@ async function unlock(event) {
   render();
   try {
     const result = await invoke("unlock_vault", { masterPassword });
+    state.masterPassword = masterPassword;
     state.entries = result.entries || [];
     state.history = result.history || [];
     state.trash = result.trash || [];
@@ -1903,7 +1909,7 @@ async function saveVault(masterPassword = null, syncToRailway = false) {
   }));
 
   // Get master password from secure storage if not provided
-  let password = masterPassword;
+  let password = masterPassword || state.masterPassword;
   if (!password) {
     try {
       const stored = localStorage.getItem("caixa-forta-master-password");
@@ -2129,6 +2135,7 @@ async function changeMasterPassword(event) {
       trash: state.trash,
       folders: state.folders,
     });
+    state.masterPassword = newPassword;
     // Clear stored password for security
     try {
       localStorage.removeItem("caixa-forta-master-password");
@@ -2499,7 +2506,9 @@ function bindEvents() {
       render();
     }),
   );
-  document.querySelector("#cloud-login-form")?.addEventListener("submit", saveCloudConfig);
+  document
+    .querySelector("#cloud-login-form")
+    ?.addEventListener("submit", saveCloudConfig);
   document.querySelectorAll("#cancel-cloud-login").forEach((button) =>
     button.addEventListener("click", () => {
       state.showCloudLogin = false;
@@ -2507,9 +2516,15 @@ function bindEvents() {
       render();
     }),
   );
-  document.querySelector("#download-cloud-vault")?.addEventListener("click", downloadCloudVault);
-  document.querySelector("#register-cloud-vault")?.addEventListener("click", registerCloudVault);
-  document.querySelector("#reset-vault")?.addEventListener("click", resetLocalVault);
+  document
+    .querySelector("#download-cloud-vault")
+    ?.addEventListener("click", downloadCloudVault);
+  document
+    .querySelector("#register-cloud-vault")
+    ?.addEventListener("click", registerCloudVault);
+  document
+    .querySelector("#reset-vault")
+    ?.addEventListener("click", resetLocalVault);
 
   // Cercador
   document.querySelector("#search")?.addEventListener("input", (event) => {
@@ -2773,13 +2788,13 @@ function bindEvents() {
     ?.addEventListener("click", () => {
       if (state.viewingEntryId) openEditEntry(state.viewingEntryId);
     });
-  document.querySelector("#delete-entry-btn")?.addEventListener("click", () => {
-    if (state.viewingEntryId) deleteEntryToTrash(state.viewingEntryId);
+  document.querySelector("#delete-entry-btn")?.addEventListener("click", async () => {
+    if (state.viewingEntryId) await deleteEntryToTrash(state.viewingEntryId);
   });
   document
     .querySelector("#delete-entry-bottom")
-    ?.addEventListener("click", () => {
-      if (state.viewingEntryId) deleteEntryToTrash(state.viewingEntryId);
+    ?.addEventListener("click", async () => {
+      if (state.viewingEntryId) await deleteEntryToTrash(state.viewingEntryId);
     });
 
   document

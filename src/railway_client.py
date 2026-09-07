@@ -19,7 +19,7 @@ BASE_DELAY = 1  # seconds
 
 
 class RateLimiter:
-    """Simple rate limiter for API requests."""
+    """Simple rate limiter for API requests using token bucket algorithm."""
     def __init__(self, max_requests: int = 100, per_period: int = 60):
         self.max_requests = max_requests
         self.per_period = per_period
@@ -41,18 +41,17 @@ class RateLimiter:
                 return True
             return False
     
-    @classmethod
-    def wrapped(cls, func):
+    def __call__(self, func):
         """Decorator to rate limit a function."""
         @wraps(func)
         def wrapper(*args, **kwargs):
-            if not cls().acquire():
-                time.sleep(cls().per_period - (time.time() - cls().requests[0] if cls().requests else 0))
-                if not cls().acquire():
-                    raise Exception(f"Rate limit exceeded: {cls().max_requests} requests per {cls().per_period}s")
+            while not self.acquire():
+                # Wait for next available slot
+                oldest = self.requests[0]
+                wait_time = self.per_period - (time.time() - oldest)
+                time.sleep(min(wait_time, 0.1))  # Check frequently, not in long sleep
             return func(*args, **kwargs)
         return wrapper
-MAX_DELAY = 10  # seconds
 
 
 def create_vault_credentials() -> tuple[str, str]:

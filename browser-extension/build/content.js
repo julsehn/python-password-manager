@@ -14,6 +14,37 @@ class PasswordManagerContent {
         console.log('Form detected in content script');
       }
     });
+
+    chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+      if (request.action === 'autofillLogin') {
+        this.getCredentialsForSite(request.site).then((result) => {
+          const credentials = result?.credentials?.[0];
+          const password = document.querySelector('input[type="password"]');
+          const username = document.querySelector('input[type="email"], input[name*="user" i], input[type="text"]');
+          if (!result?.success || !credentials || !password) {
+            sendResponse({ success: false, error: 'No credentials or login form found' });
+            return;
+          }
+          if (username) username.value = credentials.username || '';
+          password.value = credentials.password || '';
+          sendResponse({ success: true });
+        }).catch((error) => sendResponse({ success: false, error: error.message }));
+        return true;
+      }
+
+      if (request.action === 'getFormData') {
+        const password = document.querySelector('input[type="password"]');
+        const username = document.querySelector('input[type="email"], input[name*="user" i], input[type="text"]');
+        this.saveCredentialsToSite({
+          site: request.site,
+          username: username?.value || '',
+          password: password?.value || '',
+        }).then((result) => sendResponse(result))
+          .catch((error) => sendResponse({ success: false, error: error.message }));
+        return true;
+      }
+      return false;
+    });
   }
 
   // Inject form detection logic 

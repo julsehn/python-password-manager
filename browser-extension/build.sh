@@ -1,18 +1,18 @@
 #!/bin/bash
 set -euo pipefail
 
-# Build script for Caixa Forta browser extension
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+cd "$SCRIPT_DIR"
 
 echo "Building Caixa Forta Browser Extension..."
 
-# Create build directory
+# Recreate only the browser-specific outputs. Keep legacy top-level artifacts intact.
+rm -rf build/chrome build/firefox
 mkdir -p build/chrome build/firefox
-
-rm -rf build/chrome/* build/firefox/*
 
 copy_common_files() {
 	local target="$1"
-	cp -r icons popup.html content.js content.css background.js "$target/"
+	cp -R icons popup.html popup.js content.js content.css background.js "$target/"
 }
 
 copy_common_files build/chrome

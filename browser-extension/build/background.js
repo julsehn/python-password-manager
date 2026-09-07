@@ -1,20 +1,11 @@
-// Background script to handle communication with the local password manager app
+// Background script for the extension's local credential store.
 class PasswordManagerExtension {
   constructor() {
     // Use Tauri's IPC capability for secure communication
-    this.isTauri = typeof window.__TAURI__ !== 'undefined';
-    
-    // For production, we avoid hardcoded localhost:3000 and use Tauri's built-in IPC capabilities
-    this.tauriBridge = null;
     this.init();
   }
 
   init() {
-    // Initialize the IPC bridge for Tauri environment
-    if (this.isTauri) {
-      this.setupTauriBridge();
-    }
-
     // Listen for messages from content scripts with proper validation
     chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       // Validate incoming request
@@ -44,17 +35,6 @@ class PasswordManagerExtension {
     });
   }
 
-  // Setup Tauri bridge if available
-  async setupTauriBridge() {
-    try {
-      // This works with Tauri's built-in IPC for secure communication
-      const { invoke } = await import('@tauri-apps/api/core');
-      this.tauriBridge = invoke;
-    } catch (e) {
-      console.log('Tauri bridge not available:', e);
-    }
-  }
-
   // Validate incoming request to prevent injection attacks
   validateRequest(request) {
     // Basic validation of request structure
@@ -82,7 +62,7 @@ class PasswordManagerExtension {
     return true;
   }
 
-  // Fetch credentials from local password manager app - uses Tauri IPC when available
+  // Fetch credentials from the extension's local store.
   async fetchCredentials(request, callback) {
     try {
       // Validate the request before processing
@@ -91,42 +71,16 @@ class PasswordManagerExtension {
         return;
       }
 
-      // Use Tauri IPC if available - this provides secure channel to desktop app
-      if (this.isTauri && this.tauriBridge) {
-        // Secure IPC with proper authentication and encryption
-        const response = await this.tauriBridge('fetch_credentials', { 
-          site: request.data?.site || request.site,
-          timestamp: request.timestamp,
-          securityToken: request.securityToken
-        });
-        
-        // Validate response before sending to prevent malicious responses
-        if (this.validateResponse(response)) {
-          callback({ success: true, credentials: response });
-        } else {
-          callback({ success: false, error: 'Malformed response from app' });
-        }
-      } else {
-        // Fallback for development/testing - should not be used in production
-        console.log('Using secure IPC fallback (should not happen in production)');
-        const simulatedResponse = {
-          success: true,
-          credentials: [
-            {
-              username: 'user@example.com',
-              password: 'securepassword123'
-            }
-          ]
-        };
-        callback(simulatedResponse);
-      }
+      const site = request.data?.site || request.site;
+      const stored = await this.readCredentials(site);
+      callback({ success: true, credentials: stored ? [stored] : [] });
     } catch (error) {
       console.error('Error fetching credentials:', error);
       callback({ success: false, error: error.message });
     }
   }
 
-  // Save credentials to local password manager app
+  // Save credentials to the extension's local store.
   async saveCredentials(request, callback) {
     try {
       // Validate the request before processing
@@ -135,37 +89,24 @@ class PasswordManagerExtension {
         return;
       }
 
-      // Use Tauri IPC if available - secure communication with desktop app
-      if (this.isTauri && this.tauriBridge) {
-        // Secure IPC with proper authentication and encryption
-        const response = await this.tauriBridge('save_credentials', { 
-          data: request.data,
-          timestamp: request.timestamp,
-          securityToken: request.securityToken
-        });
-        
-        // Validate response before sending
-        if (this.validateResponse(response)) {
-          callback({ success: true, message: response });
-        } else {
-          callback({ success: false, error: 'Malformed response from app' });
-        }
-      } else {
-        // Fallback for development/testing - should not be used in production
-        console.log('Using secure IPC fallback (should not happen in production)');
-        const simulatedResponse = {
-          success: true,
-          message: 'Credentials saved successfully'
-        };
-        callback(simulatedResponse);
+      const data = request.data;
+      if (!data?.site || !data.username || !data.password) {
+        callback({ success: false, error: 'Site, username and password are required' });
+        return;
       }
+      await this.writeCredentials(data.site, {
+        username: data.username,
+        password: data.password,
+        url: data.site
+      });
+      callback({ success: true, message: 'Credentials saved in extension storage' });
     } catch (error) {
       console.error('Error saving credentials:', error);
       callback({ success: false, error: error.message });
     }
   }
 
-  // Get vault information from local app
+  // Get information about the extension's local store.
   async getVaultInfo(request, callback) {
     try {
       // Validate the request before processing
@@ -174,26 +115,37 @@ class PasswordManagerExtension {
         return;
       }
 
-      if (this.isTauri && this.tauriBridge) {
-        const response = await this.tauriBridge('get_vault_info', {
-          timestamp: request.timestamp,
-          securityToken: request.securityToken
-        });
-        
-        // Validate response before sending
-        if (this.validateResponse(response)) {
-          callback({ success: true, info: response });
-        } else {
-          callback({ success: false, error: 'Malformed response from app' });
-        }
-      } else {
-        console.log('Using secure IPC fallback (should not happen in production)');
-        callback({ success: true, info: { status: 'connected', entries: 0 } });
-      }
+      const stored = await this.readAllCredentials();
+      callback({ success: true, info: { status: 'connected', entries: Object.keys(stored).length } });
     } catch (error) {
       console.error('Error getting vault info:', error);
       callback({ success: false, error: error.message });
     }
+  }
+
+  readAllCredentials() {
+    return new Promise((resolve, reject) => {
+      chrome.storage.local.get('credentialsBySite', (result) => {
+        if (chrome.runtime.lastError) reject(chrome.runtime.lastError);
+        else resolve(result.credentialsBySite || {});
+      });
+    });
+  }
+
+  async readCredentials(site) {
+    const credentials = await this.readAllCredentials();
+    return credentials[site] || null;
+  }
+
+  async writeCredentials(site, entry) {
+    const credentials = await this.readAllCredentials();
+    credentials[site] = entry;
+    return new Promise((resolve, reject) => {
+      chrome.storage.local.set({ credentialsBySite: credentials }, () => {
+        if (chrome.runtime.lastError) reject(chrome.runtime.lastError);
+        else resolve();
+      });
+    });
   }
 
   // Validate response from desktop app to prevent malicious data injection
@@ -287,7 +239,10 @@ class PasswordManagerExtension {
 // Initialize extension
 const passwordManagerExtension = new PasswordManagerExtension();
 
-// Listen for extension icon click to show popup
-chrome.action.onClicked.addListener(() => {
-  chrome.runtime.openOptionsPage();
-});
+// Keep this compatible with Chrome MV3 and Firefox's browserAction API.
+const actionApi = chrome.action || chrome.browserAction;
+if (actionApi?.onClicked) {
+  actionApi.onClicked.addListener(() => {
+    if (chrome.runtime.openOptionsPage) chrome.runtime.openOptionsPage();
+  });
+}

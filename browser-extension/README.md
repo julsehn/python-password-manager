@@ -1,31 +1,33 @@
 # Caixa Forta Browser Extension
 
-This browser extension enables autofill functionality for the Caixa Forta password manager desktop application.
+This browser extension provides local autofill functionality for Caixa Forta credentials.
 
 ## Features
 
 - Autofill login credentials for websites
-- Save new credentials to local password manager
+- Save new credentials to extension storage
 - Cross-browser compatibility (Chrome & Firefox)
-- Secure communication with local desktop app
+- Browser-local credential storage
 
 ## Installation
 
-1. For Chrome: 
+1. For Chrome:
    - Open Extensions in Chrome (chrome://extensions)
    - Enable Developer mode
-   - Click "Load unpacked" and select this folder
+   - Click "Load unpacked" and select `build/chrome`
 
 2. For Firefox:
    - Open about:debugging
    - Click "This Firefox"
    - Click "Load Temporary Add-on"
-   - Select any file in this folder
+   - Select `build/firefox/manifest.json`
 
-## Configuration
+## Storage
 
-The extension communicates with the local password manager app on port 3000 by default.
+Credentials are stored in the browser's extension storage and keyed by site hostname.
+The extension does not currently synchronize with the Caixa Forta desktop vault.
 
 ## Security
 
-All communication between the extension and the local app happens locally using secure protocols.
+Use the browser's extension storage controls to remove saved credentials. Do not load the
+unpacked extension into an untrusted browser profile.

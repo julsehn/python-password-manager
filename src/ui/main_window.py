@@ -472,12 +472,42 @@ class MainWindow(QMainWindow):
         layout.addWidget(QLabel("Segons d'inactivitat per bloqueig automàtic:"))
         layout.addWidget(self.lock_spin)
 
-        layout.addWidget(QLabel("URL del servidor Railway (opcional):"))
-        self.railway_url_edit = QLineEdit(CONFIG.get("railway_url", ""))
-        self.railway_url_edit.setPlaceholderText("https://your-project.up.railway.app")
-        tooltip = QLabel("Auto-generate després de crear el projecte a Railway")
+        # Cloud provider selection
+        cloud_layout = QVBoxLayout()
+        
+        cloud_label = QLabel("Proveïdor de núvol:")
+        cloud_label.setStyleSheet("font-weight: 600; font-size: 13px; margin-top: 12px;")
+        cloud_layout.addWidget(cloud_label)
+        
+        cloud_combo = QComboBox()
+        cloud_combo.addItems(["Núvol oficial (recomanat)", "Personalitzat (domini propi)"])
+        cloud_combo.setCurrentIndex(0)
+        tooltip = QLabel(
+            "Núvol oficial: https://password-manager-cloud-production.up.railway.app\n"
+            "Personalitzat: Introduu el teu propi domini Railway"
+        )
         tooltip.setAlignment(Qt.AlignmentFlag.AlignRight)
-        tooltip.setStyleSheet("color: #68706c; font-size: 11px; padding-left: 8px;")
+        tooltip.setStyleSheet("color: #68706c; font-size: 11px; padding-left: 8px; background: #f8fafc; padding: 8px; border-radius: 4px;")
+        cloud_layout.addWidget(tooltip)
+        
+        # Use signal to update URL when selection changes
+        cloud_combo.currentIndexChanged.connect(self._on_cloud_provider_changed)
+        cloud_layout.addWidget(cloud_combo)
+        
+        layout.addLayout(cloud_layout)
+        
+        # Show URL field only for custom cloud
+        self.railway_url_edit = QLineEdit(CONFIG.get("railway_url", ""))
+        self.railway_url_edit.setPlaceholderText("https://your-custom-project.up.railway.app")
+        self.railway_url_edit.setEnabled(cloud_combo.currentIndex() == 1)
+        
+        # Show tooltip for custom URL field
+        tooltip = QLabel(
+            "Introdueix el teu domini Railway:\n"
+            "https://your-project-id.up.railway.app"
+        )
+        tooltip.setAlignment(Qt.AlignmentFlag.AlignRight)
+        tooltip.setStyleSheet("color: #68706c; font-size: 11px; padding-left: 8px; background: #f8fafc; padding: 8px; border-radius: 4px;")
         layout.addWidget(tooltip)
         layout.addWidget(self.railway_url_edit)
 
@@ -653,16 +683,41 @@ class MainWindow(QMainWindow):
         except Exception as error:
             self._show_remote_error("No s'ha pogut descarregar la caixa forta", error)
 
+    def _on_cloud_provider_changed(self, index):
+        """Handle cloud provider selection change."""
+        if index == 0:
+            # Official cloud - disable custom fields
+            self.railway_url_edit.setEnabled(False)
+            self.railway_vault_id_edit.setEnabled(False)
+            self.railway_token_edit.setEnabled(False)
+        else:
+            # Custom cloud - enable fields
+            self.railway_url_edit.setEnabled(True)
+            self.railway_vault_id_edit.setEnabled(True)
+            self.railway_token_edit.setEnabled(True)
+    
     def save_settings(self, dlg):
+        """Save settings and handle cloud provider selection."""
         global CONFIG  # noqa: F826
+        
         new_config = {
             "clipboard_clear_seconds": self.clip_spin.value(),
             "auto_lock_seconds": self.lock_spin.value(),
             "show_tutorial": CONFIG.get("show_tutorial", True),
-            "railway_url": self.railway_url_edit.text().strip().rstrip("/") or "",
-            "railway_vault_id": self.railway_vault_id_edit.text().strip() or "",
-            "railway_token": self.railway_token_edit.text().strip() or "",
         }
+        
+        # Handle cloud provider selection
+        if cloud_combo.currentIndex() == 0:
+            # Official cloud
+            new_config["railway_url"] = "https://password-manager-cloud-production.up.railway.app"
+            new_config["railway_vault_id"] = ""
+            new_config["railway_token"] = ""
+        else:
+            # Custom cloud
+            custom_url = self.railway_url_edit.text().strip().rstrip("/")
+            new_config["railway_url"] = custom_url if custom_url else ""
+            new_config["railway_vault_id"] = self.railway_vault_id_edit.text().strip() or ""
+            new_config["railway_token"] = self.railway_token_edit.text().strip() or ""
         
         # Update with version if available
         if CONFIG.get("railway_version") is not None:

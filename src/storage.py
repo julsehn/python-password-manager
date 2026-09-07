@@ -1,3 +1,4 @@
+from pathlib import Path
 import os
 import json
 import base64
@@ -8,6 +9,7 @@ import binascii
 from cryptography.exceptions import InvalidTag
 from src.encryption import derive_key, encrypt, decrypt
 from src.models import PasswordEntry
+from threading import Lock
 
 # Default vault path (not committed)
 VAULT_FILENAME = os.path.expanduser("~/.password_manager/vault.json")
@@ -47,21 +49,41 @@ class VaultLockedError(Exception):
     """Raised when master password is locked due to too many failed attempts."""
 
 
+_config: Optional[dict] = None
+_config_lock = Lock()
+
+
+def _load_config_file() -> dict:
+    """Load configuration from file if not already cached."""
+    global _config
+    with _config_lock:
+        if _config is not None:
+            return _config
+        
+        if os.path.exists(CONFIG_FILENAME):
+            try:
+                with open(CONFIG_FILENAME, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                _config = {**DEFAULT_CONFIG, **data}
+                return _config
+            except (json.JSONDecodeError, IOError):
+                _config = DEFAULT_CONFIG.copy()
+                return _config
+        _config = DEFAULT_CONFIG.copy()
+        return _config
+
+
 def load_config() -> dict:
     """Load the application configuration file."""
-    if os.path.exists(CONFIG_FILENAME):
-        try:
-            with open(CONFIG_FILENAME, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            return {**DEFAULT_CONFIG, **data}
-        except (json.JSONDecodeError, IOError):
-            return DEFAULT_CONFIG.copy()
-    return DEFAULT_CONFIG.copy()
+    return _load_config_file()
 
 
 def save_config(config: dict) -> None:
     """Save the application configuration to a file."""
-    _write_private_json(CONFIG_FILENAME, config)
+    global _config
+    with _config_lock:
+        _config = None  # Invalidate cache
+        _write_private_json(CONFIG_FILENAME, config)
 
 
 def _load_lockout_state() -> dict[str, dict]:
@@ -194,7 +216,7 @@ def serialize_vault(entries: List[PasswordEntry], master_password: str) -> str:
         "version": "1",
     }
 
-    return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    return json.dumps(payload, separators=(",", ":"))
 
 
 def save_vault(entries: List[PasswordEntry], master_password: str, path: str = VAULT_FILENAME) -> None:
@@ -354,11 +376,8 @@ def _generate_key_from_hotspots(hotspots: list[dict], salt: bytes) -> str:
     Returns:
         A deterministic string that can be used as input to derive_key()
     """
-    # Convert hotspot coordinates to a canonical string
     coords_str = ";".join(f"{hp['x_pct']:.6f},{hp['y_pct']:.6f}" for hp in hotspots)
     salt_hex = salt.hex()
-
-    # Create the "password" from coordinates + salt
     return f"hotspots:{coords_str};salt:{salt_hex}"
 
 
@@ -374,18 +393,15 @@ def derive_key_from_image_auth(hotspots: list[dict], salt_hex: str) -> bytes:
     Returns:
         32-byte AES key derived from the biometric pattern
     """
-    import os
-
-    # Convert hotspot coordinates to a deterministic key derivation input
-    coords_str = ";".join(f"{hp['x_pct']:.6f},{hp['y_pct']:.6f}" for hp in hotspots)
     salt = bytes.fromhex(salt_hex)
-
-    # Use PBKDF2 to derive a key from the coordinate string
-    # The coordinates act as the "password" input, salt is used for key stretching
-    password_string = f"hotspots:{coords_str};salt:{salt.hex()}"
-
+    password_string = _generate_key_from_hotspots(hotspots, salt)
     key, _ = derive_key(password_string, salt=salt)
     return key
+
+
+def _validate_point(value: float) -> bool:
+    """Check if a percentage value is valid (0-100 range)."""
+    return 0 <= value <= 100
 
 
 def verify_image_auth_pattern(strokes: list[dict], stored_hotspots: list[dict], salt_hex: str) -> bool:
@@ -411,28 +427,32 @@ def verify_image_auth_pattern(strokes: list[dict], stored_hotspots: list[dict], 
         return False
 
     if len(strokes) < len(stored_hotspots) * 0.5:
-        # User drew less than half the original points — likely not a match
         return False
-
     if len(strokes) > len(stored_hotspots) * 3:
-        # User drew way more points — suspicious
         return False
 
-    # Match points one-to-one so one nearby stroke cannot satisfy multiple hotspots.
-    tolerance_pct = 0.15  # 15% tolerance (0-1 range)
+    # Pre-validate stored hotspots
+    for stored in stored_hotspots:
+        if not isinstance(stored.get('x_pct'), (int, float)) or not isinstance(stored.get('y_pct'), (int, float)):
+            return False
+        if not _validate_point(stored['x_pct']) or not _validate_point(stored['y_pct']):
+            return False
+
+    # Pre-validate strokes
+    for stroke in strokes:
+        if not isinstance(stroke.get('x_pct'), (int, float)) or not isinstance(stroke.get('y_pct'), (int, float)):
+            return False
+        if not _validate_point(stroke['x_pct']) or not _validate_point(stroke['y_pct']):
+            return False
+
+    tolerance_pct = 0.15
     distances = []
-    try:
-        for stored in stored_hotspots:
-            if not 0 <= stored['x_pct'] <= 100 or not 0 <= stored['y_pct'] <= 100:
-                return False
-            for index, stroke in enumerate(strokes):
-                if not 0 <= stroke['x_pct'] <= 100 or not 0 <= stroke['y_pct'] <= 100:
-                    return False
-                dx = stroke['x_pct'] - stored['x_pct']
-                dy = stroke['y_pct'] - stored['y_pct']
-                distances.append(((dx * dx + dy * dy) ** 0.5, index))
-    except (KeyError, TypeError, ValueError):
-        return False
+    
+    for stored in stored_hotspots:
+        for index, stroke in enumerate(strokes):
+            dx = stroke['x_pct'] - stored['x_pct']
+            dy = stroke['y_pct'] - stored['y_pct']
+            distances.append(((dx * dx + dy * dy) ** 0.5, index))
 
     distances.sort()
     matched_strokes = set()
