@@ -769,6 +769,12 @@ async fn register_vault(master_password: String, config: SyncConfig) -> Result<S
     railway::register_vault(master_password, &config).await
 }
 
+/// Authenticate user with official cloud
+#[tauri::command]
+async fn auth_official_cloud(username: String, password: String) -> Result<(), String> {
+    railway::auth_user(&username, &password).await
+}
+
 #[tauri::command]
 async fn delete_vault(master_password: String, config: SyncConfig) -> Result<bool, String> {
     railway::delete_vault(master_password, &config).await

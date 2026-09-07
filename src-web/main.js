@@ -356,14 +356,20 @@ async function checkVaultLocked() {
 
 function cloudFormConfig() {
   return {
+    provider: document.querySelector("#cloud-provider")?.value || "official",
     railwayUrl: document.querySelector("#railway-url")?.value.trim() || "",
     vaultId: document.querySelector("#railway-vault-id")?.value.trim() || "",
     token: document.querySelector("#railway-token")?.value.trim() || "",
+    username: document.querySelector("#auth-username")?.value.trim() || "",
+    password: document.querySelector("#auth-password")?.value || "",
+    confirmPassword: document.querySelector("#auth-confirm-password")?.value || "",
+    privacyAccepted: document.querySelector("#privacy-accepted")?.checked || false,
   };
 }
 
 function rustCloudConfig(config) {
   return {
+    provider: config.provider,
     railway_url: config.railwayUrl,
     vault_id: config.vaultId,
     token: config.token,
@@ -392,14 +398,23 @@ async function saveCloudConfig(event) {
 
 async function downloadCloudVault() {
   const config = cloudFormConfig();
-  const masterPassword = prompt("Contrasenya mestra del vault del núvol:");
-  if (!masterPassword) return;
+  
+  // If user is not authenticated and we're on official cloud, show unlock dialog
+  if (config.provider === "official" && !state.cloudConfig.authUser) {
+    if (!state.locked) {
+      showToast("L'usuari no està autenticat. Autentica primer.");
+      return;
+    }
+    // Show unlock dialog
+    if (!confirm("La contrasenya mestra per obrir la caixa forta:")) return;
+  }
+  
   state.cloudLoading = true;
   state.cloudError = "";
   render();
   try {
     const serialized = await invoke("sync_download_vault", {
-      masterPassword,
+      masterPassword: config.password,
       config: rustCloudConfig(config),
     });
     const vault = JSON.parse(serialized);
@@ -437,23 +452,45 @@ async function downloadCloudVault() {
 
 async function registerCloudVault() {
   const config = cloudFormConfig();
-  const masterPassword = prompt(
-    "Contrasenya mestra per al nou vault del núvol:",
-  );
-  if (!masterPassword) return;
+  if (config.password !== config.confirmPassword) {
+    state.cloudError = "Les contrasenyes no coincideixen.";
+    render();
+    return;
+  }
+  if (config.password.length < 16) {
+    state.cloudError = "La contrasenya mestra ha de tenir almenys 16 caràcters.";
+    render();
+    return;
+  }
+  if (!config.privacyAccepted) {
+    state.cloudError = "Has d'acceptar la Política de Privacitat.";
+    render();
+    return;
+  }
+  
+  const masterPassword = config.password;
   state.cloudLoading = true;
   state.cloudError = "";
   render();
   try {
-    await invoke("register_vault", {
-      masterPassword,
-      config: rustCloudConfig(config),
-    });
-    await invoke("set_railway_sync_config", rustCloudConfig(config));
+    // For official cloud, authenticate user first
+    if (config.provider === "official") {
+      await invoke("auth_official_cloud", {
+        username: config.username,
+        password: masterPassword,
+      });
+      // Update config with auth user
+      state.cloudConfig.authUser = config.username;
+    } else {
+      await invoke("register_vault", {
+        masterPassword,
+        config: rustCloudConfig(config),
+      });
+    }
     state.cloudConfig = config;
     localStorage.setItem("caixa-forta-cloud", JSON.stringify(config));
     state.showCloudLogin = false;
-    showToast("Vault creat al núvol. Ara pots crear la caixa forta local.");
+    showToast(config.provider === "official" ? "Authenticació completada. Obre la caixa forta." : "Vault creat al núvol.");
   } catch (error) {
     state.cloudError = String(error);
   } finally {
@@ -462,7 +499,59 @@ async function registerCloudVault() {
   }
 }
 
-async function resetLocalVault() {
+async function cloudAuthSubmit(event) {
+  event.preventDefault();
+  const config = cloudFormConfig();
+  
+  if (config.password !== config.confirmPassword) {
+    state.cloudError = "Les contrasenyes no coincideixen.";
+    render();
+    return;
+  }
+  if (config.password.length < 16) {
+    state.cloudError = "La contrasenya mestra ha de tenir almenys 16 caràcters.";
+    render();
+    return;
+  }
+  if (!config.privacyAccepted) {
+    state.cloudError = "Has d'acceptar la Política de Privacitat.";
+    render();
+    return;
+  }
+  
+  state.cloudLoading = true;
+  state.cloudError = "";
+  render();
+  
+  try {
+    // For official cloud, authenticate user
+    if (config.provider === "official") {
+      await invoke("auth_official_cloud", {
+        username: config.username,
+        password: config.password,
+      });
+      // Update config with auth user
+      state.cloudConfig.authUser = config.username;
+      // Update UI to show locked state and allow opening vault
+      state.locked = false;
+    } else {
+      // For custom cloud, use existing flow
+      await invoke("set_railway_sync_config", rustCloudConfig(config));
+      state.cloudConfig = config;
+      localStorage.setItem("caixa-forta-cloud", JSON.stringify(config));
+    }
+    
+    state.showCloudLogin = false;
+    showToast(config.provider === "official" ? "Autenticació completada. Obre la caixa forta." : "Connexió amb Railway completada.");
+  } catch (error) {
+    state.cloudError = String(error);
+  } finally {
+    state.cloudLoading = false;
+    render();
+  }
+}
+
+async function downloadCloudVault() {
   if (prompt('Escriu "ELIMINAR" per confirmar:') !== "ELIMINAR") return;
   try {
     await invoke("reset_vault");
@@ -1344,31 +1433,60 @@ function changeMasterPasswordModal() {
 
 function cloudLoginModal() {
   const config = state.cloudConfig;
+  const isOfficial = config.provider === "official" || !config.provider;
   return `
     <div class="modal-backdrop">
       <section class="entry-modal" role="dialog" aria-modal="true" aria-labelledby="cloud-login-title">
         <header class="modal-header">
           <button class="modal-icon" id="cancel-cloud-login" title="Tancar">${icon("X", 20)}</button>
-          <h2 id="cloud-login-title">Inici de sessió al núvol</h2>
+          <h2 id="cloud-login-title">Autenticació al núvol</h2>
         </header>
         <form id="cloud-login-form">
           <div class="modal-scroll">
-            <section class="form-section master-password-section">
-              <p class="helper">Necessites l'URL de Railway, l'identificador del vault i el token d'accés.</p>
-              <label class="form-label" for="railway-url">URL de Railway</label>
-              <input class="form-input" id="railway-url" name="railwayUrl" type="url" required value="${escapeHtml(config.railwayUrl)}" placeholder="https://el-teu-servei.up.railway.app" />
-              <label class="form-label" for="railway-vault-id">Identificador del vault</label>
-              <input class="form-input" id="railway-vault-id" name="vaultId" required minlength="16" value="${escapeHtml(config.vaultId)}" />
-              <label class="form-label" for="railway-token">Token d'accés</label>
-              <input class="form-input" id="railway-token" name="token" type="password" required minlength="32" value="${escapeHtml(config.token)}" autocomplete="off" />
+            <!-- Cloud Provider Selection -->
+            <div class="form-section cloud-provider-section">
+              <label class="form-label">Proveïdor de núvol:</label>
+              <div class="input-group">
+                <select class="form-input" id="cloud-provider" name="provider" ${isOfficial ? 'disabled style="opacity: 0.5"' : ''}>
+                  <option value="official" ${isOfficial ? 'selected' : ''}>Núvol oficial (recomanat)</option>
+                  <option value="custom" ${!isOfficial ? 'selected' : ''}>Personalitzat (domini propi)</option>
+                </select>
+                ${!isOfficial ? '<span class="provider-hint">Introdueix el teu propi domini Railway</span>' : ''}
+              </div>
+              ${!isOfficial ? `<div class="provider-hint">El núvol oficial no requereix configuració extra</div>` : ''}
+            </div>
+            
+            <!-- Username/Email -->
+            <div class="form-section auth-section">
+              <label class="form-label" for="auth-username">Usuari o correu electrònic:</label>
+              <input class="form-input" id="auth-username" name="username" type="text" required minlength="3" placeholder="E. g., joan.perez" ${isOfficial && !config.authUser ? 'required' : ''} />
               ${state.cloudError ? `<p class="error form-error">${escapeHtml(state.cloudError)}</p>` : ""}
-            </section>
+            </div>
+            
+            <!-- Master Password -->
+            <div class="form-section master-password-section">
+              <label class="form-label" for="auth-password">Contrasenya mestra:</label>
+              <input class="form-input" id="auth-password" name="password" type="password" required minlength="16" placeholder="Mínim 16 caràcters" />
+              <label class="form-label" for="auth-confirm-password">Confirma la contrasenya:</label>
+              <input class="form-input" id="auth-confirm-password" name="confirmPassword" type="password" required minlength="16" placeholder="Repeteix la contrasenya" />
+              <div class="privacy-note">
+                🔒 Les teves contrasenyes estan encriptades amb AES-256-GCM. El servidor només emmagatzema la versió encriptada.
+              </div>
+            </div>
+            
+            <!-- Privacy Policy -->
+            <div class="form-section privacy-section">
+              <label class="form-checkbox" for="privacy-accepted">
+                <input type="checkbox" id="privacy-accepted" name="privacyAccepted" required />
+                He llegit i accepto la <a href="PRIVACY_POLICY.md" target="_blank" class="policy-link">Política de Privacitat</a>
+              </label>
+            </div>
           </div>
           <footer class="modal-footer">
             <button type="button" class="secondary" id="cancel-cloud-login">Cancel·la</button>
-            <button type="button" class="secondary" id="register-cloud-vault" ${state.cloudLoading ? "disabled" : ""}>Crea vault nou</button>
-            <button type="button" class="secondary" id="download-cloud-vault" ${state.cloudLoading ? "disabled" : ""}>Descarrega vault</button>
-            <button type="submit" class="primary" ${state.cloudLoading ? "disabled" : ""}>${state.cloudLoading ? "Connectant..." : "Desa i connecta"}</button>
+            <button type="button" class="secondary" id="register-cloud-vault" ${state.cloudLoading ? "disabled" : ""}>Registra't</button>
+            <button type="button" class="secondary" id="download-cloud-vault" ${state.cloudLoading ? "disabled" : ""}>Connexió següent</button>
+            <button type="submit" class="primary" ${state.cloudLoading ? "disabled" : ""}>${state.cloudLoading ? "Autenticant..." : (isOfficial ? "Autentica" : "Configura núvol")}</button>
           </footer>
         </form>
       </section>
@@ -2508,7 +2626,7 @@ function bindEvents() {
   );
   document
     .querySelector("#cloud-login-form")
-    ?.addEventListener("submit", saveCloudConfig);
+    ?.addEventListener("submit", cloudAuthSubmit);
   document.querySelectorAll("#cancel-cloud-login").forEach((button) =>
     button.addEventListener("click", () => {
       state.showCloudLogin = false;

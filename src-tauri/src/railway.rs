@@ -294,3 +294,89 @@ pub async fn check_health(railway_url: &str) -> Result<bool, String> {
 
     Ok(response.status().is_success())
 }
+
+/// Auth functions for official cloud
+
+#[derive(Debug, Serialize, Deserialize)]
+struct UserAuthRequest {
+    username: String,
+    password: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct UserAuthResponse {
+    user_id: i64,
+    username: String,
+    email: Option<String>,
+    access_token: String,
+    token_type: String,
+}
+
+/// Authenticate user with official cloud
+pub async fn auth_user(username: &str, password: &str) -> Result<String, String> {
+    let client = Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
+
+    let url = "https://password-manager-cloud-production.up.railway.app/v1/auth/login";
+    
+    let response = client
+        .post(url)
+        .json(&UserAuthRequest {
+            username: username.to_string(),
+            password: password.to_string(),
+        })
+        .header("Content-Type", "application/json")
+        .send()
+        .await
+        .map_err(|e| format!("Failed to send request: {}", e))?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        return Err(format!("Authentication failed (status {}): {}", status, body));
+    }
+
+    let auth_response: UserAuthResponse = response
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse response: {}", e))?;
+
+    Ok(auth_response.access_token)
+}
+
+/// Register new user with official cloud
+pub async fn register_user(username: &str, password: &str) -> Result<bool, String> {
+    let client = Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
+
+    let url = "https://password-manager-cloud-production.up.railway.app/v1/auth/register";
+    
+    let response = client
+        .post(url)
+        .json(&UserAuthRequest {
+            username: username.to_string(),
+            password: password.to_string(),
+        })
+        .header("Content-Type", "application/json")
+        .send()
+        .await
+        .map_err(|e| format!("Failed to send request: {}", e))?;
+
+    match response.status() {
+        reqwest::StatusCode::CREATED | reqwest::StatusCode::OK => Ok(true),
+        reqwest::StatusCode::CONFLICT => {
+            // User already exists
+            println!("User {} already exists", username);
+            Ok(false)
+        }
+        _ => {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            Err(format!("Registration failed (status {}): {}", status, body))
+        }
+    }
+}
