@@ -300,3 +300,60 @@ class RailwayVaultClient:
         """
         self.vault_id = str(uuid.uuid4())
         self.token = secrets.token_urlsafe(32)
+
+    def register_user(self, username: str, password: str) -> dict:
+        """Register a new user account on the server.
+
+        Args:
+            username: Desired username
+            password: Password to encrypt the vault with
+
+        Returns:
+            dict with user_id, username, email, and access_token
+
+        Raises:
+            Exception: If registration fails
+        """
+        url = f"{self.base_url}/v1/auth/register"
+        payload = {
+            "username": username,
+            "password": password,
+            "email": "",
+        }
+
+        response = self._request("POST", url, payload=payload)
+        return response
+
+    def login_user(self, username: str, password: str) -> dict:
+        """Login with username and password.
+
+        Args:
+            username: Registered username
+            password: Password
+
+        Returns:
+            dict with user_id, username, email, and access_token
+
+        Raises:
+            Exception: If login fails (invalid credentials)
+        """
+        url = f"{self.base_url}/v1/auth/login"
+        payload = {
+            "username": username,
+            "password": password,
+        }
+
+        response = self._request("POST", url, payload=payload)
+        return response
+
+    def get_user_info(self) -> dict:
+        """Get current authenticated user info.
+
+        Returns:
+            dict with user_id, username, and email
+
+        Raises:
+            Exception: If not authenticated (401)
+        """
+        response = self._request("GET", "/v1/auth/me")
+        return response

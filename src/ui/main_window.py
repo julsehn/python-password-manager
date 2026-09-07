@@ -37,7 +37,7 @@ from src.ui.qt_compat import (
 
 from src.password_manager import PasswordManager
 from src.remote_vault import RemoteVaultStore
-from src.ui.dialogs import AddEditDialog, GeneratePasswordDialog, LoginDialog
+from src.ui.dialogs import AddEditDialog, GeneratePasswordDialog, LoginDialog, CloudLoginDialog
 from src.ui.tutorial_dialog import TutorialDialog
 from src.storage import (
     save_vault,
@@ -215,16 +215,34 @@ class MainWindow(QMainWindow):
         self._last_activity = time.time()
 
     def show_login_dialog(self):
-        """Show login dialog to authenticate with master password."""
+        """Show login dialog to authenticate with master password or cloud."""
         if self._initialized:
             # If we're already authenticated, just show login to re-auth
-            self.status.setText("Sesón inactiu. Entra de nou.")
+            self.status.setText("Sessió inactiva. Entra de nou.")
+        
         else:
             self.status.setText("Entrada la contrasenya mestra per començar.")
-
-        dlg = LoginDialog(self, remote=self.remote_store.configured)
-        if dlg.exec() == QDialog.DialogCode.Accepted:
-            self._load_vault(dlg.password_field.text())
+        
+        # Check if we should show cloud login
+        if self.remote_store.configured and self.remote_store._status.url == "https://password-manager-cloud-production.up.railway.app":
+            # Show cloud authentication dialog
+            cloud_dialog = CloudLoginDialog(self.remote_store, self)
+            if cloud_dialog.exec() == QDialog.DialogCode.Accepted:
+                # Get credentials and load vault
+                creds = cloud_dialog.get_credentials()
+                password = creds["password"]
+                username = creds["username"]
+                
+                # Authenticate user
+                self.remote_store.authenticate_user(username, password)
+                
+                # Load vault
+                self._load_vault(password)
+        elif self._initialized:
+            # Local vault - show standard login
+            dlg = LoginDialog(self, remote=self.remote_store.configured)
+            if dlg.exec() == QDialog.DialogCode.Accepted:
+                self._load_vault(dlg.password_field.text())
         elif not self._initialized and not self.remote_store.configured and not os.path.exists(VAULT_FILENAME):
             self._initialize_new_vault()
 
@@ -234,6 +252,19 @@ class MainWindow(QMainWindow):
             return False
         try:
             if self.remote_store.configured:
+                # Check if using official cloud
+                if self.remote_store._status.url == "https://password-manager-cloud-production.up.railway.app":
+                    # Authenticate user first to verify credentials
+                    client = self._client()
+                    try:
+                        client.get_user_info()
+                        # Credentials verified - proceed with vault load
+                    except Exception as auth_error:
+                        self._show_remote_error("Error d'autenticació", auth_error)
+                        self.status.setText("Error d'autenticació")
+                        self.status.setStyleSheet("color: #dc2626; font-weight: 600;")
+                        return False
+                
                 # Auto-download from remote server
                 entries, version = self.remote_store.load(master_password)
                 CONFIG["railway_version"] = version
@@ -257,6 +288,15 @@ class MainWindow(QMainWindow):
             self.status.setText("Error de càrrega")
             self.status.setStyleSheet("color: #dc2626; font-weight: 600;")
             return False
+    
+    def _client(self):
+        """Create a Railway client instance."""
+        from src.railway_client import RailwayVaultClient
+        return RailwayVaultClient(
+            self.remote_store._status.url,
+            self.remote_store._status.vault_id,
+            self.remote_store._status.token or ""
+        )
 
     def _initialize_new_vault(self):
         """Initialize a new vault with master password prompt."""

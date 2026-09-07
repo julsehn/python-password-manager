@@ -30,6 +30,7 @@ class RemoteVaultStore:
     def __init__(self, config: Optional[dict] = None):
         self.config = config if config else load_config()
         self._status = RemoteVaultStatus()
+        self._auth_required = False  # True if user must register/login first
         self._update_status()
 
     def _update_status(self) -> None:
@@ -159,3 +160,39 @@ class RemoteVaultStore:
         except Exception as e:
             self._status.error = str(e)
             raise
+    
+    def authenticate_user(self, username: str, password: str, create_if_not_exists: bool = False) -> dict:
+        """Authenticate user with the cloud service.
+        
+        Args:
+            username: Username for authentication
+            password: Password (used for vault encryption and server auth)
+            create_if_not_exists: If True, create new user if doesn't exist
+            
+        Returns:
+            dict with user_id, username, email, access_token
+            
+        Raises:
+            Exception: If authentication fails
+        """
+        if not self._status.configured:
+            raise ValueError("Servidor no configurat. Assegura't que l'URL és correcta.")
+        
+        try:
+            client = self._client()
+            response = client.login_user(username, password)
+            self.config["auth_user"] = response["username"]
+            self._save_config()
+            return response
+        except Exception as auth_error:
+            if create_if_not_exists:
+                # Try to register new user
+                try:
+                    response = client.register_user(username, password)
+                    self.config["auth_user"] = response["username"]
+                    self._save_config()
+                    return response
+                except Exception as reg_error:
+                    raise Exception(f"No es pot autenticar: {str(auth_error)}")
+            else:
+                raise

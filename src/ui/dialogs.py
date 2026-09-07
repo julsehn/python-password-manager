@@ -33,6 +33,8 @@ from src.storage import (
     image_auth_is_set,
 )
 
+from src.remote_vault import RemoteVaultStore
+
 
 class LoginDialog(QDialog):
     """Diàleg de login per obtenir la contrasenya mestra.
@@ -146,7 +148,208 @@ class LoginDialog(QDialog):
         self.accept()
 
 
-class ImageAuthSetupDialog(QDialog):
+class CloudLoginDialog(QDialog):
+    """Login/Register dialog for cloud authentication.
+    
+    Handles:
+      - User registration (new account)
+      - User login with verification
+      - Password confirmation for security
+    """
+    
+    def __init__(self, remote_store: RemoteVaultStore, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Autenticació - Núvol Oficial")
+        self.setModal(True)
+        self.remote_store = remote_store
+        self.is_registering = False
+        
+        layout = QVBoxLayout()
+        layout.setSpacing(16)
+        
+        # Title and subtitle
+        title = QLabel("Autenticació al núvol")
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        font = title.font()
+        font.setWeight(750)
+        title.setFont(font)
+        layout.addWidget(title)
+        
+        subtitle = QLabel(
+            "Llegeix la nostra Política de Privacitat abans de continuar:\n"
+            "🔒 Les teves contrasenyes estan encriptades. El servidor només emmagatzema "
+            "la versió encriptada. Ningú pot accedir als teus dades sense la contrasenya mestra."
+        )
+        subtitle.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        subtitle.setStyleSheet("color: #68706c; font-size: 12px; background: #f0f9ff; padding: 12px; border-radius: 8px; margin-top: 8px;")
+        layout.addWidget(subtitle)
+        
+        # Provider selection
+        provider_label = QLabel("Proveïdor de núvol:")
+        provider_label.setStyleSheet("font-weight: 600; font-size: 13px;")
+        layout.addWidget(provider_label)
+        
+        self.provider_combo = QComboBox()
+        self.provider_combo.addItems(["Núvol oficial (recomanat)", "Personalitzat"])
+        self.provider_combo.setCurrentIndex(0)
+        layout.addWidget(self.provider_combo)
+        
+        # Username
+        username_label = QLabel("Usuari:")
+        username_label.setStyleSheet("font-weight: 600;")
+        layout.addWidget(username_label)
+        
+        self.username_field = QLineEdit()
+        self.username_field.setPlaceholderText("E. g., joan.perez")
+        self.username_field.setMinimumHeight(40)
+        layout.addWidget(self.username_field)
+        
+        # Password
+        password_label = QLabel("Contrasenya mestra:")
+        password_label.setStyleSheet("font-weight: 600;")
+        layout.addWidget(password_label)
+        
+        self.password_field = QLineEdit()
+        self.password_field.setPlaceholderText("Mínim 16 caràcters")
+        self.password_field.setEchoMode(QLineEdit.EchoMode.Password)
+        self.password_field.setMinimumHeight(40)
+        layout.addWidget(self.password_field)
+        
+        # Confirm password
+        self.confirm_password_field = QLineEdit()
+        self.confirm_password_field.setPlaceholderText("Repeteix la contrasenya")
+        self.confirm_password_field.setEchoMode(QLineEdit.EchoMode.Password)
+        self.confirm_password_field.setMinimumHeight(40)
+        self.confirm_password_field.setVisible(False)
+        layout.addWidget(self.confirm_password_field)
+        
+        # Error label
+        self.error_label = QLabel("")
+        self.error_label.setStyleSheet("color: #dc2626; font-size: 13px; margin-top: 4px;")
+        self.error_label.setVisible(False)
+        layout.addWidget(self.error_label)
+        
+        # Privacy policy checkbox
+        self.privacy_accepted = QCheckBox("He llegit i accepto la Política de Privacitat")
+        self.privacy_accepted.stateChanged.connect(self._on_privacy_check)
+        layout.addWidget(self.privacy_accepted)
+        
+        # Privacy policy link
+        privacy_link = QLabel("📄 Veure política de privacitat completa")
+        privacy_link.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        privacy_link.setOpenExternalLinks(True)
+        privacy_link.setStyleSheet("color: #2563eb; font-size: 11px; text-decoration: underline;")
+        privacy_link.setTextInteractionFlags(Qt.TextInteractionFlag.TextBrowserInteraction)
+        privacy_link.clicked.connect(lambda: self.open_external_file("/PRIVACY_POLICY.md"))
+        layout.addWidget(privacy_link)
+        
+        # Buttons
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        buttons.button(QDialogButtonBox.StandardButton.Ok).setText("Continuar")
+        buttons.button(QDialogButtonBox.StandardButton.Cancel).setText("Cancel·la")
+        buttons.accepted.connect(self._on_accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+        
+        self.setLayout(layout)
+    
+    def open_external_file(self, path: str):
+        """Open external markdown file (for privacy policy)."""
+        import webbrowser
+        try:
+            # Try to open in same app or default viewer
+            if path.startswith("/"):
+                path = path.replace("/", "")
+            webbrowser.open(f"file://{path}")
+        except:
+            QMessageBox.information(self, "Política de Privacitat", 
+                "Vegeu l'arxiu PRIVACY_POLICY.md al repositori GitHub\n\n"
+                "https://github.com/julsehn/Password-Manager-Cloud")
+    
+    def _on_privacy_check(self, state: int) -> None:
+        if state == Qt.CheckState.Checked:
+            self.confirm_password_field.setVisible(True)
+        else:
+            self.confirm_password_field.setVisible(False)
+    
+    def _on_accept(self) -> None:
+        username = self.username_field.text().strip()
+        password = self.password_field.text()
+        confirm_password = self.confirm_password_field.text()
+        
+        # Validate inputs
+        if not username:
+            self.error_label.setText("L'usuari és obligatori.")
+            self.username_field.setFocus()
+            return
+        
+        if len(username) < 3:
+            self.error_label.setText("L'usuari ha de tenir almenys 3 caràcters.")
+            self.username_field.setFocus()
+            return
+        
+        if len(password) < 16:
+            self.error_label.setText("La contrasenya mestra ha de tenir almenys 16 caràcters per seguretat.")
+            self.password_field.setFocus()
+            return
+        
+        if not self.privacy_accepted.isChecked():
+            self.error_label.setText("Has d'acceptar la Política de Privacitat per continuar.")
+            return
+        
+        if password != confirm_password:
+            self.error_label.setText("Les contrasenyes no coincideixen.")
+            self.confirm_password_field.setFocus()
+            return
+        
+        # Store password for later use
+        self._auth_password = password
+        
+        # Proceed with authentication
+        if self.provider_combo.currentIndex() == 0:
+            # Official cloud - auto-authenticate
+            self._authenticate_official_cloud(username)
+        else:
+            # Custom cloud - manual auth needed
+            self.accept()
+    
+    def _authenticate_official_cloud(self, username: str):
+        """Authenticate with official cloud service."""
+        import sys
+        
+        try:
+            # Auto-create vault with encrypted data
+            encrypted_blob = self._get_default_encrypted_blob()
+            
+            # Register vault on cloud
+            response = self.remote_store.authenticate_user(username, self._auth_password)
+            
+            # Create vault
+            self.remote_store.save([], self._auth_password)
+            
+            self.config["auth_user"] = username
+            save_config(self.config)
+            
+            self.accept()
+            
+        except Exception as e:
+            self.error_label.setText(f"Error d'autenticació: {str(e)}")
+            return
+    
+    def _get_default_encrypted_blob(self) -> str:
+        """Generate default encrypted vault blob."""
+        from src.encryption import serialize_vault
+        from src.models import PasswordEntry
+        
+        empty_vault = [PasswordEntry()]
+        return serialize_vault(empty_vault, self._auth_password)
+    
+    def get_credentials(self) -> dict:
+        """Return authenticated credentials."""
+        return {
+            "username": self.username_field.text(),
+            "password": self._auth_password,
+        }
     """Wizard dialog for setting up image-based biometric authentication.
 
     The user:
