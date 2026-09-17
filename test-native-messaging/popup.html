@@ -1,0 +1,18 @@
+
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Test</title>
+</head>
+<body>
+    <div id="status">Testing...</div>
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            chrome.runtime.sendMessage({action: 'getVaultInfo'}, (response) => {
+                document.getElementById('status').textContent = 
+                    JSON.stringify(response);
+            });
+        });
+    </script>
+</body>
+</html>

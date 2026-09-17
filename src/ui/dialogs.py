@@ -725,6 +725,122 @@ class BiometricLoginDialog(QDialog):
             )
 
 
+class FirstTimeGuideDialog(QDialog):
+    """Guia interactiva per usuaris nous amb navegació amb fletxes.
+
+    Guia en català per usuaris que acaben de crear la seva primera caixa forta.
+    Mostra com afegir el seu primer accés amb navegació amb fletxes (← →).
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Guia: Crea el teu primer accés")
+        self.setModal(True)
+        self.setFixedSize(700, 500)
+
+        self.current_step = 0
+        self.steps = [
+            {
+                "title": "Benvingut!",
+                "message": "La teva caixa forta s'ha creat!\n\nAra cal afegir el teu primer accés (site, usuari i contrasenya).",
+                "hint": "Fes clic a «Següent» per continuar"
+            },
+            {
+                "title": "Informació del lloc web",
+                "message": "Introdueix el lloc web on utilitzes aquesta contrasenya.\n\nExemples:\n• google.com\n• instagram.com\n• example.com",
+                "hint": "Fes clic a «Següent» quan tinguis el lloc web"
+            },
+            {
+                "title": "Nom d'usuari",
+                "message": "Introdueix el nom d'usuari o l'adreça de correu que utilitzes en aquest lloc web.\n\nExemples:\n• joan.perez\n• user@example.com",
+                "hint": "Fes clic a «Següent» quan tinguis el nom d'usuari"
+            },
+            {
+                "title": "Contrasenya",
+                "message": "Introdueix la contrasenya per a aquest accés.\n\nLa contrasenya ha de tenir com a mínim 8 caràcters.",
+                "hint": "Fes clic a «Següent» quan tinguis la contrasenya"
+            },
+            {
+                "title": "Generar contrasenya segura",
+                "message": "Vols generar una contrasenya segura?\n\nLes contrasenyes generades inclouen lletra, xifres i símbols.",
+                "hint": "Fes clic a «Següent» per continuar"
+            },
+            {
+                "title": "Accés afegit!",
+                "message": "El teu primer accés s'ha afegit amb èxit!\n\nContinua afegint més accessos o revisa els que ja tens.",
+                "hint": "Fes clic a «Finalitzar» per tancar la guia"
+            }
+        ]
+
+        layout = QVBoxLayout(self)
+        layout.setSpacing(16)
+
+        # Progress indicator
+        self.progress_label = QLabel(f"Pàs {self.current_step + 1} de {len(self.steps)}")
+        self.progress_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.progress_label.setStyleSheet("color: #2563eb; font-weight: 600; font-size: 14px;")
+        layout.addWidget(self.progress_label)
+
+        # Title
+        self.title_label = QLabel()
+        self.title_label.setStyleSheet("font-size: 20px; font-weight: bold; color: #172b4d;")
+        self.title_label.setWordWrap(True)
+        layout.addWidget(self.title_label)
+
+        # Message
+        self.message_label = QLabel()
+        self.message_label.setStyleSheet("font-size: 15px; color: #4a5568;")
+        self.message_label.setWordWrap(True)
+        layout.addWidget(self.message_label)
+
+        # Hint
+        self.hint_label = QLabel()
+        self.hint_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.hint_label.setStyleSheet("color: #68706c; font-size: 13px; font-style: italic;")
+        self.hint_label.setWordWrap(True)
+        layout.addWidget(self.hint_label)
+
+        # Arrow navigation
+        arrow_layout = QHBoxLayout()
+        self.btn_prev = QPushButton("← Anterior")
+        self.btn_prev.clicked.connect(self._prev_step)
+        arrow_layout.addWidget(self.btn_prev)
+
+        self.btn_next = QPushButton("Següent →")
+        self.btn_next.clicked.connect(self._next_step)
+        arrow_layout.addWidget(self.btn_next)
+
+        layout.addLayout(arrow_layout)
+        self.setLayout(layout)
+        self._update_step()
+
+    def _update_step(self):
+        step = self.steps[self.current_step]
+        self.title_label.setText(step["title"])
+        self.message_label.setText(step["message"])
+        self.hint_label.setText(step["hint"])
+
+        # Update button states
+        self.btn_prev.setEnabled(self.current_step > 0)
+
+        if self.current_step == len(self.steps) - 1:
+            self.btn_next.setText("Finalitzar →")
+            self.btn_next.clicked.connect(self.accept)
+        else:
+            self.btn_next.setText("Següent →")
+            self.btn_next.clicked.connect(self._next_step)
+
+    def _next_step(self):
+        if self.current_step < len(self.steps) - 1:
+            self.current_step += 1
+            self._update_step()
+
+    def _prev_step(self):
+        if self.current_step > 0:
+            self.current_step -= 1
+            self._update_step()
+
+
 class BiometricLoginPrompt(QDialog):
     """Diàleg per autenticació biométrica amb opció de contrasenya de backup.
 

@@ -1,262 +1,229 @@
-// Background script for the extension's local credential store.
-class PasswordManagerExtension {
-  constructor() {
-    // Use Tauri's IPC capability for secure communication
-    this.init();
+// Caixa Forta - Background Service Worker
+// Uses the WebExtensions native messaging API in Firefox and Chromium.
+
+const browser = globalThis.browser ?? globalThis.chrome;
+
+// Establish connection to native messaging host
+let nativePort = null;
+const pendingNativeRequests = [];
+
+function connectToNative() {
+  if (!nativePort) {
+    try {
+      nativePort = browser.runtime.connectNative("caixa_forta");
+      console.log("Connected to native messaging host");
+
+      nativePort.onMessage.addListener((response) => {
+        console.log("Received from native:", response);
+        const request = pendingNativeRequests.shift();
+        if (request) {
+          if (response.success) {
+            request.resolve(response);
+          } else {
+            request.reject(
+              new Error(response.error || "Unknown native host error"),
+            );
+          }
+        }
+      });
+
+      nativePort.onDisconnect.addListener(() => {
+        const errorMessage =
+          nativePort?.error?.message ||
+          browser.runtime.lastError?.message ||
+          "Native messaging host disconnected without an error";
+        console.error("Native messaging port disconnected:", errorMessage);
+        while (pendingNativeRequests.length) {
+          pendingNativeRequests.shift().reject(new Error(errorMessage));
+        }
+        nativePort = null;
+      });
+    } catch (error) {
+      console.error("Error connecting to native messaging host:", error);
+      nativePort = null;
+    }
+  }
+}
+
+// Send message to native host
+function sendToNative(action, payload = {}) {
+  if (!nativePort) {
+    connectToNative();
   }
 
-  init() {
-    // Listen for messages from content scripts with proper validation
-    chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-      // Validate incoming request
-      if (!this.validateRequest(request)) {
-        sendResponse({ success: false, error: "Invalid request" });
-        return false;
-      }
-
-      if (request.action === "fetchCredentials") {
-        this.fetchCredentials(request, sendResponse);
-        return true;
-      } else if (request.action === "saveCredentials") {
-        this.saveCredentials(request, sendResponse);
-        return true;
-      } else if (request.action === "formDetected") {
-        // Handle form detection on page
-        console.log("Form detected:", request.data);
-        sendResponse({ success: true, message: "Form processed" });
-        return true;
-      } else if (request.action === "getVaultInfo") {
-        this.getVaultInfo(request, sendResponse);
-        return true;
-      } else {
-        sendResponse({ success: false, error: "Unknown action" });
-        return false;
-      }
-    });
+  if (!nativePort) {
+    return Promise.reject(new Error("Native messaging port is not available"));
   }
 
-  // Validate incoming request to prevent injection attacks
-  validateRequest(request) {
-    // Basic validation of request structure
-    if (!request || typeof request !== "object") {
-      return false;
+  const message = { action, ...payload };
+  return new Promise((resolve, reject) => {
+    pendingNativeRequests.push({ resolve, reject });
+    try {
+      nativePort.postMessage(message);
+    } catch (error) {
+      pendingNativeRequests.pop();
+      reject(error);
     }
+  });
+}
 
-    // Validate required fields exist
-    if (request.action === undefined) {
-      return false;
-    }
+// Get Vault Info
+async function getVaultInfo() {
+  return sendToNative("getVaultInfo");
+}
 
-    // Validate timestamp if present
-    if (request.timestamp && typeof request.timestamp !== "number") {
-      return false;
-    }
+// Unlock Vault
+async function unlockVault(masterPassword) {
+  return sendToNative("unlockVault", { masterPassword });
+}
 
-    // Validate security token if present (should be a string of reasonable length)
-    if (
-      request.securityToken &&
-      (typeof request.securityToken !== "string" ||
-        request.securityToken.length > 100)
-    ) {
-      return false;
-    }
+// Lock Vault
+async function lockVault() {
+  return sendToNative("lockVault");
+}
 
+// Fetch Credentials
+async function fetchCredentials(domain = "") {
+  return sendToNative("fetchCredentials", { site: domain || "" });
+}
+
+// Save Credential
+async function saveCredential(data) {
+  return sendToNative("saveCredentials", { data });
+}
+
+// Generate Password
+async function generatePassword(options = {}) {
+  return sendToNative("generatePassword", { options });
+}
+
+// Message Listener for Popup and Content Scripts
+browser.runtime.onMessage.addListener((request, sender, sendResponse) => {
+  if (request.action === "getVaultInfo") {
+    getVaultInfo()
+      .then(sendResponse)
+      .catch((error) => {
+        console.error("Error in getVaultInfo:", error);
+        sendResponse({ success: false, error: error.message });
+      });
     return true;
   }
 
-  // Fetch credentials from the extension's local store.
-  async fetchCredentials(request, callback) {
-    try {
-      // Validate the request before processing
-      if (!this.validateRequest(request)) {
-        callback({ success: false, error: "Invalid request parameters" });
-        return;
-      }
-
-      const site = request.data?.site || request.site;
-      const stored = await this.readCredentials(site);
-      callback({ success: true, credentials: stored ? [stored] : [] });
-    } catch (error) {
-      console.error("Error fetching credentials:", error);
-      callback({ success: false, error: error.message });
-    }
+  if (request.action === "unlockVault") {
+    unlockVault(request.masterPassword)
+      .then(sendResponse)
+      .catch((error) => {
+        console.error("Error in unlockVault:", error);
+        sendResponse({ success: false, error: error.message });
+      });
+    return true;
   }
 
-  // Save credentials to the extension's local store.
-  async saveCredentials(request, callback) {
-    try {
-      // Validate the request before processing
-      if (!this.validateRequest(request)) {
-        callback({ success: false, error: "Invalid request parameters" });
-        return;
-      }
-
-      const data = request.data;
-      if (!data?.site || !data.username || !data.password) {
-        callback({
-          success: false,
-          error: "Site, username and password are required",
-        });
-        return;
-      }
-      await this.writeCredentials(data.site, {
-        username: data.username,
-        password: data.password,
-        url: data.site,
+  if (request.action === "lockVault") {
+    lockVault()
+      .then(sendResponse)
+      .catch((error) => {
+        console.error("Error in lockVault:", error);
+        sendResponse({ success: false, error: error.message });
       });
-      callback({
-        success: true,
-        message: "Credentials saved in extension storage",
-      });
-    } catch (error) {
-      console.error("Error saving credentials:", error);
-      callback({ success: false, error: error.message });
-    }
+    return true;
   }
 
-  // Get information about the extension's local store.
-  async getVaultInfo(request, callback) {
-    try {
-      // Validate the request before processing
-      if (!this.validateRequest(request)) {
-        callback({ success: false, error: "Invalid request parameters" });
-        return;
-      }
-
-      const stored = await this.readAllCredentials();
-      callback({
-        success: true,
-        info: { status: "connected", entries: Object.keys(stored).length },
+  if (request.action === "fetchCredentials") {
+    const domain = request.site || request.domain || "";
+    fetchCredentials(domain)
+      .then(sendResponse)
+      .catch((error) => {
+        console.error("Error in fetchCredentials:", error);
+        sendResponse({ success: false, error: error.message });
       });
-    } catch (error) {
-      console.error("Error getting vault info:", error);
-      callback({ success: false, error: error.message });
-    }
+    return true;
   }
 
-  readAllCredentials() {
-    return new Promise((resolve, reject) => {
-      chrome.storage.local.get("credentialsBySite", (result) => {
-        if (chrome.runtime.lastError) reject(chrome.runtime.lastError);
-        else resolve(result.credentialsBySite || {});
+  if (request.action === "saveCredentials") {
+    saveCredential(request.data || request)
+      .then(sendResponse)
+      .catch((error) => {
+        console.error("Error in saveCredentials:", error);
+        sendResponse({ success: false, error: error.message });
       });
+    return true;
+  }
+
+  if (request.action === "generatePassword") {
+    generatePassword(request.options || {})
+      .then(sendResponse)
+      .catch((error) => {
+        console.error("Error in generatePassword:", error);
+        sendResponse({ success: false, error: error.message });
+      });
+    return true;
+  }
+
+  if (request.action === "getActiveTab") {
+    browser.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      if (tabs && tabs[0]) {
+        try {
+          const urlObj = new URL(tabs[0].url);
+          sendResponse({
+            id: tabs[0].id,
+            url: tabs[0].url,
+            hostname: urlObj.hostname.replace(/^www\./, ""),
+            title: tabs[0].title,
+          });
+        } catch (e) {
+          sendResponse({ id: tabs[0].id, url: "", hostname: "", title: "" });
+        }
+      } else {
+        sendResponse(null);
+      }
     });
+    return true;
   }
 
-  async readCredentials(site) {
-    const credentials = await this.readAllCredentials();
-    return credentials[site] || null;
-  }
+  return false;
+});
 
-  async writeCredentials(site, entry) {
-    const credentials = await this.readAllCredentials();
-    credentials[site] = entry;
-    return new Promise((resolve, reject) => {
-      chrome.storage.local.set({ credentialsBySite: credentials }, () => {
-        if (chrome.runtime.lastError) reject(chrome.runtime.lastError);
-        else resolve();
-      });
+// Setup Context Menus
+browser.runtime.onInstalled.addListener(() => {
+  try {
+    browser.contextMenus.create({
+      id: "caixa_autofill",
+      title: "Caixa Forta: Omplir dades d'accés",
+      contexts: ["editable"],
     });
+    browser.contextMenus.create({
+      id: "caixa_generate",
+      title: "Caixa Forta: Generar contrasenya segura",
+      contexts: ["editable"],
+    });
+  } catch (e) {
+    console.error("Error creating context menus:", e);
   }
+});
 
-  // Validate response from desktop app to prevent malicious data injection
-  validateResponse(response) {
-    // Basic response validation logic - in real implementation this would check
-    // response structure, signatures, etc.
-    if (!response || typeof response !== "object") {
-      return false;
-    }
-
-    // Allow only known response structures
-    if (response.success !== undefined && response.credentials !== undefined) {
-      // Validate credentials structure if present
-      if (response.credentials && Array.isArray(response.credentials)) {
-        return response.credentials.every((cred) => {
-          return cred.username && cred.password;
+browser.contextMenus.onClicked.addListener(async (info, tab) => {
+  if (!tab || !tab.id) return;
+  if (info.menuItemId === "caixa_autofill") {
+    try {
+      const urlObj = new URL(tab.url);
+      const creds = await fetchCredentials(urlObj.hostname);
+      if (creds.success && creds.credentials && creds.credentials.length > 0) {
+        browser.tabs.sendMessage(tab.id, {
+          action: "autofillLogin",
+          credential: creds.credentials[0],
         });
       }
-      return true;
-    } else if (
-      response.success !== undefined &&
-      response.message !== undefined
-    ) {
-      return true;
-    } else if (response.success !== undefined && response.info !== undefined) {
-      return true;
+    } catch (e) {
+      console.error("Error in autofill context menu:", e);
     }
-
-    return false;
-  }
-
-  // Handle secure communication with desktop app
-  async communicateWithDesktopApp(action, data) {
-    // Use Tauri's built-in IPC capabilities for secure communication
-    switch (action) {
-      case "getCredentials":
-        return await this.fetchCredentialsFromApp(data);
-      case "saveCredentials":
-        return await this.saveCredentialsToApp(data);
-      case "getVaultInfo":
-        return await this.getVaultInfoFromApp();
-      default:
-        throw new Error("Unknown action");
-    }
-  }
-
-  // Secure function to get credentials from local app via IPC
-  async fetchCredentialsFromApp(data) {
-    // Use Tauri's secure IPC mechanism with proper message handling
-    if (this.isTauri && this.tauriBridge) {
-      // This would include proper authentication and signing in real implementation
-      const response = await this.tauriBridge("secure_message", {
-        action: "fetch_credentials",
-        payload: data,
-        timestamp: Math.floor(Date.now() / 1000),
-        signature: null, // In real implementation, this would be a proper signature
+  } else if (info.menuItemId === "caixa_generate") {
+    const gen = await generatePassword({ length: 18 });
+    if (gen.success) {
+      browser.tabs.sendMessage(tab.id, {
+        action: "fillGeneratedPassword",
+        password: gen.password,
       });
-      return response;
     }
-    return { site: data?.site || "default", entries: [] };
   }
-
-  // Secure function to save credentials to local app via IPC
-  async saveCredentialsToApp(data) {
-    // Use Tauri's secure IPC with authentication and encryption
-    if (this.isTauri && this.tauriBridge) {
-      const response = await this.tauriBridge("secure_message", {
-        action: "save_credentials",
-        payload: { data: data },
-        timestamp: Math.floor(Date.now() / 1000),
-        signature: null,
-      });
-      return { success: true, message: "Saved to local app" };
-    }
-    return { success: true, message: "Saved to local app" };
-  }
-
-  // Secure function to get vault info from local app via IPC
-  async getVaultInfoFromApp() {
-    // Use Tauri's secure IPC with authentication and encryption
-    if (this.isTauri && this.tauriBridge) {
-      const response = await this.tauriBridge("secure_message", {
-        action: "get_vault_info",
-        payload: {},
-        timestamp: Math.floor(Date.now() / 1000),
-        signature: null,
-      });
-      return response;
-    }
-    return { status: "connected", entries: 0 };
-  }
-}
-
-// Initialize extension
-const passwordManagerExtension = new PasswordManagerExtension();
-
-// Keep this compatible with Chrome MV3 and Firefox's browserAction API.
-const actionApi = chrome.action || chrome.browserAction;
-if (actionApi?.onClicked) {
-  actionApi.onClicked.addListener(() => {
-    if (chrome.runtime.openOptionsPage) chrome.runtime.openOptionsPage();
-  });
-}
+});

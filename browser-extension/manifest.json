@@ -1,8 +1,9 @@
 {
   "manifest_version": 3,
   "name": "Caixa Forta Manager",
-  "version": "1.0",
-  "description": "Extension for autofill and communication with Caixa Forta password manager",
+  "version": "1.2.0",
+  "description": "Extensió per a emplenat automàtic i sincronització segura amb Caixa Forta",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAyo6vng25UZX0vk72hGdw+TsTIAQIypnyGrTrdbrhe2tRT0Vc/64Zke6tG0TqI/ofl2lGN+lLXNFtwiYGJJTVGRRQkaUvjTY1o1g5VY+lT8C4CGN/s9sMeOmbBgPekjxT2SCp98bTzA2ZsSDxzw/QbcbXtf6BQnlrvHSXRfmELvBM1qeJq2ImQ1V1EuYUmbjtf91ITf6CMiQLaap1tVIfzOkaKvRAPcn3oTPiImqX2l3ZOm+O38UgLW0Cl0YJH7gZ3YFyhH9pMtde9kylv2P5xO7iyPCxkpvlFVIwAZZBotlXJ+/vAjMXwFjxcNUQnjhRS9ZANAnlaj6VG4KMU93c8QIDAQAB",
   "icons": {
     "16": "icons/icon16.png",
     "48": "icons/icon48.png",
@@ -11,17 +12,30 @@
   "permissions": [
     "activeTab",
     "storage",
-    "contextMenus"
+    "contextMenus",
+    "clipboardWrite",
+    "nativeMessaging"
+  ],
+  "host_permissions": [
+    "http://127.0.0.1:8080/*",
+    "http://localhost:8080/*",
+    "<all_urls>"
   ],
   "action": {
     "default_popup": "popup.html",
-    "default_title": "Caixa Forta Manager"
+    "default_title": "Caixa Forta Manager",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
   },
   "content_scripts": [
     {
       "matches": ["<all_urls>"],
       "js": ["content.js"],
-      "css": ["content.css"]
+      "css": ["content.css"],
+      "run_at": "document_idle"
     }
   ],
   "background": {

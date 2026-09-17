@@ -43,6 +43,7 @@ import {
   Timer,
   Upload,
   Download,
+  ArrowRight,
   Palette,
   Type,
   Moon,
@@ -97,6 +98,7 @@ const icons = {
   Timer,
   Upload,
   Download,
+  ArrowRight,
   Palette,
   Type,
   Moon,
@@ -180,6 +182,11 @@ const savedCloudConfig = (() => {
 
 const state = {
   locked: true,
+  vaultExists: null,
+  showWelcome: false,
+  welcomeStep: 0,
+  showFirstEntryGuide: false,
+  firstEntryGuideStep: 1,
   masterPassword: "",
   loading: false,
   entries: [],
@@ -195,6 +202,7 @@ const state = {
   showEntryForm: false,
   showTrashModal: false,
   showChangeMasterModal: false,
+  showResetConfirm: false,
   showFolderModal: false,
   editingFolderId: null,
   returnToEntryForm: false,
@@ -289,50 +297,9 @@ function showToast(message) {
 
 function resetAutoLock() {
   clearTimeout(autoLockTimer);
-  if (state.locked || state.settings.autoLock === "never") return;
-  const minutes = Number(state.settings.autoLock);
-  if (!Number.isFinite(minutes) || minutes <= 0) return;
+  const minutes = Number(state.settings.autoLock) || 15;
+  if (minutes <= 0) return;
   autoLockTimer = setTimeout(() => lockVault(), minutes * 60_000);
-}
-
-async function lockVault() {
-  if (state.locked) return;
-  try {
-    await invoke("lock_vault");
-  } catch (error) {
-    showToast(`No s'ha pogut bloquejar la caixa forta: ${error}`);
-    return;
-  }
-  state.locked = true;
-  state.masterPassword = "";
-  state.entries = [];
-  state.history = [];
-  state.trash = [];
-  state.folders = [];
-  state.generatedValue = "";
-  state.query = "";
-  state.activeFolderId = "";
-  state.viewingEntryId = null;
-  state.editingEntryId = null;
-  state.showEntryForm = false;
-  state.showFolderModal = false;
-  state.showChangeMasterModal = false;
-  render();
-}
-
-async function copySensitiveText(value, message) {
-  await navigator.clipboard.writeText(value);
-  clearTimeout(clipboardClearTimer);
-  clipboardClearTimer = setTimeout(async () => {
-    try {
-      if ((await navigator.clipboard.readText()) === value) {
-        await navigator.clipboard.writeText("");
-      }
-    } catch {
-      // Alguns entorns no permeten llegir el porta-retalls sense permís explícit.
-    }
-  }, 30_000);
-  showToast(message);
 }
 
 // Lock screen check
@@ -362,9 +329,24 @@ function cloudFormConfig() {
     token: document.querySelector("#railway-token")?.value.trim() || "",
     username: document.querySelector("#auth-username")?.value.trim() || "",
     password: document.querySelector("#auth-password")?.value || "",
-    confirmPassword: document.querySelector("#auth-confirm-password")?.value || "",
-    privacyAccepted: document.querySelector("#privacy-accepted")?.checked || false,
+    confirmPassword:
+      document.querySelector("#auth-confirm-password")?.value || "",
+    privacyAccepted:
+      document.querySelector("#privacy-accepted")?.checked || false,
   };
+}
+
+async function initializeApp() {
+  render();
+  if (!isTauriRuntime()) return;
+  try {
+    const info = await invoke("get_vault_info");
+    state.vaultExists = Boolean(info.exists);
+    state.showWelcome = !state.vaultExists;
+    render();
+  } catch {
+    state.vaultExists = null;
+  }
 }
 
 function rustCloudConfig(config) {
@@ -398,7 +380,7 @@ async function saveCloudConfig(event) {
 
 async function downloadCloudVault() {
   const config = cloudFormConfig();
-  
+
   // If user is not authenticated and we're on official cloud, show unlock dialog
   if (config.provider === "official" && !state.cloudConfig.authUser) {
     if (!state.locked) {
@@ -408,7 +390,7 @@ async function downloadCloudVault() {
     // Show unlock dialog
     if (!confirm("La contrasenya mestra per obrir la caixa forta:")) return;
   }
-  
+
   state.cloudLoading = true;
   state.cloudError = "";
   render();
@@ -458,7 +440,8 @@ async function registerCloudVault() {
     return;
   }
   if (config.password.length < 16) {
-    state.cloudError = "La contrasenya mestra ha de tenir almenys 16 caràcters.";
+    state.cloudError =
+      "La contrasenya mestra ha de tenir almenys 16 caràcters.";
     render();
     return;
   }
@@ -467,7 +450,7 @@ async function registerCloudVault() {
     render();
     return;
   }
-  
+
   const masterPassword = config.password;
   state.cloudLoading = true;
   state.cloudError = "";
@@ -490,7 +473,11 @@ async function registerCloudVault() {
     state.cloudConfig = config;
     localStorage.setItem("caixa-forta-cloud", JSON.stringify(config));
     state.showCloudLogin = false;
-    showToast(config.provider === "official" ? "Authenticació completada. Obre la caixa forta." : "Vault creat al núvol.");
+    showToast(
+      config.provider === "official"
+        ? "Authenticació completada. Obre la caixa forta."
+        : "Vault creat al núvol.",
+    );
   } catch (error) {
     state.cloudError = String(error);
   } finally {
@@ -502,14 +489,15 @@ async function registerCloudVault() {
 async function cloudAuthSubmit(event) {
   event.preventDefault();
   const config = cloudFormConfig();
-  
+
   if (config.password !== config.confirmPassword) {
     state.cloudError = "Les contrasenyes no coincideixen.";
     render();
     return;
   }
   if (config.password.length < 16) {
-    state.cloudError = "La contrasenya mestra ha de tenir almenys 16 caràcters.";
+    state.cloudError =
+      "La contrasenya mestra ha de tenir almenys 16 caràcters.";
     render();
     return;
   }
@@ -518,11 +506,11 @@ async function cloudAuthSubmit(event) {
     render();
     return;
   }
-  
+
   state.cloudLoading = true;
   state.cloudError = "";
   render();
-  
+
   try {
     // For official cloud, authenticate user
     if (config.provider === "official") {
@@ -540,9 +528,13 @@ async function cloudAuthSubmit(event) {
       state.cloudConfig = config;
       localStorage.setItem("caixa-forta-cloud", JSON.stringify(config));
     }
-    
+
     state.showCloudLogin = false;
-    showToast(config.provider === "official" ? "Autenticació completada. Obre la caixa forta." : "Connexió amb Railway completada.");
+    showToast(
+      config.provider === "official"
+        ? "Autenticació completada. Obre la caixa forta."
+        : "Connexió amb Railway completada.",
+    );
   } catch (error) {
     state.cloudError = String(error);
   } finally {
@@ -551,8 +543,18 @@ async function cloudAuthSubmit(event) {
   }
 }
 
-async function downloadCloudVault() {
-  if (prompt('Escriu "ELIMINAR" per confirmar:') !== "ELIMINAR") return;
+function resetLocalVault() {
+  state.showResetConfirm = true;
+  render();
+}
+
+function cancelResetLocalVault() {
+  state.showResetConfirm = false;
+  render();
+}
+
+async function confirmResetLocalVault() {
+  state.showResetConfirm = false;
   try {
     await invoke("reset_vault");
     localStorage.removeItem("caixa-forta-master-password");
@@ -561,10 +563,14 @@ async function downloadCloudVault() {
     state.trash = [];
     state.history = [];
     state.locked = true;
+    state.vaultExists = false;
+    state.showWelcome = true;
+    state.welcomeStep = 0;
+    state.firstEntryGuideStep = 1;
     state.view = "vault";
     showToast("Dades locals eliminades.");
   } catch (error) {
-    state.error = String(error);
+    showToast(`No s'han pogut eliminar les dades: ${error}`);
   }
   state.masterPassword = "";
   render();
@@ -824,7 +830,109 @@ function lockScreen() {
         </p>
       </div>
     </main>
+    ${state.showWelcome ? welcomeModal() : ""}
     ${state.showCloudLogin ? cloudLoginModal() : ""}
+  `;
+}
+
+function welcomeModal() {
+  const slides = [
+    {
+      icon: "ShieldCheck",
+      kicker: "PROTECCIÓ LOCAL",
+      title: "Tot el que necessites, en un sol lloc",
+      text: "La Caixa Forta guarda els teus accessos de manera local i protegida, perquè els tinguis sempre a mà.",
+    },
+    {
+      icon: "KeyRound",
+      kicker: "UNA SOLA CLAU",
+      title: "Recorda només la contrasenya mestra",
+      text: "És l'única clau que necessitaràs. No la podem recuperar, així que tria'n una de llarga i guarda-la bé.",
+    },
+    {
+      icon: "Plus",
+      kicker: "A punt per començar",
+      title: "Afegeix els teus primers accessos",
+      text: "Després podràs guardar llocs web, usuaris, contrasenyes i notes privades dins la teva caixa forta.",
+    },
+  ];
+  const slide = slides[state.welcomeStep] || slides[0];
+  const isLastSlide = state.welcomeStep === slides.length - 1;
+
+  return `
+    <div class="modal-backdrop">
+      <section class="entry-modal welcome-slideshow" role="dialog" aria-modal="true" aria-labelledby="welcome-title">
+        <header class="modal-header">
+          <div class="brand-mark">${icon(slide.icon, 22)}</div>
+          <div>
+            <p class="welcome-slide-count">PAS ${state.welcomeStep + 1} DE ${slides.length}</p>
+            <h2 id="welcome-title">Benvingut a la Caixa Forta</h2>
+          </div>
+        </header>
+        <div class="welcome-slide" aria-live="polite">
+          <p class="welcome-slide-kicker">${slide.kicker}</p>
+          <h3>${slide.title}</h3>
+          <p>${slide.text}</p>
+        </div>
+        <footer class="modal-footer">
+          <div class="welcome-dots" aria-label="Progrés de la introducció">
+            ${slides.map((_, index) => `<span class="welcome-dot ${index === state.welcomeStep ? "active" : ""}"></span>`).join("")}
+          </div>
+          <button type="button" class="primary" id="next-welcome">
+            ${isLastSlide ? "Crear contrasenya mestra" : "Continuar"} ${icon("ArrowRight", 17)}
+          </button>
+        </footer>
+      </section>
+    </div>
+  `;
+}
+
+function firstEntryGuideModal() {
+  const step = state.firstEntryGuideStep;
+  const stepContent =
+    {
+      1: {
+        kicker: "PAS 1 DE 5",
+        title: "Comença aquí",
+        text: "Fes clic al botó «Nou accés» per començar a guardar el teu primer servei.",
+      },
+      2: {
+        kicker: "PAS 2 DE 5",
+        title: "Afegeix les dades",
+        text: "Escriu el nom del servei. Després t'ensenyarem a crear una contrasenya segura.",
+      },
+      3: {
+        kicker: "PAS 3 DE 5",
+        title: "Genera una contrasenya segura",
+        text: "Fes clic a la icona de regenerar del camp de contrasenya per obrir el generador.",
+      },
+      4: {
+        kicker: "PAS 4 DE 5",
+        title: "Utilitza la contrasenya",
+        text: "Revisa la suggerencia i prem «Utilitza aquesta contrasenya» per tornar al formulari.",
+      },
+      5: {
+        kicker: "PAS 5 DE 5",
+        title: "Desa el teu accés",
+        text: "Quan hagis completat els camps obligatoris, fes clic a la icona de confirmació per desar-lo.",
+      },
+    }[step] || {};
+
+  return `
+    <div class="guide-layer" role="dialog" aria-modal="false" aria-labelledby="first-entry-guide-title">
+      <section class="guide-callout guide-callout-${step}" aria-live="polite">
+        <div class="guide-callout-arrow"></div>
+        <div class="guide-callout-header">
+          <span class="guide-kicker"><span class="guide-kicker-dot"></span> ${stepContent.kicker}</span>
+          <button type="button" class="guide-close" id="dismiss-entry-guide" title="Tancar la guia">
+            ${icon("X", 18)}
+          </button>
+        </div>
+        <h2 id="first-entry-guide-title">${stepContent.title}</h2>
+        <p>${stepContent.text}</p>
+        ${step === 2 ? `<button type="button" class="guide-next" id="guide-next-step">Continuar ${icon("ArrowRight", 16)}</button>` : ""}
+      </section>
+    </div>
   `;
 }
 
@@ -845,9 +953,14 @@ function vaultScreen() {
             <h1>Les teves contrasenyes</h1>
             <p class="subtitle">Tot el que necessites, protegit i a mà.</p>
           </div>
-          <button class="lock-button" id="lock-vault" title="Bloquejar la caixa forta">
-            ${icon("LockKeyhole", 17)}
-          </button>
+          <div style="display: flex; gap: 8px;">
+            <button class="lock-button" id="refresh-vault" title="Actualitzar accessos">
+              ${icon("RotateCw", 17)}
+            </button>
+            <button class="lock-button" id="lock-vault" title="Bloquejar la caixa forta">
+              ${icon("LockKeyhole", 17)}
+            </button>
+          </div>
         </header>
 
         <div class="toolbar">
@@ -859,7 +972,7 @@ function vaultScreen() {
               value="${escapeHtml(state.query)}"
             />
           </label>
-          <button class="primary" id="new-entry">
+          <button class="primary ${state.showFirstEntryGuide && state.firstEntryGuideStep === 1 ? "guide-highlight" : ""}" id="new-entry">
             ${icon("Plus", 17)} Nou accés
           </button>
         </div>
@@ -885,12 +998,23 @@ function vaultScreen() {
           }
         </div>
 
+        ${
+          !state.entries.length
+            ? `
+              <button class="guide-launcher" id="open-entry-guide" type="button">
+                ${icon("Sparkles", 16)} Veure la guia
+              </button>
+            `
+            : ""
+        }
+
         ${bottomNavComponent("vault")}
       </section>
     </main>
 
     ${state.viewingEntryId ? entryDetailsModal() : ""}
     ${state.showEntryForm ? entryFormModal() : ""}
+    ${state.showFirstEntryGuide ? firstEntryGuideModal() : ""}
     ${state.showTrashModal ? trashModal() : ""}
     ${state.showChangeMasterModal ? changeMasterPasswordModal() : ""}
     ${state.showFolderModal ? folderModal() : ""}
@@ -942,7 +1066,7 @@ function generatorScreen() {
         ${
           isPassword
             ? `
-            <button class="use-generated primary" id="use-generated">
+            <button class="use-generated primary ${state.showFirstEntryGuide && state.firstEntryGuideStep === 4 ? "guide-highlight" : ""}" id="use-generated">
               ${icon("Check", 17)} Utilitza aquesta contrasenya
             </button>
             `
@@ -982,6 +1106,7 @@ function generatorScreen() {
 
       ${bottomNavComponent("generator")}
     </main>
+    ${state.showFirstEntryGuide ? firstEntryGuideModal() : ""}
   `;
 }
 
@@ -1110,6 +1235,7 @@ function settingsScreen() {
 
     ${state.showTrashModal ? trashModal() : ""}
     ${state.showChangeMasterModal ? changeMasterPasswordModal() : ""}
+    ${state.showResetConfirm ? resetConfirmModal() : ""}
     ${state.showCloudLogin ? cloudLoginModal() : ""}
     ${state.toast ? `<div class="toast show">${escapeHtml(state.toast)}</div>` : ""}
   `;
@@ -1248,7 +1374,7 @@ function entryFormModal() {
             ${icon("X", 20)}
           </button>
           <h2 id="entry-title">${isEditing ? "Editar accés" : "Nou accés"}</h2>
-          <button class="modal-icon" id="save-entry-top" title="Desar">
+          <button class="modal-icon ${state.showFirstEntryGuide && state.firstEntryGuideStep === 5 ? "guide-highlight" : ""}" id="save-entry-top" title="Desar">
             ${icon("Check", 20)}
           </button>
         </header>
@@ -1262,7 +1388,7 @@ function entryFormModal() {
               </div>
               <label class="form-label" for="entry-name">Nom de l'element <b>*</b></label>
               <input
-                class="form-input"
+                class="form-input ${state.showFirstEntryGuide && state.firstEntryGuideStep === 2 ? "guide-highlight" : ""}"
                 id="entry-name"
                 name="name"
                 required
@@ -1303,7 +1429,7 @@ function entryFormModal() {
                 <button type="button" class="field-action" id="entry-password-reveal" title="Ocultar contrasenya">
                   ${icon("Eye", 18)}
                 </button>
-                <button type="button" class="field-action" id="generate-password" title="Generar contrasenya">
+                <button type="button" class="field-action ${state.showFirstEntryGuide && state.firstEntryGuideStep === 3 ? "guide-highlight" : ""}" id="generate-password" title="Generar contrasenya">
                   ${icon("RefreshCw", 18)}
                 </button>
               </div>
@@ -1390,6 +1516,30 @@ function trashModal() {
   `;
 }
 
+function resetConfirmModal() {
+  return `
+    <div class="modal-backdrop">
+      <section class="entry-modal" role="dialog" aria-modal="true" aria-labelledby="reset-vault-title">
+        <header class="modal-header">
+          <button class="modal-icon" id="cancel-reset-vault" title="Tancar">
+            ${icon("X", 20)}
+          </button>
+          <h2 id="reset-vault-title">Eliminar dades locals?</h2>
+        </header>
+        <div class="modal-scroll">
+          <p>Aquesta acció eliminarà la caixa forta local, la paperera i l'historial. No es pot desfer.</p>
+        </div>
+        <footer class="modal-footer">
+          <button type="button" class="secondary" id="cancel-reset-vault-bottom">Cancel·la</button>
+          <button type="button" class="danger-btn" id="confirm-reset-vault">
+            ${icon("Trash2", 17)} Elimina les dades
+          </button>
+        </footer>
+      </section>
+    </div>
+  `;
+}
+
 function changeMasterPasswordModal() {
   return `
     <div class="modal-backdrop">
@@ -1447,19 +1597,19 @@ function cloudLoginModal() {
             <div class="form-section cloud-provider-section">
               <label class="form-label">Proveïdor de núvol:</label>
               <div class="input-group">
-                <select class="form-input" id="cloud-provider" name="provider" ${isOfficial ? 'disabled style="opacity: 0.5"' : ''}>
-                  <option value="official" ${isOfficial ? 'selected' : ''}>Núvol oficial (recomanat)</option>
-                  <option value="custom" ${!isOfficial ? 'selected' : ''}>Personalitzat (domini propi)</option>
+                <select class="form-input" id="cloud-provider" name="provider" ${isOfficial ? 'disabled style="opacity: 0.5"' : ""}>
+                  <option value="official" ${isOfficial ? "selected" : ""}>Núvol oficial (recomanat)</option>
+                  <option value="custom" ${!isOfficial ? "selected" : ""}>Personalitzat (domini propi)</option>
                 </select>
-                ${!isOfficial ? '<span class="provider-hint">Introdueix el teu propi domini Railway</span>' : ''}
+                ${!isOfficial ? '<span class="provider-hint">Introdueix el teu propi domini Railway</span>' : ""}
               </div>
-              ${!isOfficial ? `<div class="provider-hint">El núvol oficial no requereix configuració extra</div>` : ''}
+              ${!isOfficial ? `<div class="provider-hint">El núvol oficial no requereix configuració extra</div>` : ""}
             </div>
             
             <!-- Username/Email -->
             <div class="form-section auth-section">
               <label class="form-label" for="auth-username">Usuari o correu electrònic:</label>
-              <input class="form-input" id="auth-username" name="username" type="text" required minlength="3" placeholder="E. g., joan.perez" ${isOfficial && !config.authUser ? 'required' : ''} />
+              <input class="form-input" id="auth-username" name="username" type="text" required minlength="3" placeholder="E. g., joan.perez" ${isOfficial && !config.authUser ? "required" : ""} />
               ${state.cloudError ? `<p class="error form-error">${escapeHtml(state.cloudError)}</p>` : ""}
             </div>
             
@@ -1486,7 +1636,7 @@ function cloudLoginModal() {
             <button type="button" class="secondary" id="cancel-cloud-login">Cancel·la</button>
             <button type="button" class="secondary" id="register-cloud-vault" ${state.cloudLoading ? "disabled" : ""}>Registra't</button>
             <button type="button" class="secondary" id="download-cloud-vault" ${state.cloudLoading ? "disabled" : ""}>Connexió següent</button>
-            <button type="submit" class="primary" ${state.cloudLoading ? "disabled" : ""}>${state.cloudLoading ? "Autenticant..." : (isOfficial ? "Autentica" : "Configura núvol")}</button>
+            <button type="submit" class="primary" ${state.cloudLoading ? "disabled" : ""}>${state.cloudLoading ? "Autenticant..." : isOfficial ? "Autentica" : "Configura núvol"}</button>
           </footer>
         </form>
       </section>
@@ -1955,14 +2105,21 @@ async function unlock(event) {
   try {
     const result = await invoke("unlock_vault", { masterPassword });
     state.masterPassword = masterPassword;
-    state.entries = result.entries || [];
+    state.entries = (result.entries || []).map((entry) => ({
+      ...entry,
+      folderId: entry.folder_id || entry.folderId || null,
+      createdAt: entry.created_at || entry.createdAt,
+      updatedAt: entry.updated_at || entry.updatedAt || null,
+    }));
     state.history = result.history || [];
     state.trash = result.trash || [];
     state.folders = result.folders || [];
     state.activeFolderId = "";
     state.locked = false;
     resetAutoLock();
-    if (result.isNew) {
+    const isNewVault = Boolean(result.isNew ?? result.is_new);
+    if (isNewVault) {
+      state.firstEntryGuideStep = 1;
       // Create initial folder structure
       const defaultFolders = [
         {
@@ -1976,6 +2133,7 @@ async function unlock(event) {
       ];
       state.folders = defaultFolders;
       await saveVault(masterPassword, true); // Enable sync for new vault
+      state.showFirstEntryGuide = true;
     }
   } catch (error) {
     state.error = String(error);
@@ -2499,6 +2657,7 @@ async function saveEntry(event) {
     await saveVault(); // Save encrypted vault after creation
     state.showEntryForm = false;
     state.editingEntryId = null;
+    state.showFirstEntryGuide = false;
     state.saving = false;
     render();
     showToast("Accés desat de forma xifrada.");
@@ -2588,6 +2747,7 @@ async function emptyTrash() {
 function openPasswordGenerator() {
   state.showEntryForm = false;
   state.returnToEntryForm = true;
+  if (state.showFirstEntryGuide) state.firstEntryGuideStep = 4;
   state.generatorType = "password";
   state.generatedValue = generateValue();
   state.view = "generator";
@@ -2597,6 +2757,7 @@ function openPasswordGenerator() {
 function useGeneratedPassword() {
   state.showEntryForm = true;
   state.returnToEntryForm = false;
+  if (state.showFirstEntryGuide) state.firstEntryGuideStep = 5;
   state.view = "vault";
   render();
   const input = document.querySelector("#entry-password");
@@ -2613,6 +2774,40 @@ function useGeneratedPassword() {
 function bindEvents() {
   // Desbloqueig
   document.querySelector("#unlock-form")?.addEventListener("submit", unlock);
+  document.querySelector("#next-welcome")?.addEventListener("click", () => {
+    const lastWelcomeStep = 2;
+    if (state.welcomeStep < lastWelcomeStep) {
+      state.welcomeStep += 1;
+      render();
+      return;
+    }
+    state.showWelcome = false;
+    render();
+    document.querySelector("#master-password")?.focus();
+  });
+  document
+    .querySelectorAll("#dismiss-entry-guide, #dismiss-entry-guide-later")
+    .forEach((button) =>
+      button.addEventListener("click", () => {
+        state.showFirstEntryGuide = false;
+        render();
+      }),
+    );
+  document
+    .querySelector("#start-first-entry")
+    ?.addEventListener("click", () => {
+      state.showFirstEntryGuide = false;
+      openNewEntry();
+    });
+  document.querySelector("#guide-next-step")?.addEventListener("click", () => {
+    state.firstEntryGuideStep = 3;
+    render();
+  });
+  document.querySelector("#open-entry-guide")?.addEventListener("click", () => {
+    state.showFirstEntryGuide = true;
+    state.firstEntryGuideStep = 1;
+    render();
+  });
   document.querySelector("#reveal-password")?.addEventListener("click", () => {
     const input = document.querySelector("#master-password");
     input.type = input.type === "password" ? "text" : "password";
@@ -2763,6 +2958,15 @@ function bindEvents() {
       }),
     );
 
+  document
+    .querySelectorAll("#cancel-reset-vault, #cancel-reset-vault-bottom")
+    .forEach((button) =>
+      button.addEventListener("click", cancelResetLocalVault),
+    );
+  document
+    .querySelector("#confirm-reset-vault")
+    ?.addEventListener("click", confirmResetLocalVault);
+
   // Paperera
   document.querySelector("#open-trash")?.addEventListener("click", () => {
     state.showTrashModal = true;
@@ -2878,7 +3082,14 @@ function bindEvents() {
   // Formulari i targetes d'entrades
   document
     .querySelectorAll("#new-entry, #empty-new, #nav-new")
-    .forEach((button) => button.addEventListener("click", openNewEntry));
+    .forEach((button) =>
+      button.addEventListener("click", () => {
+        if (state.showFirstEntryGuide && button.id === "new-entry") {
+          state.firstEntryGuideStep = 2;
+        }
+        openNewEntry();
+      }),
+    );
 
   document.querySelectorAll("[data-view-entry]").forEach((card) => {
     card.addEventListener("click", (event) => {
@@ -2906,9 +3117,11 @@ function bindEvents() {
     ?.addEventListener("click", () => {
       if (state.viewingEntryId) openEditEntry(state.viewingEntryId);
     });
-  document.querySelector("#delete-entry-btn")?.addEventListener("click", async () => {
-    if (state.viewingEntryId) await deleteEntryToTrash(state.viewingEntryId);
-  });
+  document
+    .querySelector("#delete-entry-btn")
+    ?.addEventListener("click", async () => {
+      if (state.viewingEntryId) await deleteEntryToTrash(state.viewingEntryId);
+    });
   document
     .querySelector("#delete-entry-bottom")
     ?.addEventListener("click", async () => {
@@ -2982,7 +3195,14 @@ function bindEvents() {
     }),
   );
 
-  // Bloqueig
+  // Refresc manual i bloqueig
+  document
+    .querySelector("#refresh-vault")
+    ?.addEventListener("click", async () => {
+      await reloadVaultEntries();
+      showToast("Caixa forta actualitzada.");
+    });
+
   document.querySelector("#lock-vault")?.addEventListener("click", async () => {
     await lockVault();
   });
@@ -3006,4 +3226,54 @@ try {
   window.addEventListener(eventName, resetAutoLock, { passive: true }),
 );
 
-render();
+async function reloadVaultEntries() {
+  if (state.locked) return;
+  try {
+    const vault = await invoke("get_vault_entries");
+    if (vault && vault.entries) {
+      state.entries = (vault.entries || []).map((entry) => ({
+        id: entry.id,
+        site: entry.site,
+        username: entry.username,
+        password: entry.password,
+        notes: entry.notes || "",
+        folderId: entry.folder_id || entry.folderId || null,
+        createdAt: entry.created_at || entry.createdAt,
+        updatedAt: entry.updated_at || entry.updatedAt || null,
+        deletedAt: entry.deleted_at || entry.deletedAt || null,
+      }));
+      if (vault.folders) {
+        state.folders = vault.folders.map((folder) => ({
+          id: folder.id,
+          name: folder.name,
+          icon: folder.icon,
+          color: folder.color,
+        }));
+      }
+      render();
+    }
+  } catch (err) {
+    // Silently ignore if locked or error
+  }
+}
+
+try {
+  import("@tauri-apps/api/event")
+    .then(({ listen }) => {
+      listen("vault-updated", async () => {
+        await reloadVaultEntries();
+        showToast("Caixa forta sincronitzada amb l'extensió.");
+      });
+    })
+    .catch(() => {});
+} catch {
+  // Ignored in non-tauri or fallback mode
+}
+
+window.addEventListener("focus", () => {
+  if (!state.locked) {
+    reloadVaultEntries();
+  }
+});
+
+initializeApp();

@@ -14,6 +14,7 @@ Una aplicació de gestió de contrasenyes de codi obert per a Mac, Windows i Lin
 - 📱 **Té telafona amigable**: Interfície gràfica moderna amb PyQt6
 - 🎯 **Autocompliment**: Omple automàticament formularis amb contrasenyes
 - 🔋 **Bloqueig automàtic**: La caixa forta es bloqueja per inactivitat
+- 🌐 **Extensió del navegador**: Chrome i Firefox amb missatgeria nativa
 
 ## Requereiximents
 
@@ -94,12 +95,22 @@ python-password-manager/
 │   ├── railway_client.py   # Client API Railway
 │   ├── remote_vault.py     # Gestió de la caixa forta remota
 │   ├── password_manager.py # Gestor de contrasenyes en memòria
+│   ├── server.py           # HTTPS servidor amb mTLS, JWT i HMAC
+│   ├── server_integration.py # Integració del servidor
 │   └── ui/
 │       ├── main_window.py  # Finestra principal
 │       ├── qt_compat.py    # Compatibilitat PyQt6
 │       └── dialogs.py      # Diàlegs addicionals
-├── src-web/                # Frontend web (per a la versió Tauri)
-├── browser-extension/      # Extensió del navegador (opcional)
+├── browser-extension/      # Extensió del navegador (Chrome/Firefox)
+│   ├── manifest.json       # Manifest de l'extensió
+│   ├── background.js       # Service worker
+│   ├── popup.html          # UI de l'extensió
+│   ├── popup.js            # Controlador de l'extensió
+│   ├── content.js          # Script de contingut per autofill
+│   ├── content.css         # Estils de contingut
+│   ├── native_messaging_host.py  # Host de missatgeria nativa
+│   ├── native_messaging_host_wrapper.sh  # Wrapper shell
+│   └── README.md           # Documentació de l'extensió
 ├── tests/                  # Tests de seguretat
 ├── tools/                  # Scripts de tests
 └── README.md

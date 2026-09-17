@@ -12,6 +12,8 @@ mkdir -p build/chrome build/firefox
 
 copy_common_files() {
 	local target="$1"
+	mkdir -p "$target/native"
+	cp native/caixa_forta_native.py "$target/native/"
 	cp -R icons popup.html popup.js content.js content.css background.js "$target/"
 }
 

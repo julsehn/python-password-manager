@@ -19,9 +19,32 @@ cleanup_project_app() {
     fi
 }
 
+# Don't cleanup native messaging host - it's started separately and should persist
+# cleanup_native_host() {
+#     local host_pid
+#     host_pid="$(pgrep -f "caixa_forta_native.py" 2>/dev/null || true)"
+#     if [[ -n "$host_pid" ]]; then
+#         kill $host_pid 2>/dev/null || true
+#     fi
+# }
+
+VAULT_PATH="$HOME/.password_manager/vault.json"
+if [[ -f "$VAULT_PATH" ]]; then
+    echo ""
+    echo "S'ha trobat una caixa forta local."
+    read -q "delete_vault?Vols eliminar-la i començar de nou? [y/N] "
+    echo ""
+    if [[ $? -eq 0 ]]; then
+        rm -f "$VAULT_PATH"
+        echo "Caixa forta local eliminada."
+    else
+        echo "La caixa forta local es conservarà."
+    fi
+fi
+
 cleanup_project_vite
 cleanup_project_app
-trap cleanup_project_vite EXIT
+# trap cleanup_project_vite cleanup_project_app EXIT
 
 # Remove generated frontend state so the launcher always uses the current source.
 rm -rf "$PROJECT_DIR/dist" "$PROJECT_DIR/node_modules/.vite"
@@ -59,6 +82,26 @@ if [[ -x "$PROJECT_DIR/browser-extension/build.sh" ]]; then
         echo "No s'ha pogut construir l'extensio del navegador."
         read -k 1 "?Prem qualsevol tecla per continuar..."
     }
+fi
+
+if [[ -x "$PROJECT_DIR/tools/install_native_host.sh" ]]; then
+    echo "Instal·lant el Native Messaging Host fora de Documents..."
+    "$PROJECT_DIR/tools/install_native_host.sh" || {
+        echo "No s'ha pogut instal·lar el Native Messaging Host."
+        read -k 1 "?Prem qualsevol tecla per continuar..."
+    }
+fi
+
+echo "Extensió construïda a: $PROJECT_DIR/browser-extension/build/firefox"
+
+# Firefox launches the native host itself with connected stdin/stdout.
+# Starting the host here would detach it from the Native Messaging pipe.
+FIREFOX_APP="/Applications/Firefox Developer Edition.app"
+if [[ -d "$FIREFOX_APP" ]]; then
+    echo "Iniciant Firefox Developer Edition..."
+    open -a "$FIREFOX_APP"
+else
+    echo "No s'ha trobat Firefox Developer Edition a: $FIREFOX_APP"
 fi
 
 if [[ -n "$(command -v cargo)" ]]; then

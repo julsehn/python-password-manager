@@ -4,10 +4,13 @@
 mod security;
 #[allow(dead_code)]
 mod railway;
+#[allow(dead_code)]
+pub mod server;
 
 use serde::{Deserialize, Serialize};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use railway::{SyncConfig, SyncResponse};
+use server::ServerState;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Credentials {
@@ -100,9 +103,19 @@ struct VaultFile {
 
 /// Initialize the application
 pub fn run() {
+    let server_state = Arc::new(ServerState::new());
+    let server_state_clone = Arc::clone(&server_state);
+    let server_state_setup = Arc::clone(&server_state);
+
     tauri::Builder::default()
-        .setup(|_app| {
+        .setup(move |app| {
             println!("Caixa Forta Tauri application started");
+            server_state_setup.set_app_handle(app.handle().clone());
+            tauri::async_runtime::spawn(async move {
+                if let Err(e) = server::start_server(server_state_clone, 8080).await {
+                    eprintln!("Caixa Forta Extension Server error: {}", e);
+                }
+            });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -112,6 +125,7 @@ pub fn run() {
             reset_vault,
             lock_vault,
             get_vault_info,
+            get_vault_entries,
 
             // Password generator
             generate_password,
@@ -146,6 +160,7 @@ pub fn run() {
             import_vault,
         ])
         .manage(Mutex::new(SyncConfig::default()))
+        .manage(server_state)
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
@@ -170,7 +185,10 @@ fn reset_vault() -> Result<(), String> {
 /// If the vault doesn't exist, returns an empty vault state (first use)
 /// If the password is incorrect, decryption will fail with an error
 #[tauri::command]
-fn unlock_vault(master_password: String) -> Result<VaultState, String> {
+fn unlock_vault(
+    master_password: String,
+    server_state: tauri::State<'_, Arc<ServerState>>,
+) -> Result<VaultState, String> {
     println!("Unlocking vault...");
 
     let vault_path = std::env::var("HOME")
@@ -181,6 +199,7 @@ fn unlock_vault(master_password: String) -> Result<VaultState, String> {
     // Check if vault file exists
     if !std::path::Path::new(&vault_path).exists() {
         println!("Vault file not found, creating new empty vault state");
+        server_state.set_unlocked(master_password, vec![], vec![], vec![], vec![]);
         // Return empty vault state for first use
         return Ok(VaultState {
             is_new: true,
@@ -220,6 +239,14 @@ fn unlock_vault(master_password: String) -> Result<VaultState, String> {
         format!("Failed to parse decrypted vault data: {}", e)
     })?;
 
+    server_state.set_unlocked(
+        master_password,
+        vault_data.entries.clone(),
+        vault_data.folders.clone(),
+        vault_data.deleted_entries.clone(),
+        vault_data.history.clone(),
+    );
+
     let now = chrono::Utc::now().timestamp() as i64;
 
     Ok(VaultState {
@@ -245,6 +272,7 @@ async fn save_vault(
     history: Vec<HistoryItem>,
     sync_to_railway: bool,
     sync_state: tauri::State<'_, Mutex<SyncConfig>>,
+    server_state: tauri::State<'_, Arc<ServerState>>,
 ) -> Result<Option<String>, String> {
     println!("Saving vault...");
 
@@ -301,6 +329,14 @@ async fn save_vault(
     std::fs::write(&vault_path, payload.to_string())
         .map_err(|e| format!("Failed to write vault: {}", e))?;
 
+    server_state.set_unlocked(
+        master_password.clone(),
+        vault_data.entries.clone(),
+        vault_data.folders.clone(),
+        vault_data.deleted_entries.clone(),
+        vault_data.history.clone(),
+    );
+
     println!("Vault saved successfully");
 
     // Optionally sync with Railway
@@ -322,8 +358,9 @@ async fn save_vault(
 
 /// Lock the vault (clear sensitive data from memory)
 #[tauri::command]
-fn lock_vault() -> Result<(), String> {
+fn lock_vault(server_state: tauri::State<'_, Arc<ServerState>>) -> Result<(), String> {
     println!("Vault locked");
+    server_state.lock();
     Ok(())
 }
 
@@ -342,6 +379,32 @@ fn get_vault_info() -> VaultInfo {
         entry_count: 0,
         folder_count: 0,
         trash_count: 0,
+    }
+}
+
+/// Get current vault entries when already unlocked
+#[tauri::command]
+fn get_vault_entries(
+    server_state: tauri::State<'_, Arc<ServerState>>,
+) -> Result<VaultState, String> {
+    let unlocked = server_state.unlocked_data.lock().unwrap();
+    match &*unlocked {
+        Some(vault) => {
+            let now = chrono::Utc::now().timestamp() as i64;
+            Ok(VaultState {
+                is_new: false,
+                entries: vault.entries.clone(),
+                folders: vault.folders.clone(),
+                trash: vault
+                    .trash
+                    .iter()
+                    .cloned()
+                    .filter(|entry| entry.deleted_at.parse::<i64>().unwrap_or(0) <= now)
+                    .collect(),
+                history: vault.history.clone(),
+            })
+        }
+        None => Err("Vault is locked".to_string()),
     }
 }
 
@@ -771,7 +834,8 @@ async fn register_vault(master_password: String, config: SyncConfig) -> Result<S
 
 /// Authenticate user with official cloud
 #[tauri::command]
-async fn auth_official_cloud(username: String, password: String) -> Result<(), String> {
+#[allow(dead_code)]
+async fn auth_official_cloud(username: String, password: String) -> Result<String, String> {
     railway::auth_user(&username, &password).await
 }
 

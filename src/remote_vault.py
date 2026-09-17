@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from src.railway_client import RailwayVaultClient, create_vault_credentials
 from src.storage import deserialize_vault, serialize_vault, VAULT_FILENAME
 from src.models import PasswordEntry
-from src.config import load_config, save_config, CONFIG
+from src.config import load_config, save_config
 
 
 @dataclass

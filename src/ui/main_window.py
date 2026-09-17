@@ -1,7 +1,8 @@
 import os
 import time
 
-from src.ui.qt_compat import (
+from PyQt6.QtCore import pyqtSignal
+from PyQt6.QtWidgets import (
     QMainWindow,
     QLabel,
     QWidget,
@@ -38,7 +39,8 @@ from src.ui.qt_compat import (
 from src.password_manager import PasswordManager
 from src.remote_vault import RemoteVaultStore
 from src.ui.dialogs import AddEditDialog, GeneratePasswordDialog, LoginDialog, CloudLoginDialog
-from src.ui.tutorial_dialog import TutorialDialog
+from src.ui.tutorial_dialog import StepByStepGuideDialog
+from src.ui.overlay_guide import OverlayGuideDialog
 from src.storage import (
     save_vault,
     load_vault,
@@ -133,6 +135,8 @@ QLabel#empty_state { color: #68706c; font-size: 13px; padding: 32px; }
 
 
 class MainWindow(QMainWindow):
+    login_requested = pyqtSignal(str)  # Emits master password when login is requested
+    
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Caixa forta")
@@ -148,6 +152,7 @@ class MainWindow(QMainWindow):
         self.remote_store = RemoteVaultStore(CONFIG)
         self._initialized = False
         self._master_password = None
+        self._showed_first_time_guide = False
         self._init_ui()
 
         # Security: Initialize login state (authenticate on startup)
@@ -356,6 +361,15 @@ class MainWindow(QMainWindow):
         if dlg.exec() == QDialog.DialogCode.Accepted:
             self._initialized = True
             self.status.setText("Caixa forta creada!")
+            
+            # Show first-time guide with overlay arrows
+            try:
+                self._show_first_time_guide()
+            except Exception as e:
+                # If guide fails to show, at least show a message
+                self.status.setText(f"Guia no disponible: {str(e)}")
+            
+            self._showed_first_time_guide = True
 
     def _init_login_state(self):
         """Check if vault exists and show login dialog."""
@@ -658,6 +672,7 @@ class MainWindow(QMainWindow):
                     self.manager.entries = []
                     self._master_password = None
                     self._initialized = False
+                    self._showed_first_time_guide = False
                     SESSION_TIMEOUT_SECONDS = CONFIG.get("auto_lock_seconds", 300)
                     CLIPBOARD_CLEAR_SECONDS = CONFIG.get("clipboard_clear_seconds", 30)
 
@@ -871,7 +886,8 @@ class MainWindow(QMainWindow):
             item = QListWidgetItem()
             empty_state = QLabel(
                 "No hem trobat cap accés.\n\n"
-                "Prova una altra cerca o crea el teu primer accés."
+                "Prova una altra cerca o afegix el teu primer accés.\n\n"
+                "Pots crear una contrasenya segura automàticament utilitzant l'opció «Genera contrasenya»."
             )
             empty_state.setObjectName("empty_state")
             empty_state.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -964,6 +980,16 @@ class MainWindow(QMainWindow):
     def on_add(self):
         self._on_last_activity()
 
+        # Show guide if vault is empty AND guide hasn't been shown yet (first-time user)
+        if not self.manager.get_entries() and not self._showed_first_time_guide:
+            guide_dialog = StepByStepGuideDialog(self)
+            if guide_dialog.exec() == QDialog.DialogCode.Accepted:
+                # User finished the guide, now proceed with adding
+                self._showed_first_time_guide = True
+            else:
+                # User cancelled the guide
+                return
+
         dlg = AddEditDialog(self)
         if dlg.exec() == QDialog.DialogCode.Accepted:
             data = dlg.get_data()
@@ -1017,6 +1043,16 @@ class MainWindow(QMainWindow):
         except Exception as error:
             self._show_remote_error("No s'ha pogut guardar", error)
             self.status.setText("Error al guardar")
+
+    def _on_guide_complete(self):
+        """Callback when guide is completed."""
+        pass
+
+    def _show_first_time_guide(self):
+        """Show the first-time guide overlay."""
+        guide_dialog = OverlayGuideDialog(self, on_complete=self._on_guide_complete)
+        guide_dialog.exec()
+        self._showed_first_time_guide = True
 
     def on_edit_by_id(self, entry_id: str):
         self._on_last_activity()

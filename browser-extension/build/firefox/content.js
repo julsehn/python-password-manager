@@ -1,123 +1,246 @@
-// Content script to detect forms and communicate with extension
-class PasswordManagerContent {
-  constructor() {
-    this.init();
+// Caixa Forta - Content Script for secure autofill and form detection
+
+function setNativeInputValue(element, value) {
+  if (!element) return;
+  element.focus();
+  const prototype = Object.getPrototypeOf(element);
+  const descriptor =
+    Object.getOwnPropertyDescriptor(prototype, "value") ||
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value");
+
+  if (descriptor && descriptor.set) {
+    descriptor.set.call(element, value);
+  } else {
+    element.value = value;
   }
 
-  init() {
-    // Inject form detection and password management
-    this.injectFormDetection();
-    
-    // Listen for messages from background script
-    window.addEventListener('message', (event) => {
-      if (event.data && event.data.action === 'formDetected') {
-        console.log('Form detected in content script');
+  element.dispatchEvent(
+    new Event("input", { bubbles: true, cancelable: true }),
+  );
+  element.dispatchEvent(
+    new Event("change", { bubbles: true, cancelable: true }),
+  );
+  element.dispatchEvent(new Event("blur", { bubbles: true, cancelable: true }));
+
+  // Visual feedback glow
+  const prevTransition = element.style.transition;
+  const prevBoxShadow = element.style.boxShadow;
+  element.style.transition = "box-shadow 0.2s ease";
+  element.style.boxShadow = "0 0 0 3px rgba(36, 113, 209, 0.4)";
+  setTimeout(() => {
+    element.style.boxShadow = prevBoxShadow;
+    element.style.transition = prevTransition;
+  }, 1200);
+}
+
+function findFormFields() {
+  const passwordInputs = Array.from(
+    document.querySelectorAll(
+      'input[type="password"]:not([disabled]):not([readonly])',
+    ),
+  ).filter((el) => el.offsetParent !== null);
+
+  const passwordEl = passwordInputs[0] || null;
+
+  // Look for username/email fields
+  const usernameSelectors = [
+    'input[type="email"]:not([disabled]):not([readonly])',
+    'input[name*="user" i]:not([disabled]):not([readonly])',
+    'input[name*="login" i]:not([disabled]):not([readonly])',
+    'input[name*="mail" i]:not([disabled]):not([readonly])',
+    'input[id*="user" i]:not([disabled]):not([readonly])',
+    'input[id*="email" i]:not([disabled]):not([readonly])',
+    'input[autocomplete*="username" i]',
+    'input[autocomplete*="email" i]',
+    'input[type="text"]:not([disabled]):not([readonly])',
+  ];
+
+  let usernameEl = null;
+
+  // Search within the same form first
+  if (passwordEl && passwordEl.form) {
+    for (const selector of usernameSelectors) {
+      const match = passwordEl.form.querySelector(selector);
+      if (match && match !== passwordEl && match.offsetParent !== null) {
+        usernameEl = match;
+        break;
       }
-    });
-
-    chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-      if (request.action === 'autofillLogin') {
-        this.getCredentialsForSite(request.site).then((result) => {
-          const credentials = result?.credentials?.[0];
-          const password = document.querySelector('input[type="password"]');
-          const username = document.querySelector('input[type="email"], input[name*="user" i], input[type="text"]');
-          if (!result?.success || !credentials || !password) {
-            sendResponse({ success: false, error: 'No credentials or login form found' });
-            return;
-          }
-          if (username) username.value = credentials.username || '';
-          password.value = credentials.password || '';
-          sendResponse({ success: true });
-        }).catch((error) => sendResponse({ success: false, error: error.message }));
-        return true;
-      }
-
-      if (request.action === 'getFormData') {
-        const password = document.querySelector('input[type="password"]');
-        const username = document.querySelector('input[type="email"], input[name*="user" i], input[type="text"]');
-        this.saveCredentialsToSite({
-          site: request.site,
-          username: username?.value || '',
-          password: password?.value || '',
-        }).then((result) => sendResponse(result))
-          .catch((error) => sendResponse({ success: false, error: error.message }));
-        return true;
-      }
-      return false;
-    });
-  }
-
-  // Inject form detection logic 
-  injectFormDetection() {
-    // This would be implemented in a real implementation
-    // For now just logging for demonstration
-    console.log('Form detection injected');
-  }
-
-  // Send message to background script (using proper communication channel)
-  async sendMessageToBackground(action, data) {
-    return new Promise((resolve) => {
-      chrome.runtime.sendMessage(
-        {
-          action: action,
-          data: data,
-          timestamp: Date.now(),
-          // Add basic security token to prevent spoofing
-          securityToken: this.generateSecurityToken()
-        },
-        (response) => {
-          resolve(response);
-        }
-      );
-    });
-  }
-
-  // Generate a simple security token to prevent basic spoofing
-  generateSecurityToken() {
-    return Math.random().toString(36).substring(2, 15);
-  }
-
-  // Detect forms in page and report to popup
-  async detectFormsInPage() {
-    // Simple form detection logic - in real implementation, would detect actual password forms
-    const forms = document.querySelectorAll('form');
-    if (forms.length > 0) {
-      const formData = {
-        form: 'detected',
-        url: window.location.href,
-        timestamp: Date.now()
-      };
-      
-      // Send to background script for processing
-      const response = await this.sendMessageToBackground('formDetected', formData);
-      console.log('Form detection response:', response);
     }
   }
 
-  // Get credentials for current site (should be called by popup or extension UI)
-  async getCredentialsForSite(site) {
-    return await this.sendMessageToBackground('fetchCredentials', { 
-      site: site,
-      timestamp: Date.now(),
-      securityToken: this.generateSecurityToken()
-    });
+  // Fallback to searching the whole document
+  if (!usernameEl) {
+    for (const selector of usernameSelectors) {
+      const candidates = Array.from(document.querySelectorAll(selector)).filter(
+        (el) => el !== passwordEl && el.offsetParent !== null,
+      );
+      if (candidates.length > 0) {
+        usernameEl = candidates[0];
+        break;
+      }
+    }
   }
 
-  // Save credentials for current site (should be called by extension UI)
-  async saveCredentialsToSite(data) {
-    return await this.sendMessageToBackground('saveCredentials', { 
-      data: data,
-      timestamp: Date.now(),
-      securityToken: this.generateSecurityToken()
-    });
-  }
+  return { usernameEl, passwordEl };
 }
 
-// Initialize content script
-const passwordManagerContent = new PasswordManagerContent();
+chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+  if (request.action === "autofillLogin") {
+    const cred = request.credential;
+    if (!cred) {
+      sendResponse({ success: false, error: "No credentials provided" });
+      return false;
+    }
 
-// Check for forms when page loads (this approach is safer than direct DOM manipulation)
-window.addEventListener('load', () => {
-  // In a real implementation, this would use proper form detection
-  console.log('Content script loaded - form detection ready');
+    const { usernameEl, passwordEl } = findFormFields();
+
+    let filledCount = 0;
+    if (usernameEl && cred.username) {
+      setNativeInputValue(usernameEl, cred.username);
+      filledCount++;
+    }
+
+    if (passwordEl && cred.password) {
+      setNativeInputValue(passwordEl, cred.password);
+      filledCount++;
+    }
+
+    if (filledCount > 0) {
+      sendResponse({ success: true, filledCount });
+    } else {
+      sendResponse({
+        success: false,
+        error: "No matching login input fields found on this page",
+      });
+    }
+    return true;
+  }
+
+  if (request.action === "getFormData") {
+    const { usernameEl, passwordEl } = findFormFields();
+    sendResponse({
+      success: true,
+      site: window.location.hostname.replace(/^www\./, ""),
+      username: usernameEl ? usernameEl.value : "",
+      password: passwordEl ? passwordEl.value : "",
+    });
+    return true;
+  }
+
+  if (request.action === "fillGeneratedPassword") {
+    let target = document.activeElement;
+    if (!target || target.tagName !== "INPUT" || target.type !== "password") {
+      const { passwordEl } = findFormFields();
+      target = passwordEl;
+    }
+    if (target) {
+      setNativeInputValue(target, request.password);
+
+      // Fill repeat/confirm password field if exists in the same form
+      if (target.form) {
+        const otherPasswords = Array.from(
+          target.form.querySelectorAll('input[type="password"]'),
+        ).filter((el) => el !== target);
+        otherPasswords.forEach((el) =>
+          setNativeInputValue(el, request.password),
+        );
+      }
+
+      // Show save prompt so user can save immediately with 1-click
+      const { usernameEl } = findFormFields();
+      showSavePrompt({
+        site: window.location.hostname,
+        username: usernameEl ? usernameEl.value.trim() : "",
+        password: request.password,
+      });
+
+      sendResponse({ success: true });
+    } else {
+      sendResponse({ success: false, error: "No password field found" });
+    }
+    return true;
+  }
+
+  return false;
 });
+
+function showSavePrompt({ site, username, password }) {
+  if (!site || !password) return;
+
+  const existing = document.getElementById("caixa-forta-save-prompt");
+  if (existing) existing.remove();
+
+  const prompt = document.createElement("div");
+  prompt.id = "caixa-forta-save-prompt";
+  prompt.className = "caixa-forta-save-prompt";
+
+  const cleanSite = site.replace(/^www\./, "");
+  const userText = username ? ` (${username})` : "";
+
+  prompt.innerHTML = `
+    <span style="font-weight: 600;">🔒 Caixa Forta:</span>
+    <span>Desar contrasenya per a <strong>${cleanSite}</strong>${userText}?</span>
+    <button type="button" class="cf-btn-save">Desar a Caixa Forta</button>
+    <button type="button" class="cf-btn-close" title="Tancar">✕</button>
+  `;
+
+  prompt.querySelector(".cf-btn-close")?.addEventListener("click", () => {
+    prompt.remove();
+  });
+
+  prompt.querySelector(".cf-btn-save")?.addEventListener("click", () => {
+    const saveBtn = prompt.querySelector(".cf-btn-save");
+    if (saveBtn) {
+      saveBtn.textContent = "Desant...";
+      saveBtn.disabled = true;
+    }
+    chrome.runtime.sendMessage(
+      {
+        action: "saveCredentials",
+        data: { site: cleanSite, username, password, notes: "" },
+      },
+      (res) => {
+        if (res && res.success) {
+          prompt.innerHTML = `<span style="font-weight: 600; color: #4ade80;">✓ Accés desat a Caixa Forta!</span>`;
+          setTimeout(() => prompt.remove(), 2500);
+        } else {
+          prompt.innerHTML = `<span style="color: #f87171;">Error: ${res?.error || "No s'ha pogut desar"}</span>`;
+          setTimeout(() => prompt.remove(), 3500);
+        }
+      },
+    );
+  });
+
+  document.body.appendChild(prompt);
+  setTimeout(() => {
+    if (document.body.contains(prompt)) {
+      prompt.remove();
+    }
+  }, 15000);
+}
+
+// Listen for form submissions to offer saving new credentials
+document.addEventListener(
+  "submit",
+  (event) => {
+    const form = event.target;
+    if (!form || typeof form.querySelectorAll !== "function") return;
+    const passwordInputs = Array.from(
+      form.querySelectorAll('input[type="password"]'),
+    ).filter((el) => el.value && el.value.trim().length > 0);
+
+    if (passwordInputs.length > 0) {
+      const password = passwordInputs[0].value;
+      const usernameInput = form.querySelector(
+        'input[type="email"], input[type="text"], input[name*="user" i], input[name*="login" i], input[name*="mail" i]',
+      );
+      const username = usernameInput ? usernameInput.value.trim() : "";
+      showSavePrompt({
+        site: window.location.hostname,
+        username,
+        password,
+      });
+    }
+  },
+  true,
+);
