@@ -1,7 +1,8 @@
 import os
 import time
 
-from PyQt6.QtCore import pyqtSignal
+from PyQt6.QtCore import pyqtSignal, Qt, QTimer
+from PyQt6.QtGui import QIcon, QAction, QPixmap, QPainter, QColor, QCursor
 from PyQt6.QtWidgets import (
     QMainWindow,
     QLabel,
@@ -16,7 +17,6 @@ from PyQt6.QtWidgets import (
     QInputDialog,
     QLineEdit,
     QApplication,
-    Qt,
     QListWidget,
     QListWidgetItem,
     QSplitter,
@@ -24,14 +24,7 @@ from PyQt6.QtWidgets import (
     QScrollArea,
     QSizePolicy,
     QToolButton,
-    QIcon,
     QMenu,
-    QAction,
-    QPixmap,
-    QPainter,
-    QColor,
-    QCursor,
-    QTimer,
     QSpinBox,
     QColorDialog,
 )
@@ -39,6 +32,7 @@ from PyQt6.QtWidgets import (
 from src.password_manager import PasswordManager
 from src.remote_vault import RemoteVaultStore
 from src.ui.dialogs import AddEditDialog, GeneratePasswordDialog, LoginDialog, CloudLoginDialog
+from src.ui.image_auth_dialog import ImageAuthSetupDialog, ImageAuthLoginDialog
 from src.ui.tutorial_dialog import StepByStepGuideDialog
 from src.ui.overlay_guide import OverlayGuideDialog
 from src.storage import (
@@ -209,6 +203,53 @@ class MainWindow(QMainWindow):
         remote_menu.addAction(QAction("Puja la caixa forta", self, triggered=self._sync_upload))
         remote_menu.addAction(QAction("Descarrega la caixa forta", self, triggered=self._sync_download))
 
+    def _change_auth_method(self):
+        """Allow user to change authentication method."""
+        from src.storage import image_auth_is_set
+        
+        auth_dlg = QDialog(self)
+        auth_dlg.setWindowTitle("Canviar mètode d'autenticació")
+        auth_layout = QVBoxLayout(auth_dlg)
+
+        auth_title = QLabel("Tria el mètode d'autenticació")
+        auth_layout.addWidget(auth_title)
+
+        if image_auth_is_set():
+            password_btn = QPushButton("🔑 Contrasenya")
+            password_btn.clicked.connect(lambda: self._switch_to_password_auth())
+            auth_layout.addWidget(password_btn)
+
+            remove_image_btn = QPushButton("🗑 Eliminar autenticació amb imatge")
+            remove_image_btn.clicked.connect(self._remove_image_auth)
+            auth_layout.addWidget(remove_image_btn)
+        else:
+            password_btn = QPushButton("🔑 Contrasenya (actual)")
+            password_btn.setEnabled(False)
+            auth_layout.addWidget(password_btn)
+
+            image_btn = QPushButton("🖼 Autenticació amb imatge")
+            image_btn.clicked.connect(self._prompt_biometric_setup)
+            auth_layout.addWidget(image_btn)
+
+        auth_layout.addWidget(QPushButton("Cancel·la"))
+        auth_dlg.exec()
+
+    def _switch_to_password_auth(self):
+        """Switch to password-based authentication."""
+        from src.storage import delete_image_auth
+        
+        delete_image_auth()
+        self.status.setText("Mètode d'autenticació canviat a contrasenya")
+        self.status.setStyleSheet("color: #16803c; font-weight: 600;")
+
+    def _remove_image_auth(self):
+        """Remove image-based authentication."""
+        from src.storage import delete_image_auth
+        
+        delete_image_auth()
+        self.status.setText("Autenticació amb imatge eliminada")
+        self.status.setStyleSheet("color: #16803c; font-weight: 600;")
+
     def _on_session_timeout(self):
         """Auto-lock after inactivity."""
         now = time.time()
@@ -244,10 +285,18 @@ class MainWindow(QMainWindow):
                 # Load vault
                 self._load_vault(password)
         elif self._initialized:
-            # Local vault - show standard login
-            dlg = LoginDialog(self, remote=self.remote_store.configured)
-            if dlg.exec() == QDialog.DialogCode.Accepted:
-                self._load_vault(dlg.password_field.text())
+            # Local vault - show biometric login prompt
+            from src.storage import image_auth_is_set
+            if image_auth_is_set():
+                # Image auth is configured, show image login dialog
+                login_prompt = ImageAuthLoginDialog(self)
+                if login_prompt.exec() == QDialog.DialogCode.Accepted:
+                    self.status.setText("Accés correct!")
+            else:
+                # No image auth, show standard login
+                dlg = LoginDialog(self, remote=self.remote_store.configured)
+                if dlg.exec() == QDialog.DialogCode.Accepted:
+                    self._load_vault(dlg.password_field.text())
         elif not self._initialized and not self.remote_store.configured and not os.path.exists(VAULT_FILENAME):
             self._initialize_new_vault()
 
@@ -304,8 +353,108 @@ class MainWindow(QMainWindow):
         )
 
     def _initialize_new_vault(self):
-        """Initialize a new vault with master password prompt."""
-        # Create master password dialog for first-time setup
+        """Initialize a new vault with authentication method selection."""
+        # Create auth method selection dialog
+        auth_dlg = QDialog(self)
+        auth_dlg.setWindowTitle("Tipus d'autenticació")
+        auth_layout = QVBoxLayout(auth_dlg)
+
+        auth_title = QLabel("Benvingut a la teva caixa forta!")
+        auth_layout.addWidget(auth_title)
+
+        auth_label = QLabel("Tria el tipus d'autenticació:")
+        auth_layout.addWidget(auth_label)
+
+        # Option buttons
+        password_btn = QPushButton("🔑 Contrasenya")
+        password_btn.setStyleSheet("""
+            QPushButton {
+                background: #ffffff;
+                border: 2px solid #e1e8ef;
+                border-radius: 12px;
+                padding: 16px;
+                font-size: 14px;
+            }
+            QPushButton:hover {
+                background: #e5f1fb;
+                border: 2px solid #3987d5;
+            }
+        """)
+        auth_layout.addWidget(password_btn)
+
+        image_btn = QPushButton("🖼 Autenticació amb imatge")
+        image_btn.setStyleSheet("""
+            QPushButton {
+                background: #ffffff;
+                border: 2px solid #e1e8ef;
+                border-radius: 12px;
+                padding: 16px;
+                font-size: 14px;
+            }
+            QPushButton:hover {
+                background: #e5f1fb;
+                border: 2px solid #3987d5;
+            }
+        """)
+        auth_layout.addWidget(image_btn)
+
+        cancel_btn = QPushButton("Cancel·la")
+        auth_layout.addWidget(cancel_btn)
+
+        auth_dlg.layout = auth_layout
+
+        def select_password():
+            auth_dlg.accept()
+
+        def select_image():
+            auth_dlg.reject()
+
+        password_btn.clicked.connect(select_password)
+        image_btn.clicked.connect(select_image)
+        cancel_btn.clicked.connect(auth_dlg.reject)
+
+        if auth_dlg.exec() == QDialog.DialogCode.Accepted:
+            # Password-based authentication
+            self._initialize_password_vault()
+        else:
+            # Image-based authentication
+            self._initialize_image_vault()
+
+    def _initialize_image_vault(self):
+        """Initialize vault with image-based authentication."""
+        # Show image auth setup wizard first
+        wizard = ImageAuthSetupDialog(self)
+        result = wizard.exec()
+        
+        if result != QDialog.DialogCode.Accepted:
+            return
+        
+        # Now create an empty vault with a default password for image auth
+        # The actual authentication will use the grid pattern
+        self._master_password = "grid_auth"
+        self._initialized = True
+        
+        if self.remote_store.has_server:
+            self.remote_store.save([], self._master_password)
+            save_config(CONFIG)
+        else:
+            save_vault([], self._master_password)
+            
+        self.status.setText("Caixa forta creada amb autenticació amb imatge!")
+        self.status.setStyleSheet("color: #16803c; font-weight: 600;")
+        
+        # Show first-time guide with overlay arrows
+        try:
+            self._show_first_time_guide()
+        except Exception as e:
+            # If guide fails to show, at least show a message
+            self.status.setText(f"Guia no disponible: {str(e)}")
+        
+        self._showed_first_time_guide = True
+
+    def _initialize_password_vault(self):
+        """Initialize vault with password-based authentication."""
+        # Create master password dialog
         dlg = QDialog(self)
         dlg.setWindowTitle("Crear caixa forta nova")
         layout = QVBoxLayout(dlg)
@@ -313,7 +462,7 @@ class MainWindow(QMainWindow):
         label1 = QLabel("Benvingut a la teva caixa forta!")
         layout.addWidget(label1)
 
-        label2 = QLabel("Crea una contrasenya mestra segura:")
+        label2 = QLabel("Crea una contrasenya mestra segura (com a mínim 16 caràcters):")
         layout.addWidget(label2)
 
         self.new_password = QLineEdit()
@@ -370,6 +519,17 @@ class MainWindow(QMainWindow):
                 self.status.setText(f"Guia no disponible: {str(e)}")
             
             self._showed_first_time_guide = True
+
+    def _prompt_biometric_setup(self):
+        """Prompt user to set up image-based biometric authentication."""
+        try:
+            from src.storage import image_auth_is_set
+            if not image_auth_is_set():
+                # Show wizard to set up image auth
+                wizard = ImageSetupWizardDialog(self)
+                wizard.exec()
+        except Exception as e:
+            print(f"Failed to prompt biometric setup: {e}")
 
     def _init_login_state(self):
         """Check if vault exists and show login dialog."""
@@ -581,6 +741,28 @@ class MainWindow(QMainWindow):
         self.railway_token_edit = QLineEdit(CONFIG.get("railway_token", ""))
         self.railway_token_edit.setEchoMode(QLineEdit.EchoMode.Password)
         layout.addWidget(self.railway_token_edit)
+
+        # Authentication method section
+        auth_separator = QFrame()
+        auth_separator.setFixedHeight(1)
+        auth_separator.setStyleSheet("background: #dfe4e1; margin: 12px 0;")
+        layout.addWidget(auth_separator)
+
+        auth_title = QLabel("Mètode d'autenticació")
+        auth_title.setStyleSheet("font-weight: 600; font-size: 13px;")
+        layout.addWidget(auth_title)
+
+        auth_current_label = QLabel("Mètode actual: ")
+        from src.storage import image_auth_is_set
+        if image_auth_is_set():
+            auth_current_label.setText("Mètode actual: Autenticació amb imatge")
+        else:
+            auth_current_label.setText("Mètode actual: Contrasenya")
+        layout.addWidget(auth_current_label)
+
+        change_auth_btn = QPushButton("Canviar mètode d'autenticació")
+        change_auth_btn.clicked.connect(self._change_auth_method)
+        layout.addWidget(change_auth_btn)
 
         # Separator before destructive actions
         separator = QFrame()

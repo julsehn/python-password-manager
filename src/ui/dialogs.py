@@ -31,6 +31,11 @@ from src.storage import (
     verify_image_auth_pattern,
     delete_image_auth,
     image_auth_is_set,
+    GRID_COLUMNS,
+    GRID_ROWS,
+    GRID_CELL_CHARS,
+    coords_to_grid_cell,
+    generate_grid_password,
 )
 
 from src.remote_vault import RemoteVaultStore
@@ -350,25 +355,24 @@ class CloudLoginDialog(QDialog):
             "username": self.username_field.text(),
             "password": self._auth_password,
         }
-    """Wizard dialog for setting up image-based biometric authentication.
+
+
+class GridSetupWizardDialog(QDialog):
+    """Wizard dialog for setting up grid-based authentication.
 
     The user:
-      1. Uploads an image (their "biometric canvas")
-      2. Draws a sequence of strokes/clicks on it (their "biometric password")
-      3. The system stores both and derives an AES key from the strokes
+      1. Clicks on cells in a 5x5 grid to create their pattern
+      2. The grid cell indices are stored and used for key derivation
     """
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Configurar autenticació per imatge")
-        self.setFixedSize(600, 750)
+        self.setWindowTitle("Configurar autenticació amb quadrícula")
+        self.setFixedSize(550, 650)
 
         # State tracking
-        self.current_step = 0  # 0: select image, 1: draw pattern
-        self.selected_image_path = None
-        self.original_pixmap = None
-        self.drawn_strokes: list[dict] = []  # List of {"x_pct": float, "y_pct": float}
-        self.max_strokes = 20
+        self.pattern_cells: list[int] = []  # Grid cell indices
+        self.grid_buttons = []
 
         # UI setup
         self.setup_ui()
@@ -378,156 +382,140 @@ class CloudLoginDialog(QDialog):
         layout.setSpacing(12)
 
         # Step indicator
-        self.step_label = QLabel("Pass 1 de 2: Selecciona una imatge")
+        self.step_label = QLabel("Configura el teu patró d'autenticació")
         self.step_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         font = self.step_label.font()
         font.setWeight(600)
+        font.setPointSize(16)
         self.step_label.setFont(font)
         layout.addWidget(self.step_label)
 
-        # Step 1: Image selection and preview
-        self.image_preview = QLabel("Select an image to get started")
-        self.image_preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.image_preview.setStyleSheet(
-            "border: 2px dashed #d1d5db; border-radius: 8px; "
-            "background: #f9fafb; padding: 40px; min-height: 250px;"
+        # Instruction
+        instruction = QLabel(
+            "Fes clic en les caselles de la quadrícula per crear el teu patró.\n"
+            "Recorda les posicions — les necessitaràs per desbloquejar la caixa forta."
         )
-        self.image_preview.setMinimumHeight(180)
-        layout.addWidget(self.image_preview)
+        instruction.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        instruction.setStyleSheet("color: #68706c; font-size: 12px; margin-top: 8px;")
+        layout.addWidget(instruction)
 
-        # Button row for step 1
+        # Grid
+        grid_widget = QWidget()
+        grid_layout = QGridLayout(grid_widget)
+        grid_layout.setSpacing(2)
+
+        for row in range(GRID_ROWS):
+            for col in range(GRID_COLUMNS):
+                cell_index = col + row * GRID_COLUMNS
+                button = QPushButton()
+                button.setFixedSize(60, 60)
+                button.setFont(QFont("monospace", 16, QFont.Weight.Bold))
+                button.setAccessibleName(f"Cell {cell_index}")
+                button.clicked.connect(lambda c=cell_index: self._on_cell_click(c))
+                self.grid_buttons.append(button)
+                grid_layout.addWidget(button, row, col)
+
+        layout.addWidget(grid_widget, alignment=Qt.AlignmentFlag.AlignCenter)
+
+        # Pattern display
+        self.pattern_label = QLabel("Patern: ")
+        self.pattern_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(self.pattern_label)
+
+        # Button row
         btn_row = QHBoxLayout()
-        self.btn_select_image = QPushButton("📁 Selecciona imatge")
-        self.btn_select_image.clicked.connect(self._on_select_image)
-        btn_row.addWidget(self.btn_select_image)
-
         self.btn_cancel = QPushButton("Cancel·la")
         self.btn_cancel.clicked.connect(self.reject)
         btn_row.addWidget(self.btn_cancel)
 
+        finish_btn = QPushButton("✅ Finalitzar configuració")
+        finish_btn.setStyleSheet("""
+            QPushButton {
+                background: #10b981; 
+                color: white; 
+                padding: 8px 16px; 
+                border-radius: 6px;
+                font-weight: 500;
+            }
+            QPushButton:hover { background: #059669; }
+        """)
+        finish_btn.clicked.connect(self._on_finish_setup)
+        btn_row.addWidget(finish_btn)
+
         layout.addLayout(btn_row)
 
-    def _on_select_image(self):
-        """Open file dialog to select an image."""
-        file_dialog = QFileDialog.getOpenFileName(
-            self,
-            "Selecciona imatge",
-            "",
-            "Images (*.png *.jpg *.jpeg *.bmp *.svg);;All files (*)"
-        )
+    def _on_cell_click(self, cell_index: int):
+        """Handle grid cell click."""
+        if cell_index in self.pattern_cells:
+            # Remove from pattern if already clicked
+            self.pattern_cells.remove(cell_index)
+            self.grid_buttons[cell_index].setText("")
+            self.grid_buttons[cell_index].setStyleSheet("")
+        else:
+            # Add to pattern
+            self.pattern_cells.append(cell_index)
+            char = GRID_CELL_CHARS[cell_index]
+            self.grid_buttons[cell_index].setText(char)
+            self.grid_buttons[cell_index].setStyleSheet("background: #e5e7eb; color: #1f2937;")
 
-        if file_dialog[0]:  # Valid path selected
-            self.selected_image_path = file_dialog[0]
-
-            # Load and preview the image
-            pixmap = QPixmap(self.selected_image_path)
-            if pixmap.isNull():
-                QMessageBox.warning(
-                    self,
-                    "Error",
-                    "No es pot carregar l'imgatge seleccionat."
-                )
-                return
-
-            # Scale to fit within preview area while maintaining aspect ratio
-            scaled = pixmap.scaled(500, 200, Qt.AspectRatioMode.KeepAspectRatio,
-                                   Qt.TransformationMode.SmoothTransformation)
-
-            # Create a painter overlay showing click zones
-            self.original_pixmap = pixmap
-            self.image_preview.setPixmap(scaled)
-
-            self.step_label.setText("Pass 2 de 2: Dibuixa el teu patró")
-            self.btn_select_image.setEnabled(False)
-
-            # Add instruction label
-            instruction = QLabel(
-                "Dibuixa o faga clics per crear el teu patró d'autentificació.\n"
-                "Utilitza les mateixes posicions quan volis desbloquejar la caixa forta."
-            )
-            instruction.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            instruction.setStyleSheet("color: #68706c; font-size: 12px; margin-top: 8px;")
-            layout = self.layout()
-            instruction_index = layout.count() - 1
-            layout.insertWidget(instruction_index, instruction)
-
-            # Add a "Finish setup" button that's hidden until image is selected
-            finish_btn = QPushButton("✅ Finalitzar configuració")
-            self.finish_button = finish_btn
-            font = finish_btn.font()
-            font.setWeight(500)
-            finish_btn.setFont(font)
-            finish_btn.setStyleSheet("""
-                QPushButton {
-                    background: #10b981; 
-                    color: white; 
-                    padding: 8px 16px; 
-                    border-radius: 6px;
-                    font-weight: 500;
-                }
-                QPushButton:hover { background: #059669; }
-            """)
-            finish_btn.clicked.connect(self._on_finish_setup)
-            btn_row.addWidget(finish_btn)
+        # Update pattern display
+        password = generate_grid_password(self.pattern_cells)
+        self.pattern_label.setText(f"Patern: {password}")
 
     def _on_finish_setup(self):
-        """Process the image drawing for biometric pattern."""
-        if not self.original_pixmap or not self.drawn_strokes:
+        """Save the grid-based authentication pattern."""
+        if len(self.pattern_cells) < 3:
             QMessageBox.warning(
                 self,
                 "Error",
-                "Dibuixa el teu patró abans de finalitzar la configuració."
+                "Selecciona almenys 3 caselles per al teu patró."
             )
             return
 
-        # Convert to base64 for storage
-        buffer = bytearray()
-        pixmap_bytes = self.original_pixmap.toData()
-        pixmap_bytes = QPixmap(pixmap_bytes).toPng(buffer)
-
-        image_b64 = base64.b64encode(buffer).decode("ascii")
-
-        # Save the image auth template
+        # Store as grid cell indices (not image)
+        import os
+        salt = os.urandom(32)
         save_image_auth(
-            image_b64=image_b64,
-            hotspots=self.drawn_strokes,
+            image_b64="grid_auth",
+            hotspots=[{"cell": cell} for cell in self.pattern_cells],
+            salt=salt
         )
 
         QMessageBox.information(
             self,
             "Autenticació configurada!",
-            "La imatge i el teu patró d'autentificació s'han guardat.\n\n"
-            "La pròxima vegada, dibujaràs el mateix patró per desbloquejar la caixa forta."
+            "El teu patró s'ha guardat.\n\n"
+            "La pròxima vegada, fes clic en les mateixes caselles per desbloquejar la caixa forta."
         )
 
         self.accept()
 
 
 class BiometricLoginDialog(QDialog):
-    """Diàleg de login per autenticació biométrica (draw/click pattern).
+    """Diàleg de login per autenticació amb quadrícula (click pattern).
 
-    The user draws their stored pattern on the template image.
-    If the pattern matches within tolerance, authentication succeeds.
+    The user clicks grid cells to recreate their stored pattern.
+    If the pattern matches, authentication succeeds.
     """
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Entrar a la caixa forta")
         self.setModal(True)
-        self.setFixedSize(500, 650)
+        self.setFixedSize(550, 650)
 
         # State tracking
-        self.current_strokes: list[dict] = []  # Active strokes being drawn
-        self.auth_data = None  # Loaded image auth data
+        self.current_strokes: list[int] = []  # Grid cell indices
+        self.auth_data = None  # Loaded auth data
 
         # Load stored template
         self.auth_data = load_image_auth()
 
-        if not self.auth_data or not self.auth_data.get("image_b64"):
+        if not self.auth_data:
             QMessageBox.warning(
                 self,
                 "Error",
-                "No hi ha cap plantilla d'autenticació per imatge configurada."
+                "No hi ha cap plantilla d'autenticació configurada."
             )
             self.reject()
             return
@@ -546,40 +534,32 @@ class BiometricLoginDialog(QDialog):
         title.setFont(font)
         layout.addWidget(title)
 
-        subtitle = QLabel("Dibuixa el teu patró d'autentificació")
+        subtitle = QLabel("Fes clic en les caselles del teu patró")
         subtitle.setAlignment(Qt.AlignmentFlag.AlignCenter)
         subtitle.setStyleSheet("color: #68706c; font-size: 13px;")
         layout.addWidget(subtitle)
 
-        # Draw canvas (uses original pixmap as base, draws strokes on top)
-        self.draw_canvas = QLabel()
-        self.draw_canvas.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.draw_canvas.setStyleSheet(
-            "border: 2px solid #3b82f6; border-radius: 10px; background: white;"
-        )
+        # Grid
+        grid_widget = QWidget()
+        grid_layout = QGridLayout(grid_widget)
+        grid_layout.setSpacing(2)
 
-        # Load and set the template image
-        self.base_pixmap = QPixmap()
-        if self.auth_data.get("image_b64"):
-            try:
-                image_bytes = base64.b64decode(self.auth_data["image_b64"])
-                pixmap = QPixmap()
-                pixmap.loadFromData(image_bytes)
-                self.base_pixmap = pixmap.scaled(400, 250,
-                                           Qt.AspectRatioMode.KeepAspectRatio,
-                                           Qt.TransformationMode.SmoothTransformation)
-            except Exception as e:
-                QMessageBox.warning(
-                    self, "Error", f"No es pot carregar l'imgatge: {str(e)}"
-                )
-                self.reject()
-                return
+        self.grid_buttons = []
+        for row in range(GRID_ROWS):
+            for col in range(GRID_COLUMNS):
+                cell_index = col + row * GRID_COLUMNS
+                button = QPushButton()
+                button.setFixedSize(60, 60)
+                button.setFont(QFont("monospace", 16, QFont.Weight.Bold))
+                button.setAccessibleName(f"Cell {cell_index}")
+                button.clicked.connect(lambda c=cell_index: self._on_cell_click(c))
+                self.grid_buttons.append(button)
+                grid_layout.addWidget(button, row, col)
 
-        self.draw_canvas.setPixmap(self.base_pixmap)
-        layout.addWidget(self.draw_canvas)
+        layout.addWidget(grid_widget, alignment=Qt.AlignmentFlag.AlignCenter)
 
         # Status label
-        self.status_label = QLabel("Dibuixa el teu patró")
+        self.status_label = QLabel("Selecciona les caselles del teu patró")
         self.status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.status_label.setStyleSheet("color: #68706c; font-size: 12px;")
         layout.addWidget(self.status_label)
@@ -597,71 +577,30 @@ class BiometricLoginDialog(QDialog):
         layout.addLayout(btn_row)
 
         self.setLayout(layout)
-        self.setCursor(QCursor(Qt.CursorShape.CrossCursor))
 
-    def paintEvent(self, event):
-        """Custom painting to show strokes."""
-        painter = QPainter(self.draw_canvas)
+    def _on_cell_click(self, cell_index: int):
+        """Handle grid cell click during login."""
+        if cell_index in self.current_strokes:
+            # Remove from pattern if already clicked
+            self.current_strokes.remove(cell_index)
+            self.grid_buttons[cell_index].setText("")
+            self.grid_buttons[cell_index].setStyleSheet("")
+        else:
+            # Add to pattern
+            self.current_strokes.append(cell_index)
+            char = GRID_CELL_CHARS[cell_index]
+            self.grid_buttons[cell_index].setText(char)
+            self.grid_buttons[cell_index].setStyleSheet("background: #e5e7eb; color: #1f2937;")
 
-        # Draw the base image
-        painter.drawPixmap(0, 0, self.base_pixmap)
-
-        # Draw the strokes
-        for stroke in self.current_strokes:
-            x = stroke["x_pct"] * self.base_pixmap.width()
-            y = stroke["y_pct"] * self.base_pixmap.height()
-
-            painter.setPen(QColor("#2563eb"))
-            painter.setBrush(QColor("#2563eb"))
-            painter.drawEllipse(x - 4, y - 4, 8, 8)
-
-            # Draw line from previous stroke to this one
-            if len(self.current_strokes) > 1:
-                prev = self.current_strokes[-2]
-                prev_x = prev["x_pct"] * self.base_pixmap.width()
-                prev_y = prev["y_pct"] * self.base_pixmap.height()
-
-                painter.setPen(QColor("#2563eb"))
-                painter.drawLine(prev_x, prev_y, x, y)
-
-        painter.end()
-
-    def mousePressEvent(self, event):
-        """Handle click to add a stroke point."""
-        pos = event.globalPos() - self.draw_canvas.mapFromGlobal(event.pos())
-
-        if not self.base_pixmap.isNull():
-            x_pct = pos.x() / self.base_pixmap.width()
-            y_pct = pos.y() / self.base_pixmap.height()
-
-            # Clamp to 0-1 range
-            x_pct = max(0.0, min(1.0, x_pct))
-            y_pct = max(0.0, min(1.0, y_pct))
-
-            self.current_strokes.append({"x_pct": x_pct, "y_pct": y_pct})
-            self.status_label.setText(f"Punts: {len(self.current_strokes)}")
-
-    def mouseMoveEvent(self, event):
-        """Handle drag to add continuous stroke points."""
-        pos = event.globalPos() - self.draw_canvas.mapFromGlobal(event.pos())
-
-        if not self.base_pixmap.isNull():
-            x_pct = pos.x() / self.base_pixmap.width()
-            y_pct = pos.y() / self.base_pixmap.height()
-
-            x_pct = max(0.0, min(1.0, x_pct))
-            y_pct = max(0.0, min(1.0, y_pct))
-
-            self.current_strokes.append({"x_pct": x_pct, "y_pct": y_pct})
-            self.status_label.setText(f"Punts: {len(self.current_strokes)}")
+        self.status_label.setText(f"Caselles seleccionades: {len(self.current_strokes)}")
 
     def _on_verify(self):
-        """Verify the user's drawn pattern against the stored template."""
+        """Verify the user's grid pattern against the stored template."""
         if not self.current_strokes:
             QMessageBox.warning(
                 self,
                 "Error",
-                "Dibuixa el teu patró abans de verificar."
+                "Selecciona les caselles del teu patró abans de verificar."
             )
             return
 
@@ -676,52 +615,37 @@ class BiometricLoginDialog(QDialog):
             )
             return
 
-        # Check if pattern matches within tolerance
-        is_match = verify_image_auth_pattern(
-            self.current_strokes,
-            stored_hotspots,
-            salt_hex
-        )
+        # Convert stored hotspots (grid cells) to indices
+        stored_cells = [h["cell"] for h in stored_hotspots]
 
-        if is_match:
-            # Generate the AES key from the hotspots
-            try:
-                from src.encryption import derive_key_from_hotspots
-
-                derive_key_from_hotspots(stored_hotspots, salt_hex)
-            except Exception as e:
-                QMessageBox.critical(self, "Error", f"Error derivant la clau: {str(e)}")
-                return
-
-            # Try to load the vault with this key
-            try:
-                coords = ";".join(
-                    f"{point['x_pct']:.6f},{point['y_pct']:.6f}"
-                    for point in stored_hotspots
-                )
-                password_string = f"hotspots:{coords};salt:{salt_hex}"
-                load_vault(password_string, VAULT_FILENAME)
-
-                QMessageBox.information(
-                    self,
-                    "Accés correct!",
-                    "El patró d'autentificació és correct.\n\n"
-                    "Benvingut a la teva caixa forta."
-                )
-                self.accept()
-
-            except Exception as e:
-                QMessageBox.warning(
-                    self,
-                    "Patró incorrect",
-                    f"No es pot desbloquejar la caixa forta.\n\n" + str(e)
-                )
-        else:
+        # Check if pattern matches (exact match for grid)
+        if sorted(self.current_strokes) != sorted(stored_cells):
             QMessageBox.warning(
                 self,
                 "Patró incorrect",
-                "El patró dibuit no coincideix amb el guardat.\n\n"
-                "Intenta dibuixa el mateix patrón."
+                "El patró que has seleccionat no coincideix amb el patró d'autentificació original.\n\n"
+                "Si continua fallant, contacta amb el suport tècnic."
+            )
+            return
+
+        # Generate the AES key from the pattern
+        try:
+            password_string = generate_grid_password(self.current_strokes)
+            load_vault(password_string, VAULT_FILENAME)
+
+            QMessageBox.information(
+                self,
+                "Accés correct!",
+                "El patró d'autentificació és correct.\n\n"
+                "Benvingut a la teva caixa forta."
+            )
+            self.accept()
+
+        except Exception as e:
+            QMessageBox.warning(
+                self,
+                "Patró incorrect",
+                f"No es pot desbloquejar la caixa forta.\n\n" + str(e)
             )
 
 
@@ -870,13 +794,13 @@ class BiometricLoginPrompt(QDialog):
         subtitle.setStyleSheet("color: #68706c; font-size: 13px;")
         layout.addWidget(subtitle)
 
-        # Image auth button (primary method)
-        self.btn_image_auth = QPushButton("🖼 Autentar amb imatge")
-        font = self.btn_image_auth.font()
+        # Grid auth button (primary method)
+        self.btn_grid_auth = QPushButton("🔲 Autentar amb quadrícula")
+        font = self.btn_grid_auth.font()
         font.setWeight(500)
-        self.btn_image_auth.setFont(font)
-        self.btn_image_auth.clicked.connect(self._on_use_image_auth)
-        layout.addWidget(self.btn_image_auth)
+        self.btn_grid_auth.setFont(font)
+        self.btn_grid_auth.clicked.connect(self._on_use_grid_auth)
+        layout.addWidget(self.btn_grid_auth)
 
         # Separator
         sep = QLabel("—")
@@ -917,11 +841,11 @@ class BiometricLoginPrompt(QDialog):
         else:
             self.password_field.setEchoMode(QLineEdit.EchoMode.Password)
 
-    def _on_use_image_auth(self):
-        """Show the biometric login dialog."""
-        self.image_login_dialog = BiometricLoginDialog(self)
-        if self.image_login_dialog.exec() == QDialog.DialogCode.Accepted:
-            # Authentication succeeded via image auth
+    def _on_use_grid_auth(self):
+        """Show the grid login dialog."""
+        self.grid_login_dialog = BiometricLoginDialog(self)
+        if self.grid_login_dialog.exec() == QDialog.DialogCode.Accepted:
+            # Authentication succeeded via grid auth
             self.accept()
 
     def _on_accept(self) -> None:

@@ -1,0 +1,18 @@
+{
+  "extensions": {
+    "caixa_forta_manager": {
+      "name": "Caixa Forta Manager (built-in)",
+      "permissions": [
+        "get_vault_info",
+        "unlock_vault",
+        "lock_vault",
+        "fetch_credentials",
+        "save_credentials",
+        "generate_password"
+      ],
+      "approved": true,
+      "hash": "aec9f8895875b61f3dac973c7352b7037aad253f84eb2efb9aed8431216a986b",
+      "last_active": null
+    }
+  }
+}

@@ -231,6 +231,21 @@ const state = {
     removeAccents: false,
     onlyUnaccented: false,
   },
+  // Grid authentication state
+  showAuthMethodSelection: false,
+  authMethodSelected: "password",
+  gridSeed: null,
+  gridPattern: [],
+  gridCellSize: 4,
+  showGridSetup: false,
+  gridSetupStep: 0,
+  gridSetupPattern: [],
+  gridSetupError: "",
+  showGridUnlock: false,
+  gridUnlockPattern: [],
+  gridUnlockError: "",
+  showChangeAuthModal: false,
+  changeAuthError: "",
 };
 
 /* ==========================================================================
@@ -342,7 +357,19 @@ async function initializeApp() {
   try {
     const info = await invoke("get_vault_info");
     state.vaultExists = Boolean(info.exists);
-    state.showWelcome = !state.vaultExists;
+    
+    if (!state.vaultExists) {
+      // New vault - show auth method selection
+      state.showWelcome = false;
+      state.showAuthMethodSelection = true;
+    } else {
+      // Check if image auth is configured
+      const hasGridAuth = await checkGridAuth();
+      if (hasGridAuth) {
+        state.showGridUnlock = true;
+      }
+    }
+    
     render();
   } catch {
     state.vaultExists = null;
@@ -831,6 +858,10 @@ function lockScreen() {
       </div>
     </main>
     ${state.showWelcome ? welcomeModal() : ""}
+    ${state.showAuthMethodSelection ? authMethodSelectionModal() : ""}
+    ${state.showGridSetup ? imageAuthSetupModal() : ""}
+    ${state.showGridUnlock ? imageAuthUnlockModal() : ""}
+    ${state.showChangeAuthModal ? changeAuthMethodModal() : ""}
     ${state.showCloudLogin ? cloudLoginModal() : ""}
   `;
 }
@@ -881,6 +912,131 @@ function welcomeModal() {
           <button type="button" class="primary" id="next-welcome">
             ${isLastSlide ? "Crear contrasenya mestra" : "Continuar"} ${icon("ArrowRight", 17)}
           </button>
+        </footer>
+      </section>
+    </div>
+  `;
+}
+
+function authMethodSelectionModal() {
+  return `
+    <div class="modal-backdrop">
+      <section class="entry-modal auth-selection-modal" role="dialog" aria-modal="true" aria-labelledby="auth-selection-title">
+        <header class="modal-header">
+          <button class="modal-icon" id="cancel-auth-selection" title="Tancar">${icon("X", 20)}</button>
+          <h2 id="auth-selection-title">Tria el mètode d'autenticació</h2>
+        </header>
+        <div class="modal-scroll">
+          <div class="auth-method-options">
+            <button class="auth-method-card ${state.authMethodSelected === "password" ? "selected" : ""}" id="auth-method-password">
+              ${icon("LockKeyhole", 32)}
+              <h3>Contrasenya mestra</h3>
+              <p>Utilitza una contrasenya text per obrir la caixa forta.</p>
+            </button>
+            <button class="auth-method-card ${state.authMethodSelected === "image" ? "selected" : ""}" id="auth-method-image">
+              ${icon("Camera", 32)}
+              <h3>Autenticació amb imatge</h3>
+              <p>Utilitza una imatge i punts de clic per autenticar-te.</p>
+            </button>
+          </div>
+          ${state.gridSetupError ? `<p class="error">${escapeHtml(state.gridSetupError)}</p>` : ""}
+        </div>
+        <footer class="modal-footer">
+          <button type="button" class="secondary" id="cancel-auth-selection-bottom">Cancel·la</button>
+          <button type="button" class="primary" id="continue-auth-selection">Continuar ${icon("ArrowRight", 17)}</button>
+        </footer>
+      </section>
+    </div>
+  `;
+}
+
+function imageAuthSetupModal() {
+  return `
+    <div class="modal-backdrop">
+      <section class="entry-modal image-auth-setup-modal" role="dialog" aria-modal="true" aria-labelledby="image-auth-setup-title">
+        <header class="modal-header">
+          <button class="modal-icon" id="cancel-image-auth-setup" title="Tancar">${icon("X", 20)}</button>
+          <h2 id="image-auth-setup-title">Configura la teva autenticació amb imatge</h2>
+        </header>
+        <div class="modal-scroll">
+          <div class="image-auth-instructions">
+            <p>Puja una imatge i fes clic per seleccionar els punts del teu patró.</p>
+            <p class="hint">Selecciona almenys 5 punts per al teu patró.</p>
+          </div>
+          <div class="image-upload-area" id="image-upload-area">
+            <p>${icon("Camera", 40)}</p>
+            <p>Fes clic per pujar la teva imatge</p>
+            <input type="file" accept="image/*" id="image-auth-upload" style="display:none;" />
+          </div>
+          <div class="image-auth-canvas-area" id="image-auth-canvas-area" style="display:none;">
+            <canvas id="image-auth-canvas" width="500" height="400"></canvas>
+            <p class="image-auth-status">Punts seleccionats: <strong id="image-auth-count">0</strong></p>
+          </div>
+          ${state.gridSetupError ? `<p class="error">${escapeHtml(state.gridSetupError)}</p>` : ""}
+        </div>
+        <footer class="modal-footer">
+          <button type="button" class="secondary" id="cancel-image-auth-setup-bottom">Cancel·la</button>
+          <button type="button" class="primary" id="save-image-auth-setup">Desa el patró</button>
+        </footer>
+      </section>
+    </div>
+  `;
+}
+
+function imageAuthUnlockModal() {
+  const persistedImage = localStorage.getItem("image_auth_image") || "";
+  return `
+    <div class="modal-backdrop">
+      <section class="entry-modal image-auth-unlock-modal" role="dialog" aria-modal="true" aria-labelledby="image-auth-unlock-title">
+        <header class="modal-header">
+          <button class="modal-icon" id="cancel-image-auth-unlock" title="Tancar">${icon("X", 20)}</button>
+          <h2 id="image-auth-unlock-title">Desbloqueja amb la teva imatge</h2>
+        </header>
+        <div class="modal-scroll">
+          <div class="image-auth-instructions">
+            <p>Fes clic als punts del teu patró per desbloquejar.</p>
+          </div>
+          <div class="image-auth-canvas-area">
+            <canvas id="image-auth-unlock-canvas" width="500" height="400"></canvas>
+            <p class="image-auth-status">Punts seleccionats: <strong id="image-auth-unlock-count">0</strong></p>
+          </div>
+          ${state.gridUnlockError ? `<p class="error">${escapeHtml(state.gridUnlockError)}</p>` : ""}
+        </div>
+        <footer class="modal-footer">
+          <button type="button" class="secondary" id="cancel-image-auth-unlock-bottom">Cancel·la</button>
+          <button type="button" class="primary" id="verify-image-auth-unlock">Verifica i desbloqueja</button>
+        </footer>
+      </section>
+    </div>
+  `;
+}
+
+function changeAuthMethodModal() {
+  return `
+    <div class="modal-backdrop">
+      <section class="entry-modal change-auth-modal" role="dialog" aria-modal="true" aria-labelledby="change-auth-title">
+        <header class="modal-header">
+          <button class="modal-icon" id="cancel-change-auth" title="Tancar">${icon("X", 20)}</button>
+          <h2 id="change-auth-title">Canvia el mètode d'autenticació</h2>
+        </header>
+        <div class="modal-scroll">
+          <div class="auth-method-options">
+            <button class="auth-method-card ${state.changeAuthSelected === "password" ? "selected" : ""}" id="change-auth-password">
+              ${icon("LockKeyhole", 32)}
+              <h3>Contrasenya mestra</h3>
+              <p>Utilitza una contrasenya text per obrir la caixa forta.</p>
+            </button>
+            <button class="auth-method-card ${state.changeAuthSelected === "image" ? "selected" : ""}" id="change-auth-image">
+              ${icon("Camera", 32)}
+              <h3>Autenticació amb imatge</h3>
+              <p>Utilitza una imatge i punts de clic per autenticar-te.</p>
+            </button>
+          </div>
+          ${state.changeAuthError ? `<p class="error">${escapeHtml(state.changeAuthError)}</p>` : ""}
+        </div>
+        <footer class="modal-footer">
+          <button type="button" class="secondary" id="cancel-change-auth-bottom">Cancel·la</button>
+          <button type="button" class="primary" id="save-auth-method">Desa el mètode</button>
         </footer>
       </section>
     </div>
@@ -1146,6 +1302,9 @@ function settingsScreen() {
           </label>
           <button class="setting-action" id="change-master">
             ${icon("LockKeyhole", 18)} Canvi de contrasenya mestra
+          </button>
+          <button class="setting-action" id="change-auth-method">
+            ${icon("Grid", 18)} Canvia el mètode d'autenticació
           </button>
         </section>
 
@@ -2143,6 +2302,15 @@ async function unlock(event) {
   }
 }
 
+async function checkGridAuth() {
+  try {
+    const result = await invoke("get_auth_info");
+    return result.exists;
+  } catch {
+    return false;
+  }
+}
+
 async function saveVault(masterPassword = null, syncToRailway = false) {
   // Convert entries to the expected format
   const entries = state.entries.map((e) => ({
@@ -2785,6 +2953,320 @@ function bindEvents() {
     render();
     document.querySelector("#master-password")?.focus();
   });
+
+  // Grid authentication handlers
+  document
+    .querySelector("#auth-method-password")
+    ?.addEventListener("click", () => {
+      state.authMethodSelected = "password";
+      render();
+    });
+  document
+    .querySelector("#auth-method-image")
+    ?.addEventListener("click", () => {
+      state.authMethodSelected = "image";
+      render();
+    });
+  document
+    .querySelector("#continue-auth-selection")
+    ?.addEventListener("click", async () => {
+      if (state.authMethodSelected === "password") {
+        state.showAuthMethodSelection = false;
+        render();
+      } else if (state.authMethodSelected === "image") {
+        state.showGridSetup = true;
+        render();
+      }
+    });
+  document
+    .querySelectorAll("[data-grid-cell]")
+    .forEach((cell) => {
+      cell.addEventListener("click", () => {
+        const cellIndex = Number(cell.dataset.gridCell);
+        if (cell.classList.contains("selected")) {
+          // Remove from pattern
+          state.gridSetupPattern = state.gridSetupPattern.filter(
+            (i) => i !== cellIndex,
+          );
+        } else {
+          // Add to pattern
+          state.gridSetupPattern.push(cellIndex);
+        }
+        render();
+      });
+    });
+  document
+    .querySelector("#save-grid-setup")
+    ?.addEventListener("click", async () => {
+      if (state.gridSetupPattern.length !== state.gridCellSize) {
+        state.gridSetupError = `Has de seleccionar ${state.gridCellSize} cèl·lules.`;
+        render();
+        return;
+      }
+      state.showGridSetup = false;
+      state.showAuthMethodSelection = false;
+      try {
+        await invoke("set_grid_auth", {
+          pattern: state.gridSetupPattern,
+        });
+        state.masterPassword = "";
+        showToast("Grid de seguretat configurat correctament.");
+        render();
+      } catch (error) {
+        state.gridSetupError = String(error);
+        render();
+      }
+    });
+  document
+    .querySelector("#cancel-grid-setup")
+    ?.addEventListener("click", () => {
+      state.showGridSetup = false;
+      state.gridSetupError = "";
+      render();
+    });
+  // Image authentication handlers
+  document
+    .querySelector("#image-upload-area")
+    ?.addEventListener("click", () => {
+      document.querySelector("#image-auth-upload")?.click();
+    });
+
+  document
+    .querySelector("#image-auth-upload")
+    ?.addEventListener("change", (event) => {
+      const file = event.target.files[0];
+      if (file) {
+        const reader = new FileReader();
+        reader.onload = (e) => {
+          state.imageAuthImage = e.target.result;
+          // Persist image for unlock
+          try {
+            localStorage.setItem("image_auth_image", e.target.result);
+          } catch (err) {
+            console.warn("Could not persist auth image:", err);
+          }
+          document.querySelector("#image-upload-area").style.display = "none";
+          document.querySelector("#image-auth-canvas-area").style.display = "";
+          renderImageOnCanvas();
+        };
+        reader.readAsDataURL(file);
+      }
+    });
+
+  document
+    .querySelector("#image-auth-canvas")
+    ?.addEventListener("click", (event) => {
+      const canvas = event.target;
+      const rect = canvas.getBoundingClientRect();
+      const x = (event.clientX - rect.left) / rect.width * 100;
+      const y = (event.clientY - rect.top) / rect.height * 100;
+      state.gridSetupPattern.push({ x, y });
+      document.getElementById("image-auth-count").textContent =
+        state.gridSetupPattern.length;
+      drawPointOnCanvas(canvas, x, y, "#3b82f6");
+    });
+
+  document
+    .querySelector("#save-image-auth-setup")
+    ?.addEventListener("click", async () => {
+      if (state.gridSetupPattern.length < 3) {
+        state.gridSetupError = "Has de seleccionar almenys 3 punts.";
+        render();
+        return;
+      }
+      state.showGridSetup = false;
+      state.showAuthMethodSelection = false;
+      try {
+        // Convert click points to byte pattern
+        const pattern = encodeImageAuthPattern(state.gridSetupPattern);
+        await invoke("set_grid_auth", {
+          pattern,
+        });
+        // Create vault with derived master password
+        const masterPassword = pattern.map((b) => String(b)).join("-");
+        await invoke("init_empty_vault", { password: masterPassword });
+        state.masterPassword = "";
+        showToast("Autenticació amb imatge configurada correctament.");
+        render();
+      } catch (error) {
+        state.gridSetupError = String(error);
+        render();
+      }
+    });
+
+  document
+    .querySelector("#cancel-image-auth-setup")
+    ?.addEventListener("click", () => {
+      state.showGridSetup = false;
+      state.gridSetupError = "";
+      state.gridSetupPattern = [];
+      render();
+    });
+
+  document
+    .querySelector("#cancel-image-auth-unlock")
+    ?.addEventListener("click", () => {
+      state.showGridUnlock = false;
+      state.gridUnlockError = "";
+      state.gridUnlockPattern = [];
+      render();
+    });
+
+  // Render image on unlock canvas
+  const unlockCanvas = document.querySelector("#image-auth-unlock-canvas");
+  if (unlockCanvas) {
+    const persistedImage = localStorage.getItem("image_auth_image");
+    console.log("Unlock canvas found, persisted image:", persistedImage ? "yes" : "no");
+    if (persistedImage) {
+      const ctx = unlockCanvas.getContext("2d");
+      const img = new Image();
+      img.onload = () => {
+        console.log("Image loaded, drawing to canvas");
+        const aspect = img.width / img.height;
+        if (aspect > unlockCanvas.width / unlockCanvas.height) {
+          ctx.drawImage(img, 0, 0, unlockCanvas.width, img.height * unlockCanvas.width / img.width);
+        } else {
+          ctx.drawImage(img, 0, 0, img.width * unlockCanvas.height / img.height, unlockCanvas.height);
+        }
+      };
+      img.onerror = () => {
+        console.log("Error loading image");
+      };
+      img.src = persistedImage;
+    }
+  }
+
+  document
+    .querySelector("#image-auth-unlock-canvas")
+    ?.addEventListener("click", (event) => {
+      const canvas = event.target;
+      const rect = canvas.getBoundingClientRect();
+      const x = (event.clientX - rect.left) / rect.width * 100;
+      const y = (event.clientY - rect.top) / rect.height * 100;
+      state.gridUnlockPattern.push({ x, y });
+      document.getElementById("image-auth-unlock-count").textContent =
+        state.gridUnlockPattern.length;
+      drawPointOnCanvas(canvas, x, y, "#3b82f6");
+    });
+
+  document
+    .querySelector("#verify-image-auth-unlock")
+    ?.addEventListener("click", async () => {
+      if (state.gridUnlockPattern.length === 0) {
+        state.gridUnlockError = "Selecciona els punts del teu patró.";
+        render();
+        return;
+      }
+      state.loading = true;
+      render();
+      try {
+        const pattern = encodeImageAuthPattern(state.gridUnlockPattern);
+        const result = await invoke("unlock_vault_grid", {
+          pattern,
+        });
+        state.masterPassword = "";
+        state.entries = (result.entries || []).map((entry) => ({
+          ...entry,
+          folderId: entry.folder_id || null,
+          createdAt: entry.created_at || entry.createdAt,
+          updatedAt: entry.updated_at || entry.updatedAt || null,
+        }));
+        state.history = result.history || [];
+        state.trash = result.trash || [];
+        state.folders = result.folders || [];
+        state.activeFolderId = "";
+        state.locked = false;
+        state.showGridUnlock = false;
+        state.gridUnlockPattern = [];
+        resetAutoLock();
+      } catch (error) {
+        state.gridUnlockError = String(error);
+        state.gridUnlockPattern = [];
+      } finally {
+        state.loading = false;
+        render();
+      }
+    });
+
+  // Helper function to encode image auth pattern to bytes
+  function encodeImageAuthPattern(points) {
+    return points
+      .map((p) => {
+        const xByte = Math.floor(p.x);
+        const yByte = Math.floor(p.y);
+        return [xByte, yByte];
+      })
+      .flat();
+  }
+
+  // Helper function to draw a point on the canvas
+  function drawPointOnCanvas(canvas, x, y, color) {
+    const ctx = canvas.getContext("2d");
+    const radius = 8;
+    ctx.beginPath();
+    ctx.arc(x * canvas.width / 100, y * canvas.height / 100, radius, 0, 2 * Math.PI);
+    ctx.fillStyle = color;
+    ctx.fill();
+  }
+
+  // Helper function to render image on canvas
+  function renderImageOnCanvas() {
+    const canvas = document.getElementById("image-auth-canvas");
+    const ctx = canvas.getContext("2d");
+    const img = new Image();
+    img.onload = () => {
+      const aspect = img.width / img.height;
+      if (aspect > canvas.width / canvas.height) {
+        ctx.drawImage(img, 0, 0, canvas.width, img.height * canvas.width / img.width);
+      } else {
+        ctx.drawImage(img, 0, 0, img.width * canvas.height / img.height, canvas.height);
+      }
+    };
+    img.src = state.imageAuthImage;
+  }
+  document
+    .querySelector("#change-auth-method")
+    ?.addEventListener("click", () => {
+      state.showChangeAuthModal = true;
+      render();
+    });
+  document
+    .querySelector("#change-auth-password")
+    ?.addEventListener("click", () => {
+      state.changeAuthSelected = "password";
+      render();
+    });
+  document
+    .querySelector("#change-auth-image")
+    ?.addEventListener("click", () => {
+      state.changeAuthSelected = "image";
+      render();
+    });
+  document
+    .querySelector("#save-auth-method")
+    ?.addEventListener("click", async () => {
+      try {
+        if (state.changeAuthSelected === "image") {
+          state.showGridSetup = true;
+          state.showChangeAuthModal = false;
+          render();
+        } else {
+          await invoke("change_auth_method", {
+            currentPassword: state.masterPassword,
+            newAuthType: "password",
+          });
+          state.showChangeAuthModal = false;
+          state.masterPassword = "";
+          state.locked = true;
+          state.showWelcome = false;
+          showToast("Mètode d'autenticació canviat correctament.");
+          render();
+        }
+      } catch (error) {
+        state.changeAuthError = String(error);
+        render();
+      }
+    });
   document
     .querySelectorAll("#dismiss-entry-guide, #dismiss-entry-guide-later")
     .forEach((button) =>

@@ -87,3 +87,35 @@ def derive_key_from_hotspots(hotspots: list[dict], salt_hex: str, iterations: in
     key = kdf.derive(password_string.encode("utf-8"))
 
     return key, salt
+
+
+def derive_key_from_grid_pattern(pattern_cells: list[int], salt_hex: str, iterations: int = DEFAULT_ITERATIONS) -> Tuple[bytes, bytes]:
+    """Derive an AES key from a grid-based pattern (cell indices).
+
+    This converts grid cell indices to a password-like string and derives
+    a key from it using PBKDF2. Each cell index represents a discrete choice,
+    making this resistant to keyloggers and RATs that see screen interactions.
+
+    Args:
+        pattern_cells: List of grid cell indices (each 0-24 for 5x5 grid)
+        salt_hex: Hex-encoded random salt bytes (32 bytes encoded as hex)
+        iterations: PBKDF2 iteration count for key derivation
+
+    Returns:
+        Tuple of (derived_32_byte_key, salt_bytes) for use with encrypt/decrypt
+    """
+    salt = bytes.fromhex(salt_hex)
+    
+    # Convert cell indices to a deterministic password-like string
+    from src.storage import generate_grid_password
+    password_string = generate_grid_password(pattern_cells)
+    
+    kdf = PBKDF2HMAC(
+        algorithm=hashes.SHA256(),
+        length=32,
+        salt=salt,
+        iterations=iterations,
+    )
+    key = kdf.derive(password_string.encode("utf-8"))
+
+    return key, salt

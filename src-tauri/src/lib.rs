@@ -120,6 +120,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             // Core vault operations
+            init_empty_vault,
             unlock_vault,
             save_vault,
             reset_vault,
@@ -155,6 +156,12 @@ pub fn run() {
             // Master password management
             change_master_password,
 
+            // Grid authentication
+            get_auth_info,
+            set_grid_auth,
+            unlock_vault_grid,
+            change_auth_method,
+
             // Export/Import
             export_vault,
             import_vault,
@@ -163,6 +170,71 @@ pub fn run() {
         .manage(server_state)
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+/// Create an empty vault with the given master password
+/// This is used for image-based authentication where the master password
+/// is derived from the image pattern coordinates.
+#[tauri::command]
+async fn init_empty_vault(
+    password: String,
+    server_state: tauri::State<'_, Arc<ServerState>>,
+) -> Result<(), String> {
+    println!("Creating new vault...");
+
+    // Create empty vault data
+    let vault_data = VaultData {
+        entries: vec![],
+        folders: vec![],
+        deleted_entries: vec![],
+        history: vec![],
+    };
+
+    // Serialize and encrypt
+    let data = serde_json::to_string(&vault_data)
+        .map_err(|e| format!("Failed to serialize: {}", e))?;
+
+    let salt = security::generate_salt()
+        .map_err(|e| format!("Failed to generate salt: {}", e))?;
+
+    // Derive key from master password using PBKDF2
+    let key = security::derive_key_from_password(&password, &salt)
+        .map_err(|e| format!("Failed to derive key: {}", e))?;
+
+    // Encrypt the data
+    let nonce_bytes = security::generate_nonce()
+        .map_err(|e| format!("Failed to generate nonce: {}", e))?;
+    let ciphertext = security::encrypt_aes_gcm(&key, &nonce_bytes, &data.into_bytes())
+        .map_err(|e| format!("Failed to encrypt: {}", e))?;
+
+    let vault_path = std::env::var("HOME")
+        .ok()
+        .map(|h| format!("{}/.password_manager/vault.json", h))
+        .unwrap_or_else(|| "./vault.json".to_string());
+
+    let vault_dir = std::path::Path::new(&vault_path)
+        .parent()
+        .unwrap_or(std::path::Path::new("."));
+    std::fs::create_dir_all(&vault_dir)
+        .map_err(|e| format!("Failed to create vault directory: {}", e))?;
+
+    // Write encrypted vault
+    let payload = serde_json::json!({
+        "salt": base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &salt),
+        "nonce": base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &nonce_bytes),
+        "ciphertext": base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &ciphertext),
+        "version": "1"
+    });
+
+    std::fs::write(&vault_path, payload.to_string())
+        .map_err(|e| format!("Failed to write vault: {}", e))?;
+
+    println!("Vault created successfully");
+
+    // Unlock the vault
+    server_state.set_unlocked(password, vec![], vec![], vec![], vec![]);
+
+    Ok(())
 }
 
 #[tauri::command]
@@ -980,6 +1052,196 @@ fn change_master_password(
     std::fs::write(&vault_path, payload.to_string()).map_err(|e| format!("Failed to save re-encrypted vault: {}", e))?;
 
     println!("Master password changed successfully - vault re-encrypted with new password");
+    Ok(())
+}
+
+/// Get authentication method information
+/// Returns whether grid auth is configured or not
+#[tauri::command]
+fn get_auth_info() -> VaultInfo {
+    let grid_auth_path = std::env::var("HOME")
+        .ok()
+        .map(|h| format!("{}/.password_manager/grid_auth.json", h))
+        .unwrap_or_else(|| "./grid_auth.json".to_string());
+
+    let exists = std::path::Path::new(&grid_auth_path).exists();
+
+    VaultInfo {
+        exists,
+        entry_count: 0,
+        folder_count: 0,
+        trash_count: 0,
+    }
+}
+
+/// Set grid (image) authentication
+/// Stores coordinate pairs for image-based authentication
+#[tauri::command]
+fn set_grid_auth(pattern: Vec<u8>, _master_password: Option<String>) -> Result<(), String> {
+    println!("Setting up image authentication...");
+
+    // For image auth, pattern contains coordinate pairs (x,y) as bytes (0-100 each)
+    // Must have even number of bytes (pairs)
+    if pattern.len() < 4 || pattern.len() % 2 != 0 {
+        return Err("Image pattern must have at least 2 coordinate pairs".to_string());
+    }
+
+    // Validate coordinate values (0-100 for percentage coordinates)
+    for byte in &pattern {
+        if *byte > 100 {
+            return Err("Invalid coordinate value (must be 0-100)".to_string());
+        }
+    }
+
+    // Store pattern directly (no encryption)
+    let grid_auth_data = serde_json::json!({
+        "pattern": pattern.to_vec(),
+        "type": "image",
+        "grid_size": 4, // Kept for backward compatibility
+        "version": "2"
+    });
+
+    let grid_auth_path = std::env::var("HOME")
+        .ok()
+        .map(|h| format!("{}/.password_manager/grid_auth.json", h))
+        .unwrap_or_else(|| "./grid_auth.json".to_string());
+
+    let grid_auth_dir = std::path::Path::new(&grid_auth_path).parent()
+        .unwrap_or(std::path::Path::new("."));
+    std::fs::create_dir_all(grid_auth_dir)
+        .map_err(|e| format!("Failed to create grid auth directory: {}", e))?;
+
+    std::fs::write(&grid_auth_path, grid_auth_data.to_string())
+        .map_err(|e| format!("Failed to write grid auth data: {}", e))?;
+
+    println!("Image authentication stored successfully");
+    Ok(())
+}
+
+/// Unlock vault using grid (image) authentication
+/// Compares provided coordinates with stored coordinates using tolerance
+#[tauri::command]
+fn unlock_vault_grid(
+    pattern: Vec<u8>,
+    server_state: tauri::State<'_, Arc<ServerState>>,
+) -> Result<VaultState, String> {
+    println!("Unlocking vault with image authentication...");
+
+    let grid_auth_path = std::env::var("HOME")
+        .ok()
+        .map(|h| format!("{}/.password_manager/grid_auth.json", h))
+        .unwrap_or_else(|| "./grid_auth.json".to_string());
+
+    if !std::path::Path::new(&grid_auth_path).exists() {
+        return Err("Grid authentication not configured".to_string());
+    }
+
+    let content = std::fs::read_to_string(&grid_auth_path)
+        .map_err(|e| format!("Failed to read grid auth data: {}", e))?;
+
+    let grid_auth: serde_json::Value = serde_json::from_str(&content)
+        .map_err(|e| format!("Failed to parse grid auth data: {}", e))?;
+
+    // Get stored pattern
+    let stored: Vec<u8> = serde_json::from_value(grid_auth["pattern"].clone())
+        .map_err(|e| format!("Failed to parse stored pattern: {}", e))?;
+
+    // Verify pattern length matches
+    if pattern.len() != stored.len() {
+        return Err("Pattern length mismatch".to_string());
+    }
+
+    // Compare coordinates with tolerance (15% of coordinate range)
+    let tolerance = 15.0;
+
+    for (i, byte) in pattern.iter().enumerate() {
+        let stored_byte = stored[i];
+        let diff = (*byte as i32 - stored_byte as i32).abs();
+        if diff as f64 > tolerance {
+            return Err("Pattern verification failed".to_string());
+        }
+    }
+
+    println!("Image authentication verified successfully");
+
+    // Now unlock the actual vault
+    // For image auth, we derive the master password from the coordinates
+    let master_password = pattern.iter()
+        .map(|b| format!("{}", b))
+        .collect::<Vec<String>>()
+        .join("-");
+
+    unlock_vault(master_password, server_state)
+}
+
+/// Change authentication method
+#[tauri::command]
+fn change_auth_method(
+    current_password: String,
+    new_auth_type: String,
+    grid_pattern: Option<Vec<u8>>,
+) -> Result<(), String> {
+    println!("Changing authentication method...");
+
+    // Validate new auth type
+    match new_auth_type.as_str() {
+        "password" | "grid" | "image" => {}
+        _ => return Err("Invalid authentication method type".to_string()),
+    }
+
+    // Verify current password
+    let vault_path = std::env::var("HOME")
+        .ok()
+        .map(|h| format!("{}/.password_manager/vault.json", h))
+        .unwrap_or_else(|| "./vault.json".to_string());
+
+    if !std::path::Path::new(&vault_path).exists() {
+        return Err("No existing vault found".to_string());
+    }
+
+    // Check current auth method
+    let grid_auth_path = std::env::var("HOME")
+        .ok()
+        .map(|h| format!("{}/.password_manager/grid_auth.json", h))
+        .unwrap_or_else(|| "./grid_auth.json".to_string());
+
+    let has_grid_auth = std::path::Path::new(&grid_auth_path).exists();
+
+    // Verify current password by attempting to unlock
+    let content = std::fs::read_to_string(&vault_path)
+        .map_err(|e| format!("Failed to read vault: {}", e))?;
+
+    let vault_file: VaultFile = serde_json::from_str(&content)
+        .map_err(|e| format!("Failed to parse vault: {}", e))?;
+
+    let salt_bytes = security::decode_hex_or_base64(&vault_file.salt, "salt")?;
+    let key = security::derive_key_from_password(&current_password, &salt_bytes)
+        .map_err(|e| format!("Failed to derive key: {}", e))?;
+
+    let nonce_bytes = security::decode_hex_or_base64(&vault_file.nonce, "nonce")?;
+    let ciphertext_bytes = security::decode_hex_or_base64(&vault_file.ciphertext, "ciphertext")?;
+
+    let _decrypted = security::decrypt_aes_gcm(&key, &nonce_bytes, &ciphertext_bytes)
+        .map_err(|e| format!("Failed to verify current password: {}. Please verify your current master password is correct.", e))?;
+
+    // If changing to grid/image auth, set up grid auth
+    if new_auth_type == "grid" || new_auth_type == "image" {
+        if grid_pattern.is_none() {
+            return Err("Grid pattern required for grid/image authentication".to_string());
+        }
+
+        let pattern = grid_pattern.unwrap();
+        set_grid_auth(pattern, None)?;
+    }
+
+    // If changing to password auth, delete grid auth
+    if new_auth_type == "password" {
+        if has_grid_auth {
+            std::fs::remove_file(&grid_auth_path).ok();
+        }
+    }
+
+    println!("Authentication method changed successfully");
     Ok(())
 }
 

@@ -45,8 +45,32 @@ function connectToNative() {
   }
 }
 
+// Compute SHA-256 hash of extension manifest
+async function computeExtensionHash() {
+  try {
+    const response = await fetch(browser.runtime.getManifestUrl());
+    const text = await response.text();
+    const encoder = new TextEncoder();
+    const data = encoder.encode(text);
+    
+    // Use Web Crypto API for SHA-256
+    const hashBuffer = await crypto.subtle.digest("SHA-256", data);
+    const hashArray = new Uint8Array(hashBuffer);
+    const hashHex = Array.from(hashArray)
+      .map(b => b.toString(16).padStart(2, "0"))
+      .join("");
+    
+    return hashHex;
+  } catch (e) {
+    console.warn("Failed to compute extension hash:", e);
+    return null;
+  }
+}
+
+let cachedExtensionHash = null;
+
 // Send message to native host
-function sendToNative(action, payload = {}) {
+async function sendToNative(action, payload = {}) {
   if (!nativePort) {
     connectToNative();
   }
@@ -55,7 +79,12 @@ function sendToNative(action, payload = {}) {
     return Promise.reject(new Error("Native messaging port is not available"));
   }
 
-  const message = { action, ...payload };
+  // Compute extension hash if not cached
+  if (!cachedExtensionHash) {
+    cachedExtensionHash = await computeExtensionHash();
+  }
+
+  const message = { action, extension_id: "caixa_forta_manager", extension_hash: cachedExtensionHash, ...payload };
   return new Promise((resolve, reject) => {
     pendingNativeRequests.push({ resolve, reject });
     try {

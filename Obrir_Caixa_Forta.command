@@ -32,9 +32,10 @@ VAULT_PATH="$HOME/.password_manager/vault.json"
 if [[ -f "$VAULT_PATH" ]]; then
     echo ""
     echo "S'ha trobat una caixa forta local."
-    read -q "delete_vault?Vols eliminar-la i començar de nou? [y/N] "
+    local delete_vault="n"
+    read -q -k 1 "delete_vault?Vols eliminar-la i començar de nou? [y/N] "
     echo ""
-    if [[ $? -eq 0 ]]; then
+    if [[ "$delete_vault" == "y" || "$delete_vault" == "Y" ]]; then
         rm -f "$VAULT_PATH"
         echo "Caixa forta local eliminada."
     else

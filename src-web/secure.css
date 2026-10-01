@@ -1358,3 +1358,56 @@
   margin-top: 7px;
   color: var(--text-muted);
 }
+
+/* Image authentication styles */
+.image-auth-instructions {
+  margin-bottom: 16px;
+}
+
+.image-upload-area {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 40px 0;
+  border: 2px dashed var(--border-subtle);
+  border-radius: 12px;
+  background: var(--bg-elevated);
+  cursor: pointer;
+  transition: border-color 0.15s;
+}
+
+.image-upload-area:hover {
+  border-color: var(--accent-primary);
+}
+
+.image-upload-area svg {
+  margin-bottom: 16px;
+  color: var(--accent-primary);
+}
+
+.image-upload-area p {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.image-auth-canvas-area {
+  margin-top: 16px;
+}
+
+.image-auth-canvas-area canvas {
+  display: block;
+  width: 100%;
+  max-width: 500px;
+  height: auto;
+  border: 1px solid var(--border-card);
+  border-radius: 8px;
+}
+
+.image-auth-status {
+  margin-top: 8px;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}

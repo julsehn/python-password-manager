@@ -12,12 +12,9 @@ from PyQt6.QtWidgets import (
     QSizePolicy,
     QAbstractButton,
     QStyle,
-    QPainter,
-    QPen,
-    QColor,
 )
 from PyQt6.QtCore import Qt, QRect, QPointF, QPoint
-from PyQt6.QtGui import QFont, QPainterPath
+from PyQt6.QtGui import QFont, QPainterPath, QPainter, QPen, QColor
 
 
 class ArrowPainter(QPainter):

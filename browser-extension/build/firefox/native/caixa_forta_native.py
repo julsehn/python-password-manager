@@ -20,6 +20,95 @@ import urllib.parse
 import urllib.request
 from typing import Any, Dict, Optional, Tuple
 
+# Extension permission management
+EXTENSION_REGISTRY = "extensions.json"
+
+def load_extension_registry():
+    """Load extension permission registry."""
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), EXTENSION_REGISTRY)
+    try:
+        with open(path, "r") as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return {"extensions": {}, "next_check": None}
+    except json.JSONDecodeError:
+        return {"extensions": {}, "next_check": None}
+
+def save_extension_registry(registry):
+    """Save extension permission registry."""
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), EXTENSION_REGISTRY)
+    try:
+        with open(path, "w") as f:
+            json.dump(registry, f, indent=2)
+    except OSError as e:
+        logger.error(f"Failed to save extension registry: {e}")
+
+import hashlib
+
+def compute_extension_hash(file_path):
+    """Compute SHA-256 hash of a file."""
+    hasher = hashlib.sha256()
+    try:
+        with open(file_path, "rb") as f:
+            for chunk in iter(lambda: f.read(4096), b""):
+                hasher.update(chunk)
+    except FileNotFoundError:
+        return None
+    return hasher.hexdigest()
+
+def verify_extension_identity(extension_id, extension_hash):
+    """Verify extension identity by file hash."""
+    registry = load_extension_registry()
+    
+    if extension_id in registry.get("extensions", {}):
+        entry = registry["extensions"][extension_id]
+        stored_hash = entry.get("hash")
+        if stored_hash and stored_hash == extension_hash:
+            return True
+    
+    return False
+
+def check_extension_permission(extension_id, action, extension_hash=None):
+    """Check if extension has permission for action."""
+    registry = load_extension_registry()
+    
+    # Check registry for approval
+    if extension_id in registry.get("extensions", {}):
+        entry = registry["extensions"][extension_id]
+        
+        # If approved, verify hash
+        if entry.get("approved"):
+            stored_hash = entry.get("hash")
+            if stored_hash and extension_hash and stored_hash != extension_hash:
+                logger.warning(f"Extension hash mismatch for {extension_id}")
+                return False
+            
+            return True
+        
+        # Not approved, record hash for future approval
+        if extension_hash and not entry.get("hash"):
+            entry["hash"] = extension_hash
+            save_extension_registry(registry)
+    
+    # Unknown extension - record for approval
+    logger.info(f"Unknown extension detected: {extension_id}")
+    registry["extensions"][extension_id] = {
+        "name": extension_id,
+        "permissions": ["get_vault_info"],
+        "approved": False,
+        "hash": extension_hash,
+        "last_active": time.strftime("%Y-%m-%dT%H:%M:%SZ")
+    }
+    save_extension_registry(registry)
+    return False
+
+def update_extension_activity(extension_id):
+    """Update last activity timestamp for extension."""
+    registry = load_extension_registry()
+    if extension_id in registry.get("extensions", {}):
+        registry["extensions"][extension_id]["last_active"] = time.strftime("%Y-%m-%dT%H:%M:%SZ")
+        save_extension_registry(registry)
+
 # Security constants
 MAX_MESSAGE_SIZE = 1024 * 1024  # 1 MB limit
 MAX_READ_BUFFER = 65536  # 64KB buffer for Firefox port mode
@@ -426,7 +515,19 @@ def main():
                 break
 
             action = message.get("action", "")
-            logger.info(f"Received action: {action}")
+            extension_id = message.get("extension_id", "unknown")
+            extension_hash = message.get("extension_hash")
+            logger.info(f"Received action: {action} from extension: {extension_id}")
+
+            # Check extension permissions
+            if not check_extension_permission(extension_id, action, extension_hash):
+                logger.warning(f"Extension {extension_id} denied permission for action {action}")
+                response = {"success": False, "error": "Extension permission denied"}
+                send_message(response)
+                continue
+
+            # Update activity timestamp
+            update_extension_activity(extension_id)
 
             # Process action with strict validation
             try:

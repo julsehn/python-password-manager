@@ -44,6 +44,13 @@ DEFAULT_IMAGE_AUTH = {
     "salt": None,  # Salt used to derive master key from hotspots
 }
 
+# Grid-based pattern authentication configuration
+# Grid cells are used to discretize clicks into grid indices
+GRID_COLUMNS = 5
+GRID_ROWS = 5
+# Expanded character set with lowercase letters and special characters
+GRID_CELL_CHARS = "0123456789abcdefghijkmnopqrstuvwxyz!@#$%^&*+="
+
 
 class VaultLockedError(Exception):
     """Raised when master password is locked due to too many failed attempts."""
@@ -399,6 +406,41 @@ def derive_key_from_image_auth(hotspots: list[dict], salt_hex: str) -> bytes:
     return key
 
 
+def coords_to_grid_cell(x_pct: float, y_pct: float) -> int:
+    """Convert percentage coordinates to grid cell index.
+    
+    Grid is divided into GRID_COLUMNS x GRID_ROWS cells.
+    Each cell index maps to a character via GRID_CELL_CHARS.
+    
+    Args:
+        x_pct: X coordinate as percentage (0-1 range)
+        y_pct: Y coordinate as percentage (0-1 range)
+    
+    Returns:
+        Grid cell index (0 to GRID_COLUMNS*GRID_ROWS-1)
+    """
+    col = int(x_pct * GRID_COLUMNS)
+    row = int(y_pct * GRID_ROWS)
+    return col + row * GRID_COLUMNS
+
+
+def grid_cell_to_char(cell_index: int) -> str:
+    """Convert grid cell index to character."""
+    return GRID_CELL_CHARS[cell_index % len(GRID_CELL_CHARS)]
+
+
+def generate_grid_password(pattern_cells: list[int]) -> str:
+    """Generate a password string from grid cell indices.
+    
+    Args:
+        pattern_cells: List of grid cell indices
+    
+    Returns:
+        Password string composed of characters representing grid cells
+    """
+    return "".join(grid_cell_to_char(cell) for cell in pattern_cells)
+
+
 def _validate_point(value: float) -> bool:
     """Check if a percentage value is valid (0-100 range)."""
     return 0 <= value <= 100
@@ -445,7 +487,7 @@ def verify_image_auth_pattern(strokes: list[dict], stored_hotspots: list[dict], 
         if not _validate_point(stroke['x_pct']) or not _validate_point(stroke['y_pct']):
             return False
 
-    tolerance_pct = 0.15
+    tolerance_pct = 15.0  # 15% tolerance on 0-100 scale
     distances = []
     
     for stored in stored_hotspots:
@@ -465,6 +507,53 @@ def verify_image_auth_pattern(strokes: list[dict], stored_hotspots: list[dict], 
         if matched_hotspots == len(stored_hotspots):
             return True
     return False
+
+
+def export_grid_html(path: str = "~/.password_manager/grid_layout.html") -> Optional[str]:
+    """Export the grid layout as an HTML file for archiving.
+    
+    Creates a simple HTML table showing the grid character layout.
+    This is useful for backing up or sharing the grid setup.
+    
+    Args:
+        path: Output file path (default: ~/.password_manager/grid_layout.html)
+    
+    Returns:
+        Path to exported HTML file, or None on failure.
+    """
+    try:
+        abs_path = os.path.expanduser(path)
+        html = """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Grid Layout</title>
+<style>
+table { border-collapse: collapse; margin: 10px; }
+td { border: 1px solid #ccc; width: 60px; height: 60px; text-align: center; font-size: 24px; font-family: monospace; }
+</style>
+</head>
+<body>
+<h2>Grid Layout</h2>
+<table>
+"""
+        for row in range(GRID_ROWS):
+            html += "<tr>"
+            for col in range(GRID_COLUMNS):
+                cell_index = col + row * GRID_COLUMNS
+                html += f"<td>{GRID_CELL_CHARS[cell_index]}</td>"
+            html += "</tr>\n"
+        html += """</table>
+<p>Grid: 5x5 = 25 cells</p>
+<p>Characters used: 0123456789abcdefghijkmnopqrstuvwxyz!@#$%^&*+=</p>
+</body>
+</html>"""
+        with open(abs_path, "w", encoding="utf-8") as f:
+            f.write(html)
+        return abs_path
+    except Exception as e:
+        print(f"Error exporting grid HTML: {e}")
+        return None
 
 
 def export_image_auth() -> Optional[str]:
