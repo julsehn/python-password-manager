@@ -159,6 +159,10 @@ pub fn run() {
             // Grid authentication
             get_auth_info,
             set_grid_auth,
+            get_image_grid_auth,
+            set_image_grid_auth,
+            change_vault_to_image_grid,
+            change_vault_to_password,
             unlock_vault_grid,
             change_auth_method,
 
@@ -1074,6 +1078,317 @@ fn get_auth_info() -> VaultInfo {
     }
 }
 
+fn grid_auth_path() -> std::path::PathBuf {
+    std::env::var("HOME")
+        .map(|home| std::path::PathBuf::from(home).join(".password_manager/grid_auth.json"))
+        .unwrap_or_else(|_| std::path::PathBuf::from("./grid_auth.json"))
+}
+
+fn grid_password_from_cells(cells: &[u8], cell_values: &[String]) -> Result<String, String> {
+    let mut seen = std::collections::HashSet::new();
+    if cells.len() < 5 || cells.iter().any(|cell| *cell >= 25 || !seen.insert(*cell)) {
+        return Err("Select at least 5 unique valid grid cells".to_string());
+    }
+    cells
+        .iter()
+        .map(|cell| {
+            cell_values
+                .get(*cell as usize)
+                .map(String::as_str)
+                .ok_or_else(|| "Selected grid cell is invalid".to_string())
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .map(|parts| parts.concat())
+}
+
+fn legacy_image_password(selected: &[u8], stored: &[u8]) -> Result<String, String> {
+    if selected.len() != stored.len() {
+        return Err("Pattern length mismatch".to_string());
+    }
+    if selected
+        .iter()
+        .zip(stored)
+        .any(|(point, saved)| (*point as i16 - *saved as i16).abs() > 15)
+    {
+        return Err("Pattern verification failed".to_string());
+    }
+    Ok(stored
+        .iter()
+        .map(u8::to_string)
+        .collect::<Vec<_>>()
+        .join("-"))
+}
+
+fn validate_image_grid(image_data: &str, cell_values: &[String]) -> Result<(), String> {
+    if !image_data.starts_with("data:image/") || image_data.len() > 20_000_000 {
+        return Err("Invalid image data".to_string());
+    }
+    if cell_values.len() != 25
+        || cell_values.iter().any(|value| !valid_image_grid_fragment(value))
+        || cell_values.iter().collect::<std::collections::HashSet<_>>().len() != 25
+    {
+        return Err("Image grid cells must be valid 2-character legacy or mixed 4-character fragments".to_string());
+    }
+    Ok(())
+}
+
+fn validate_new_image_grid(image_data: &str, cell_values: &[String]) -> Result<(), String> {
+    validate_image_grid(image_data, cell_values)?;
+    if cell_values.iter().any(|value| {
+        value.len() != 4
+            || !value.bytes().any(|byte| byte.is_ascii_uppercase())
+            || !value.bytes().any(|byte| byte.is_ascii_lowercase())
+            || !value.bytes().any(|byte| byte.is_ascii_digit())
+            || !value
+                .bytes()
+                .any(|byte| b"!@#$%^&*()-_=+[]{}".contains(&byte))
+    }) {
+        return Err("Every new grid fragment must contain uppercase, lowercase, a number, and a symbol".to_string());
+    }
+    Ok(())
+}
+
+fn valid_image_grid_fragment(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    if bytes.len() == 2 {
+        return bytes.iter().all(u8::is_ascii_alphanumeric);
+    }
+    if bytes.len() != 4 {
+        return false;
+    }
+    if bytes.iter().all(u8::is_ascii_alphanumeric)
+        && !bytes.iter().any(u8::is_ascii_lowercase)
+    {
+        return true;
+    }
+
+    let has_uppercase = bytes.iter().any(u8::is_ascii_uppercase);
+    let has_lowercase = bytes.iter().any(u8::is_ascii_lowercase);
+    let has_digit = bytes.iter().any(u8::is_ascii_digit);
+    let has_symbol = bytes.iter().any(|byte| b"!@#$%^&*()-_=+[]{}".contains(byte));
+    has_uppercase
+        && has_lowercase
+        && has_digit
+        && has_symbol
+        && bytes.iter().all(|byte| {
+            byte.is_ascii_alphanumeric() || b"!@#$%^&*()-_=+[]{}".contains(byte)
+        })
+}
+
+fn save_image_grid_metadata(image_data: &str, cell_values: &[String]) -> Result<(), String> {
+    validate_image_grid(image_data, cell_values)?;
+    let auth_data = serde_json::json!({
+        "type": "image_grid",
+        "version": 3,
+        "image_data": image_data,
+        "cell_values": cell_values,
+    });
+    let path = grid_auth_path();
+    let directory = path.parent().unwrap_or(std::path::Path::new("."));
+    std::fs::create_dir_all(directory)
+        .map_err(|error| format!("Failed to create grid auth directory: {}", error))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(directory, std::fs::Permissions::from_mode(0o700))
+            .map_err(|error| format!("Failed to secure grid auth directory: {}", error))?;
+    }
+    std::fs::write(&path, auth_data.to_string())
+        .map_err(|error| format!("Failed to write grid auth data: {}", error))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
+            .map_err(|error| format!("Failed to secure grid auth data: {}", error))?;
+    }
+    Ok(())
+}
+
+/// Return the public image and password-fragment grid used by the image auth screen.
+#[tauri::command]
+fn get_image_grid_auth() -> Result<Option<serde_json::Value>, String> {
+    let path = grid_auth_path();
+    if !path.exists() {
+        return Ok(None);
+    }
+    let content = std::fs::read_to_string(path)
+        .map_err(|error| format!("Failed to read grid auth data: {}", error))?;
+    let data: serde_json::Value = serde_json::from_str(&content)
+        .map_err(|error| format!("Failed to parse grid auth data: {}", error))?;
+    Ok(Some(data))
+}
+
+/// Persist the image and generated cell fragments in plaintext for pre-unlock display.
+#[tauri::command]
+fn set_image_grid_auth(image_data: String, cell_values: Vec<String>) -> Result<(), String> {
+    validate_new_image_grid(&image_data, &cell_values)?;
+    save_image_grid_metadata(&image_data, &cell_values)
+}
+
+/// Re-encrypt an existing vault using the selected image-grid fragments.
+#[tauri::command]
+fn change_vault_to_image_grid(
+    current_password: String,
+    selected_cells: Vec<u8>,
+    image_data: String,
+    cell_values: Vec<String>,
+    server_state: tauri::State<'_, Arc<ServerState>>,
+) -> Result<VaultState, String> {
+    validate_new_image_grid(&image_data, &cell_values)?;
+    let new_password = grid_password_from_cells(&selected_cells, &cell_values)?;
+    let vault_path = std::env::var("HOME")
+        .map(|home| format!("{}/.password_manager/vault.json", home))
+        .unwrap_or_else(|_| "./vault.json".to_string());
+    let auth_path = grid_auth_path();
+    let previous_auth = std::fs::read_to_string(&auth_path).ok();
+    let content = std::fs::read_to_string(&vault_path)
+        .map_err(|error| format!("Failed to read encrypted vault: {}", error))?;
+    let old_vault: VaultFile = serde_json::from_str(&content)
+        .map_err(|error| format!("Failed to parse encrypted vault: {}", error))?;
+    let old_salt = security::decode_hex_or_base64(&old_vault.salt, "salt")?;
+    let old_key = security::derive_key_from_password(&current_password, &old_salt)?;
+    let old_nonce = security::decode_hex_or_base64(&old_vault.nonce, "nonce")?;
+    let old_ciphertext = security::decode_hex_or_base64(&old_vault.ciphertext, "ciphertext")?;
+    let plaintext = security::decrypt_aes_gcm(&old_key, &old_nonce, &old_ciphertext)
+        .map_err(|error| format!("Failed to decrypt existing vault: {}", error))?;
+    let vault_data: VaultData = serde_json::from_slice(&plaintext)
+        .map_err(|error| format!("Failed to parse existing vault data: {}", error))?;
+
+    let new_salt = security::generate_salt()
+        .map_err(|error| format!("Failed to generate salt: {}", error))?;
+    let new_key = security::derive_key_from_password(&new_password, &new_salt)?;
+    let new_nonce = security::generate_nonce()
+        .map_err(|error| format!("Failed to generate nonce: {}", error))?;
+    let new_plaintext = serde_json::to_vec(&vault_data)
+        .map_err(|error| format!("Failed to serialize vault data: {}", error))?;
+    let new_ciphertext = security::encrypt_aes_gcm(&new_key, &new_nonce, &new_plaintext)
+        .map_err(|error| format!("Failed to encrypt vault data: {}", error))?;
+    let payload = serde_json::json!({
+        "salt": base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &new_salt),
+        "nonce": base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &new_nonce),
+        "ciphertext": base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &new_ciphertext),
+        "version": "1"
+    });
+
+    let vault_dir = std::path::Path::new(&vault_path)
+        .parent()
+        .unwrap_or(std::path::Path::new("."));
+    std::fs::create_dir_all(vault_dir)
+        .map_err(|error| format!("Failed to create vault directory: {}", error))?;
+    std::fs::write(&vault_path, payload.to_string())
+        .map_err(|error| format!("Failed to save re-encrypted vault: {}", error))?;
+    if let Err(metadata_error) = save_image_grid_metadata(&image_data, &cell_values) {
+        let vault_restore = std::fs::write(&vault_path, content);
+        let auth_restore = match previous_auth {
+            Some(previous) => std::fs::write(&auth_path, previous),
+            None => match std::fs::remove_file(&auth_path) {
+                Ok(()) => Ok(()),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                Err(error) => Err(error),
+            },
+        };
+        if let Err(restore_error) = vault_restore.and(auth_restore) {
+            return Err(format!(
+                "{}; failed to restore prior auth data: {}",
+                metadata_error, restore_error
+            ));
+        }
+        return Err(metadata_error);
+    }
+
+    server_state.set_unlocked(
+        new_password,
+        vault_data.entries.clone(),
+        vault_data.folders.clone(),
+        vault_data.deleted_entries.clone(),
+        vault_data.history.clone(),
+    );
+    let now = chrono::Utc::now().timestamp();
+    Ok(VaultState {
+        is_new: false,
+        entries: vault_data.entries,
+        folders: vault_data.folders,
+        trash: vault_data
+            .deleted_entries
+            .into_iter()
+            .filter(|entry| entry.deleted_at.parse::<i64>().unwrap_or(0) <= now)
+            .collect(),
+        history: vault_data.history,
+    })
+}
+
+/// Re-encrypt an existing vault with a new password and remove image-grid auth.
+#[tauri::command]
+fn change_vault_to_password(
+    current_password: String,
+    new_password: String,
+    server_state: tauri::State<'_, Arc<ServerState>>,
+) -> Result<(), String> {
+    if current_password.is_empty() {
+        return Err("Current password cannot be empty".to_string());
+    }
+    if new_password.len() < 12 {
+        return Err("New password must be at least 12 characters".to_string());
+    }
+
+    let vault_path = std::env::var("HOME")
+        .map(|home| format!("{}/.password_manager/vault.json", home))
+        .unwrap_or_else(|_| "./vault.json".to_string());
+    let auth_path = grid_auth_path();
+    let old_content = std::fs::read_to_string(&vault_path)
+        .map_err(|error| format!("Failed to read encrypted vault: {}", error))?;
+    let old_vault: VaultFile = serde_json::from_str(&old_content)
+        .map_err(|error| format!("Failed to parse encrypted vault: {}", error))?;
+    let old_salt = security::decode_hex_or_base64(&old_vault.salt, "salt")?;
+    let old_key = security::derive_key_from_password(&current_password, &old_salt)?;
+    let old_nonce = security::decode_hex_or_base64(&old_vault.nonce, "nonce")?;
+    let old_ciphertext = security::decode_hex_or_base64(&old_vault.ciphertext, "ciphertext")?;
+    let plaintext = security::decrypt_aes_gcm(&old_key, &old_nonce, &old_ciphertext)
+        .map_err(|error| format!("Failed to decrypt existing vault: {}", error))?;
+    let vault_data: VaultData = serde_json::from_slice(&plaintext)
+        .map_err(|error| format!("Failed to parse existing vault data: {}", error))?;
+
+    let new_salt = security::generate_salt()
+        .map_err(|error| format!("Failed to generate salt: {}", error))?;
+    let new_key = security::derive_key_from_password(&new_password, &new_salt)?;
+    let new_nonce = security::generate_nonce()
+        .map_err(|error| format!("Failed to generate nonce: {}", error))?;
+    let new_plaintext = serde_json::to_vec(&vault_data)
+        .map_err(|error| format!("Failed to serialize vault data: {}", error))?;
+    let new_ciphertext = security::encrypt_aes_gcm(&new_key, &new_nonce, &new_plaintext)
+        .map_err(|error| format!("Failed to encrypt vault data: {}", error))?;
+    let payload = serde_json::json!({
+        "salt": base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &new_salt),
+        "nonce": base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &new_nonce),
+        "ciphertext": base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &new_ciphertext),
+        "version": "1"
+    });
+    std::fs::write(&vault_path, payload.to_string())
+        .map_err(|error| format!("Failed to save re-encrypted vault: {}", error))?;
+
+    if auth_path.exists() {
+        if let Err(error) = std::fs::remove_file(&auth_path) {
+            let restore_result = std::fs::write(&vault_path, old_content);
+            if let Err(restore_error) = restore_result {
+                return Err(format!(
+                    "Failed to remove image authentication: {}; failed to restore vault: {}",
+                    error, restore_error
+                ));
+            }
+            return Err(format!("Failed to remove image authentication: {}", error));
+        }
+    }
+
+    server_state.set_unlocked(
+        new_password,
+        vault_data.entries,
+        vault_data.folders,
+        vault_data.deleted_entries,
+        vault_data.history,
+    );
+    Ok(())
+}
+
 /// Set grid (image) authentication
 /// Stores coordinate pairs for image-based authentication
 #[tauri::command]
@@ -1142,34 +1457,29 @@ fn unlock_vault_grid(
     let grid_auth: serde_json::Value = serde_json::from_str(&content)
         .map_err(|e| format!("Failed to parse grid auth data: {}", e))?;
 
-    // Get stored pattern
-    let stored: Vec<u8> = serde_json::from_value(grid_auth["pattern"].clone())
-        .map_err(|e| format!("Failed to parse stored pattern: {}", e))?;
-
-    // Verify pattern length matches
-    if pattern.len() != stored.len() {
-        return Err("Pattern length mismatch".to_string());
-    }
-
-    // Compare coordinates with tolerance (15% of coordinate range)
-    let tolerance = 15.0;
-
-    for (i, byte) in pattern.iter().enumerate() {
-        let stored_byte = stored[i];
-        let diff = (*byte as i32 - stored_byte as i32).abs();
-        if diff as f64 > tolerance {
-            return Err("Pattern verification failed".to_string());
+    let master_password = if grid_auth.get("type").and_then(serde_json::Value::as_str) == Some("image_grid") {
+        let cell_values: Vec<String> = serde_json::from_value(
+            grid_auth["cell_values"].clone(),
+        )
+        .map_err(|error| format!("Failed to parse image grid: {}", error))?;
+        if cell_values.len() != 25
+            || cell_values
+                .iter()
+                .any(|value| !valid_image_grid_fragment(value))
+            || cell_values.iter().collect::<std::collections::HashSet<_>>().len() != 25
+        {
+            return Err("Stored image grid is invalid".to_string());
         }
-    }
+        grid_password_from_cells(&pattern, &cell_values)?
+    } else {
+        // Legacy image auth stores exact coordinate bytes. Verify approximate clicks,
+        // but derive with the original bytes so tolerated click drift cannot change the key.
+        let stored: Vec<u8> = serde_json::from_value(grid_auth["pattern"].clone())
+            .map_err(|error| format!("Failed to parse stored pattern: {}", error))?;
+        legacy_image_password(&pattern, &stored)?
+    };
 
     println!("Image authentication verified successfully");
-
-    // Now unlock the actual vault
-    // For image auth, we derive the master password from the coordinates
-    let master_password = pattern.iter()
-        .map(|b| format!("{}", b))
-        .collect::<Vec<String>>()
-        .join("-");
 
     unlock_vault(master_password, server_state)
 }
@@ -1285,4 +1595,84 @@ fn import_vault(path: String) -> Result<(), String> {
     std::fs::write(&dest_path, content).map_err(|e| format!("Failed to import: {}", e))?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod image_grid_tests {
+    use super::{
+        grid_password_from_cells, legacy_image_password, validate_image_grid,
+        validate_new_image_grid,
+    };
+
+    fn cell_values() -> Vec<String> {
+        (0..25)
+            .map(|index| format!("{}a1!", char::from(b'A' + index)))
+            .collect()
+    }
+
+    #[test]
+    fn selected_fragments_are_concatenated_in_selection_order() {
+        let values = cell_values();
+        let pattern = vec![4, 2, 8, 1, 6, 0, 3, 5, 7, 9, 10, 11];
+
+        assert_eq!(
+            grid_password_from_cells(&pattern, &values).unwrap(),
+            "Ea1!Ca1!Ia1!Ba1!Ga1!Aa1!Da1!Fa1!Ha1!Ja1!Ka1!La1!"
+        );
+    }
+
+    #[test]
+    fn too_short_or_repeated_patterns_are_rejected() {
+        let values = cell_values();
+
+        assert!(grid_password_from_cells(&[0, 1, 2, 3], &values).is_err());
+        assert!(grid_password_from_cells(&[0, 1, 2, 3, 4], &values).is_ok());
+        assert!(
+            grid_password_from_cells(&[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 10], &values).is_err()
+        );
+    }
+
+    #[test]
+    fn tolerated_legacy_clicks_keep_the_original_vault_password() {
+        let stored = [20, 35, 48, 60, 75, 85];
+        let clicked = [22, 33, 50, 61, 73, 84];
+
+        assert_eq!(
+            legacy_image_password(&clicked, &stored).unwrap(),
+            "20-35-48-60-75-85"
+        );
+        assert!(legacy_image_password(&[0], &stored).is_err());
+    }
+
+    #[test]
+    fn image_grid_metadata_requires_unique_fragments() {
+        let mut values = cell_values();
+        values[1] = values[0].clone();
+
+        assert!(validate_image_grid("data:image/png;base64,AA==", &values).is_err());
+    }
+
+    #[test]
+    fn image_grid_metadata_accepts_legacy_two_character_fragments() {
+        let values: Vec<String> = (0..25).map(|index| format!("{:02}", index)).collect();
+
+        assert!(validate_image_grid("data:image/png;base64,AA==", &values).is_ok());
+    }
+
+    #[test]
+    fn image_grid_metadata_accepts_previous_uppercase_fragments() {
+        let values: Vec<String> = (0..25)
+            .map(|index| format!("{:04X}", index + 100))
+            .collect();
+
+        assert!(validate_image_grid("data:image/png;base64,AA==", &values).is_ok());
+    }
+
+    #[test]
+    fn image_grid_metadata_requires_all_character_classes_in_new_fragments() {
+        let mut values = cell_values();
+        values[0] = "AB12".to_string();
+
+        assert!(validate_new_image_grid("data:image/png;base64,AA==", &values).is_err());
+    }
 }

@@ -3,6 +3,7 @@ import os
 import json
 import base64
 import hashlib
+import math
 import time
 from typing import List, Optional
 import binascii
@@ -443,7 +444,12 @@ def generate_grid_password(pattern_cells: list[int]) -> str:
 
 def _validate_point(value: float) -> bool:
     """Check if a percentage value is valid (0-100 range)."""
-    return 0 <= value <= 100
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and 0 <= value <= 100
+        and math.isfinite(value)
+    )
 
 
 def verify_image_auth_pattern(strokes: list[dict], stored_hotspots: list[dict], salt_hex: str) -> bool:
@@ -465,48 +471,34 @@ def verify_image_auth_pattern(strokes: list[dict], stored_hotspots: list[dict], 
     except (TypeError, ValueError):
         return False
 
-    if len(salt) != 32 or not strokes or not stored_hotspots:
+    if (
+        len(salt) != 32
+        or not isinstance(strokes, list)
+        or not isinstance(stored_hotspots, list)
+        or not strokes
+        or len(strokes) != len(stored_hotspots)
+    ):
         return False
 
-    if len(strokes) < len(stored_hotspots) * 0.5:
-        return False
-    if len(strokes) > len(stored_hotspots) * 3:
-        return False
-
-    # Pre-validate stored hotspots
     for stored in stored_hotspots:
-        if not isinstance(stored.get('x_pct'), (int, float)) or not isinstance(stored.get('y_pct'), (int, float)):
+        if not isinstance(stored, dict):
             return False
-        if not _validate_point(stored['x_pct']) or not _validate_point(stored['y_pct']):
+        if not _validate_point(stored.get('x_pct')) or not _validate_point(stored.get('y_pct')):
             return False
 
-    # Pre-validate strokes
     for stroke in strokes:
-        if not isinstance(stroke.get('x_pct'), (int, float)) or not isinstance(stroke.get('y_pct'), (int, float)):
+        if not isinstance(stroke, dict):
             return False
-        if not _validate_point(stroke['x_pct']) or not _validate_point(stroke['y_pct']):
+        if not _validate_point(stroke.get('x_pct')) or not _validate_point(stroke.get('y_pct')):
             return False
 
     tolerance_pct = 15.0  # 15% tolerance on 0-100 scale
-    distances = []
-    
-    for stored in stored_hotspots:
-        for index, stroke in enumerate(strokes):
-            dx = stroke['x_pct'] - stored['x_pct']
-            dy = stroke['y_pct'] - stored['y_pct']
-            distances.append(((dx * dx + dy * dy) ** 0.5, index))
-
-    distances.sort()
-    matched_strokes = set()
-    matched_hotspots = 0
-    for distance, stroke_index in distances:
-        if distance > tolerance_pct or stroke_index in matched_strokes:
-            continue
-        matched_strokes.add(stroke_index)
-        matched_hotspots += 1
-        if matched_hotspots == len(stored_hotspots):
-            return True
-    return False
+    for stored, stroke in zip(stored_hotspots, strokes):
+        dx = stroke['x_pct'] - stored['x_pct']
+        dy = stroke['y_pct'] - stored['y_pct']
+        if math.hypot(dx, dy) > tolerance_pct:
+            return False
+    return True
 
 
 def export_grid_html(path: str = "~/.password_manager/grid_layout.html") -> Optional[str]:
