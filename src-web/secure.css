@@ -1,6 +1,3 @@
-/* ==========================================================================
-   Generator Screen
-   ========================================================================== */
 .generator-shell {
   min-height: 100vh;
   display: flex;
@@ -98,10 +95,18 @@
   flex: 1;
   overflow-wrap: anywhere;
   color: var(--text-title);
+  cursor: grab;
+  user-select: all;
   font:
     600 1.0625rem "DM Sans",
     sans-serif;
   line-height: 1.45;
+}
+
+.generated-card output:active,
+.generated-card output.is-dragging {
+  cursor: grabbing;
+  opacity: 0.72;
 }
 
 .use-generated {
@@ -353,9 +358,6 @@
   }
 }
 
-/* ==========================================================================
-   Modals & Dialogs
-   ========================================================================== */
 .entry-modal form {
   display: flex;
   flex: 1;
@@ -384,6 +386,29 @@
   color: var(--text-main);
   animation: modalDrawerSlideIn 0.28s cubic-bezier(0.16, 1, 0.3, 1) forwards;
   will-change: transform, opacity;
+}
+
+.image-auth-modal-backdrop {
+  justify-content: stretch;
+  backdrop-filter: none;
+}
+
+.image-auth-modal-backdrop .image-auth-setup-modal,
+.image-auth-modal-backdrop .image-auth-unlock-modal {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  box-shadow: none;
+  animation: none;
+}
+
+.image-auth-modal-backdrop .modal-scroll {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+  align-items: stretch;
+  padding: clamp(16px, 3vw, 40px);
 }
 
 .modal-header {
@@ -893,9 +918,6 @@
   padding: 0 23px;
 }
 
-/* ==========================================================================
-   Lock Screen
-   ========================================================================== */
 .lock-shell {
   min-height: 100vh;
   display: grid;
@@ -1050,9 +1072,6 @@
   border-color: var(--border-card-hover);
 }
 
-/* ==========================================================================
-   Settings Screen & Live Slider
-   ========================================================================== */
 .settings-shell {
   min-height: 100vh;
   display: flex;
@@ -1194,6 +1213,28 @@
   margin-bottom: 8px;
 }
 
+.settings-section > #change-auth-method {
+  margin-top: 14px;
+}
+
+.change-auth-password-fields {
+  display: grid;
+  gap: 10px;
+  padding-top: 8px;
+}
+
+.change-auth-password-fields .helper {
+  margin: 0 0 4px;
+}
+
+.change-auth-password-fields .form-label {
+  margin: 0;
+}
+
+.change-auth-password-fields .form-input {
+  width: 100%;
+}
+
 .setting-action {
   display: inline-flex;
   align-items: center;
@@ -1296,9 +1337,6 @@
   background: var(--bg-active);
 }
 
-/* ==========================================================================
-   Password Strength Meter
-   ========================================================================== */
 .password-strength {
   margin: -6px 0 16px;
   padding: 0 4px;
@@ -1333,23 +1371,29 @@
     background-color 0.35s ease;
 }
 
-.strength-weak {
-  color: #d44a56;
+.strength-label .strength-weak {
+  color: #a32f3b;
+}
+.strength-label .strength-fair {
+  color: #80500d;
+}
+.strength-label .strength-good {
+  color: #155f89;
+}
+.strength-label .strength-strong {
+  color: #176c46;
+}
+
+.strength-fill.strength-weak {
   background: #d44a56;
 }
-
-.strength-fair {
-  color: #c18327;
+.strength-fill.strength-fair {
   background: #c18327;
 }
-
-.strength-good {
-  color: #3387c8;
+.strength-fill.strength-good {
   background: #3387c8;
 }
-
-.strength-strong {
-  color: #2e9b68;
+.strength-fill.strength-strong {
   background: #2e9b68;
 }
 
@@ -1394,20 +1438,210 @@
 }
 
 .image-auth-canvas-area {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+  align-items: center;
   margin-top: 16px;
 }
 
 .image-auth-canvas-area canvas {
   display: block;
-  width: 100%;
-  max-width: 500px;
+  width: auto;
   height: auto;
+  max-width: min(100%, 1100px);
+  max-height: calc(100dvh - 300px);
   border: 1px solid var(--border-card);
-  border-radius: 8px;
+  border-radius: 4px;
+  background: var(--bg-elevated);
+  cursor: crosshair;
+  touch-action: none;
 }
 
 .image-auth-status {
-  margin-top: 8px;
+  margin: 8px 0 0;
   font-size: 0.75rem;
   color: var(--text-muted);
+}
+
+.image-auth-order {
+  margin: 4px 0 0;
+  color: var(--text-main);
+  font-size: 0.875rem;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+  text-align: center;
+}
+
+.image-auth-point-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.unlock-loading {
+  display: grid;
+  width: min(100%, 560px);
+  gap: 8px;
+  margin: 14px auto 4px;
+  color: var(--text-muted);
+  font-size: 0.8125rem;
+  text-align: center;
+}
+
+.unlock-progress-track {
+  position: relative;
+  height: 8px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--border-input);
+}
+
+.unlock-progress-indicator {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 34%;
+  border-radius: inherit;
+  background: var(--accent-primary);
+  animation: unlockProgressSweep 1.25s ease-in-out infinite;
+}
+
+.image-auth-canvas-area canvas.is-unlocking {
+  cursor: progress;
+  pointer-events: none;
+}
+
+@keyframes unlockProgressSweep {
+  from {
+    transform: translateX(-110%);
+  }
+  to {
+    transform: translateX(310%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .unlock-progress-indicator {
+    width: 100%;
+    animation: none;
+    opacity: 0.65;
+  }
+}
+
+@media (max-width: 600px) {
+  .image-auth-modal-backdrop .modal-header {
+    padding: 12px 14px;
+  }
+
+  .image-auth-modal-backdrop .modal-scroll {
+    padding: 14px;
+  }
+
+  .image-auth-canvas-area canvas {
+    max-height: calc(100dvh - 330px);
+  }
+}
+
+.modal-backdrop {
+  -webkit-backdrop-filter: blur(9px) saturate(1.08);
+  backdrop-filter: blur(9px) saturate(1.08);
+}
+
+.entry-modal {
+  animation-timing-function: cubic-bezier(0.2, 1.15, 0.35, 1);
+}
+
+.lock-shell {
+  animation: secureBoundaryIn 520ms cubic-bezier(0.2, 1, 0.3, 1) both;
+}
+
+.lock-card {
+  animation: lockCardEnter 540ms cubic-bezier(0.2, 1.15, 0.35, 1) both;
+}
+
+.shell,
+.generator-shell,
+.settings-shell {
+  animation: secureBoundaryIn 520ms cubic-bezier(0.2, 1, 0.3, 1) both;
+}
+
+.strength-fill {
+  background: linear-gradient(
+    90deg,
+    #df725e 0%,
+    #e5ae52 38%,
+    #60ad83 72%,
+    #3e96ad 100%
+  );
+  background-size: 220% 100%;
+  transition:
+    width 520ms cubic-bezier(0.2, 1.15, 0.35, 1),
+    background-position 520ms cubic-bezier(0.2, 1.15, 0.35, 1);
+}
+
+.strength-fill.strength-weak {
+  background-position: 0% 50%;
+}
+.strength-fill.strength-fair {
+  background-position: 34% 50%;
+}
+.strength-fill.strength-good {
+  background-position: 68% 50%;
+}
+.strength-fill.strength-strong {
+  background-position: 100% 50%;
+}
+
+.inline-password-strength {
+  margin: 10px 0 12px;
+  color: var(--text-muted);
+  font-size: 0.6875rem;
+}
+
+.inline-password-strength[hidden] {
+  display: none;
+}
+
+.inline-password-strength .strength-label {
+  margin-bottom: 5px;
+}
+
+.inline-password-strength .strength-fill {
+  transition:
+    width 520ms cubic-bezier(0.2, 1.15, 0.35, 1),
+    background-position 520ms cubic-bezier(0.2, 1.15, 0.35, 1);
+}
+
+#entry-password-reveal svg {
+  transition: transform 320ms cubic-bezier(0.2, 1.2, 0.35, 1);
+}
+
+#entry-password-reveal:active svg {
+  transform: scale(0.82) rotate(-12deg);
+}
+
+@keyframes secureBoundaryIn {
+  from {
+    opacity: 0;
+    filter: blur(7px);
+    transform: scale(0.992);
+  }
+  to {
+    opacity: 1;
+    filter: blur(0);
+    transform: scale(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lock-shell,
+  .lock-card,
+  .shell,
+  .generator-shell,
+  .settings-shell {
+    animation: none;
+  }
 }

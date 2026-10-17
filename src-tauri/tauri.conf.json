@@ -19,7 +19,12 @@
         "minHeight": 620,
         "resizable": true,
         "fullscreen": false,
-        "decorations": true
+        "decorations": true,
+        "windowEffects": {
+          "effects": ["sidebar", "mica"],
+          "state": "active",
+          "radius": 14
+        }
       }
     ],
     "security": {
@@ -29,7 +34,7 @@
   "bundle": {
     "active": true,
     "targets": "all",
-    "macOS": { 
+    "macOS": {
       "minimumSystemVersion": "11.0",
       "signingIdentity": null
     },

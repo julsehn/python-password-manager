@@ -1,6 +1,3 @@
-// Security module for Tauri IPC communication
-// Provides AES-256-GCM encryption and Argon2id key derivation
-
 use aes_gcm::{aead::{Aead, KeyInit, Payload}, Aes256Gcm, Nonce};
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use rand::{rngs::OsRng, Rng, RngCore};
@@ -31,9 +28,7 @@ pub struct SecureResponse {
     pub error: Option<String>,
 }
 
-// Validate and authenticate incoming secure messages
 pub fn validate_secure_message(message: &SecureMessage) -> Result<(), String> {
-    // Validate the action is allowed
     let allowed_actions = [
         "unlock_vault",
         "save_vault",
@@ -48,7 +43,6 @@ pub fn validate_secure_message(message: &SecureMessage) -> Result<(), String> {
         return Err("Unauthorized action".into());
     }
 
-    // Validate timestamp is not too old (max 5 minutes)
     let current_timestamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
@@ -61,32 +55,27 @@ pub fn validate_secure_message(message: &SecureMessage) -> Result<(), String> {
     Ok(())
 }
 
-// Generate secure token for message authentication
 pub fn generate_secure_token() -> Result<String, String> {
     let mut bytes = [0u8; 32];
     OsRng.fill_bytes(&mut bytes);
     Ok(BASE64.encode(bytes))
 }
 
-// Generate salt for Argon2id key derivation
 pub fn generate_salt() -> Result<Vec<u8>, String> {
     let mut salt = [0u8; 16];
     OsRng.fill_bytes(&mut salt);
     Ok(salt.to_vec())
 }
 
-// Generate random nonce for AES-GCM
 pub fn generate_nonce() -> Result<Vec<u8>, String> {
     let mut nonce = [0u8; 12];
     OsRng.fill_bytes(&mut nonce);
     Ok(nonce.to_vec())
 }
 
-// Derive key from password using Argon2id
 pub fn derive_key_from_password(password: &str, salt: &[u8]) -> Result<Vec<u8>, String> {
     let mut key = [0u8; 32];
 
-    // Use PBKDF2-SHA256 for key derivation
     // Match the Python vault format: 600,000 PBKDF2-SHA256 iterations.
     pbkdf2::pbkdf2_hmac::<Sha256>(
         password.as_bytes(),
@@ -98,15 +87,8 @@ pub fn derive_key_from_password(password: &str, salt: &[u8]) -> Result<Vec<u8>, 
     Ok(key.to_vec())
 }
 
-// Alternative: Derive key using Argon2id (more secure)
 pub fn derive_key_with_argon2(password: &str, salt: &[u8]) -> Result<Vec<u8>, String> {
     let mut key = [0u8; 32];
-
-    // Argon2id parameters
-    // m = 64 * 1024 memory blocks (65536 KB = 64 MiB)
-    // t = 4 passes
-    // p = 1 parallelism degree
-    // y = 1.1 cost factor
 
     let argon2 = argon2::Argon2::default();
     argon2.hash_password_into(password.as_bytes(), salt, &mut key)
@@ -115,7 +97,6 @@ pub fn derive_key_with_argon2(password: &str, salt: &[u8]) -> Result<Vec<u8>, St
     Ok(key.to_vec())
 }
 
-// Encrypt data using AES-256-GCM
 pub fn encrypt_aes_gcm(key: &[u8], nonce: &[u8], plaintext: &[u8]) -> Result<Vec<u8>, String> {
     let cipher = Aes256Gcm::new_from_slice(key).map_err(|e| {
         format!("Failed to initialize cipher: {}", e)
@@ -127,7 +108,6 @@ pub fn encrypt_aes_gcm(key: &[u8], nonce: &[u8], plaintext: &[u8]) -> Result<Vec
     ).map_err(|e| format!("Encryption failed: {}", e))
 }
 
-// Decrypt data using AES-256-GCM
 pub fn decrypt_aes_gcm(key: &[u8], nonce: &[u8], ciphertext: &[u8]) -> Result<Vec<u8>, String> {
     let cipher = Aes256Gcm::new_from_slice(key).map_err(|e| {
         format!("Failed to initialize cipher: {}", e)
@@ -137,13 +117,11 @@ pub fn decrypt_aes_gcm(key: &[u8], nonce: &[u8], ciphertext: &[u8]) -> Result<Ve
         Nonce::from_slice(nonce),
         Payload { msg: ciphertext, aad: ASSOCIATED_DATA },
     ).map_err(|e| {
-        // VerifyIntegrityError means wrong password/key
         format!("Decryption failed - invalid password: {}", e)
     })
 
 }
 
-// Generate cryptographically secure random password
 pub fn generate_password(
     length: u32,
     uppercase: bool,
@@ -165,13 +143,11 @@ pub fn generate_password(
         password.push(*charset_vec.choose(&mut OsRng).unwrap());
     }
 
-    // Shuffle the password
     let mut password_chars: Vec<_> = password.chars().collect();
     password_chars.shuffle(&mut OsRng);
     password_chars.into_iter().collect()
 }
 
-// Generate a Diceware-style passphrase
 pub fn generate_passphrase(
     word_count: u32,
     separator: String,
@@ -180,7 +156,6 @@ pub fn generate_passphrase(
     remove_accents: bool,
     language: String,
 ) -> String {
-    // Word lists by language
     let words: Vec<&str> = match language.as_str() {
         "ca" | "catalan" | "catal" => vec![
             "nubol", "ri", "llum", "bosc", "mar", "lluna", "vent", "foc", "cami", "estrella"
@@ -236,7 +211,7 @@ pub fn generate_passphrase(
 
     passphrase.join(&separator)
 }
-// Generate a unique username
+
 pub fn generate_username(
     first_name: Option<String>,
     last_name: Option<String>,
@@ -263,7 +238,6 @@ pub fn generate_username(
     username
 }
 
-// Validate password strength
 pub fn validate_password_strength(password: &str) -> PasswordStrength {
     let mut score = 0;
 

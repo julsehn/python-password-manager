@@ -19,15 +19,6 @@ cleanup_project_app() {
     fi
 }
 
-# Don't cleanup native messaging host - it's started separately and should persist
-# cleanup_native_host() {
-#     local host_pid
-#     host_pid="$(pgrep -f "caixa_forta_native.py" 2>/dev/null || true)"
-#     if [[ -n "$host_pid" ]]; then
-#         kill $host_pid 2>/dev/null || true
-#     fi
-# }
-
 VAULT_PATH="$HOME/.password_manager/vault.json"
 if [[ -f "$VAULT_PATH" ]]; then
     echo ""
@@ -45,7 +36,6 @@ fi
 
 cleanup_project_vite
 cleanup_project_app
-# trap cleanup_project_vite cleanup_project_app EXIT
 
 # Remove generated frontend state so the launcher always uses the current source.
 rm -rf "$PROJECT_DIR/dist" "$PROJECT_DIR/node_modules/.vite"

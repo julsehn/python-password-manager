@@ -1,5 +1,3 @@
-// Vault operations module for Tauri
-
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

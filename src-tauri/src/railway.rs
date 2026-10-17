@@ -1,6 +1,3 @@
-// Railway sync module for Tauri
-// Uses reqwest HTTP client to interact with Railway FastAPI backend
-
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 
@@ -40,14 +37,12 @@ struct VaultResponse {
     updated_at: String,
 }
 
-/// Upload vault to Railway
 pub async fn upload_vault(
     _master_password: String,
     config: &SyncConfig,
 ) -> Result<SyncResponse, String> {
     println!("Uploading vault to Railway: {}", config.vault_id);
 
-    // Validate configuration
     if config.railway_url.is_empty() {
         return Err("Railway URL is not configured".to_string());
     }
@@ -58,39 +53,31 @@ pub async fn upload_vault(
         return Err("Railway token is not configured".to_string());
     }
 
-    // Create HTTP client
     let client = Client::builder()
         .timeout(std::time::Duration::from_secs(30))
         .build()
         .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
 
-    // Get vault file path
     let home = std::env::var("HOME").ok();
     let vault_path = home
         .as_ref()
         .map(|h| format!("{}/.password_manager/vault.json", h))
         .unwrap_or_else(|| "./vault.json".to_string());
 
-    // Check if vault file exists
     if !std::path::Path::new(&vault_path).exists() {
         return Err("Vault file not found. Create a vault first.".to_string());
     }
 
-    // Read vault file
     let content = std::fs::read_to_string(&vault_path)
         .map_err(|e| format!("Failed to read vault file: {}", e))?;
 
-    // Encrypt vault (placeholder - in production this would use the master password)
-    // For now, we just pass the plaintext - this needs to be fixed
     let encrypted_blob = content.clone();
 
-    // Prepare upload payload
     let payload = VaultBlob {
         blob: encrypted_blob,
-        expected_version: None, // First upload, no version check
+        expected_version: None,
     };
 
-    // Upload to Railway
     let response = client
         .put(format!("{}/v1/vaults/{}", config.railway_url, config.vault_id))
         .json(&payload)
@@ -119,14 +106,12 @@ pub async fn upload_vault(
     })
 }
 
-/// Download vault from Railway
 pub async fn download_vault(
     _master_password: String,
     config: &SyncConfig,
 ) -> Result<String, String> {
     println!("Downloading vault from Railway: {}", config.vault_id);
 
-    // Validate configuration
     if config.railway_url.is_empty() {
         return Err("Railway URL is not configured".to_string());
     }
@@ -137,13 +122,11 @@ pub async fn download_vault(
         return Err("Railway token is not configured".to_string());
     }
 
-    // Create HTTP client
     let client = Client::builder()
         .timeout(std::time::Duration::from_secs(30))
         .build()
         .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
 
-    // Download vault from Railway
     let response = client
         .get(format!("{}/v1/vaults/{}", config.railway_url, config.vault_id))
         .header("Authorization", format!("Bearer {}", config.token))
@@ -162,29 +145,24 @@ pub async fn download_vault(
         .await
         .map_err(|e| format!("Failed to parse response: {}", e))?;
 
-    // Save encrypted blob to vault file
     let home = std::env::var("HOME").ok();
     let vault_path = home
         .as_ref()
         .map(|h| format!("{}/.password_manager/vault.json", h))
         .unwrap_or_else(|| "./vault.json".to_string());
 
-    // Save the blob as a temporary file for now
-    // In production, this would decrypt the vault using master_password
     std::fs::write(&vault_path, vault_response.blob.clone())
         .map_err(|e| format!("Failed to write vault file: {}", e))?;
 
     Ok(vault_response.blob)
 }
 
-/// Register a new vault on Railway
 pub async fn register_vault(
     _master_password: String,
     config: &SyncConfig,
 ) -> Result<SyncResponse, String> {
     println!("Registering new vault on Railway: {}", config.vault_id);
 
-    // Validate configuration
     if config.railway_url.is_empty() {
         return Err("Railway URL is not configured".to_string());
     }
@@ -195,20 +173,17 @@ pub async fn register_vault(
         return Err("Railway token is not configured".to_string());
     }
 
-    // Create HTTP client
     let client = Client::builder()
         .timeout(std::time::Duration::from_secs(30))
         .build()
         .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
 
-    // Prepare registration payload
     let payload = VaultRegistration {
         vault_id: config.vault_id.clone(),
         token: config.token.clone(),
-        blob: String::new(), // Empty vault on first registration
+        blob: String::new(),
     };
 
-    // Register vault
     let response = client
         .post(format!("{}/v1/vaults", config.railway_url))
         .json(&payload)
@@ -236,14 +211,12 @@ pub async fn register_vault(
     })
 }
 
-/// Delete vault from Railway
 pub async fn delete_vault(
     _master_password: String,
     config: &SyncConfig,
 ) -> Result<bool, String> {
     println!("Deleting vault from Railway: {}", config.vault_id);
 
-    // Validate configuration
     if config.railway_url.is_empty() {
         return Err("Railway URL is not configured".to_string());
     }
@@ -254,13 +227,11 @@ pub async fn delete_vault(
         return Err("Railway token is not configured".to_string());
     }
 
-    // Create HTTP client
     let client = Client::builder()
         .timeout(std::time::Duration::from_secs(30))
         .build()
         .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
 
-    // Delete vault
     let response = client
         .delete(format!("{}/v1/vaults/{}", config.railway_url, config.vault_id))
         .header("Authorization", format!("Bearer {}", config.token))
@@ -279,7 +250,6 @@ pub async fn delete_vault(
     }
 }
 
-/// Check health of Railway backend
 pub async fn check_health(railway_url: &str) -> Result<bool, String> {
     let client = Client::builder()
         .timeout(std::time::Duration::from_secs(10))
@@ -294,8 +264,6 @@ pub async fn check_health(railway_url: &str) -> Result<bool, String> {
 
     Ok(response.status().is_success())
 }
-
-/// Auth functions for official cloud
 
 #[derive(Debug, Serialize, Deserialize)]
 struct UserAuthRequest {
@@ -312,7 +280,6 @@ struct UserAuthResponse {
     token_type: String,
 }
 
-/// Authenticate user with official cloud
 pub async fn auth_user(username: &str, password: &str) -> Result<String, String> {
     let client = Client::builder()
         .timeout(std::time::Duration::from_secs(30))
@@ -346,7 +313,6 @@ pub async fn auth_user(username: &str, password: &str) -> Result<String, String>
     Ok(auth_response.access_token)
 }
 
-/// Register new user with official cloud
 pub async fn register_user(username: &str, password: &str) -> Result<bool, String> {
     let client = Client::builder()
         .timeout(std::time::Duration::from_secs(30))
@@ -369,7 +335,6 @@ pub async fn register_user(username: &str, password: &str) -> Result<bool, Strin
     match response.status() {
         reqwest::StatusCode::CREATED | reqwest::StatusCode::OK => Ok(true),
         reqwest::StatusCode::CONFLICT => {
-            // User already exists
             println!("User {} already exists", username);
             Ok(false)
         }

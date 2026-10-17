@@ -9,7 +9,7 @@ import json
 import base64
 from typing import Optional, List
 
-from PyQt6.QtCore import Qt, QPointF
+from PyQt6.QtCore import Qt, QPointF, QRectF, pyqtSignal
 from PyQt6.QtGui import QPainter, QColor, QPen, QBrush, QPixmap, QMouseEvent
 from PyQt6.QtWidgets import (
     QDialog,
@@ -35,6 +35,8 @@ from src.storage import (
 class ImageCanvas(QWidget):
     """Widget that displays an image and captures click coordinates."""
 
+    pointsChanged = pyqtSignal()
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setMinimumSize(400, 300)
@@ -54,6 +56,17 @@ class ImageCanvas(QWidget):
         self.original_image_pixmap = self.image_pixmap
         self.click_points = []
         self._redraw()
+        self.pointsChanged.emit()
+
+    def set_image_data(self, image_data: bytes) -> bool:
+        """Load an image from encoded file data."""
+        pixmap = QPixmap()
+        if not pixmap.loadFromData(image_data):
+            return False
+        self.image_pixmap = pixmap
+        self.original_image_pixmap = pixmap
+        self.clear_points()
+        return True
 
     def set_points(self, points: List[QPointF]):
         """Set the click points."""
@@ -64,6 +77,14 @@ class ImageCanvas(QWidget):
         """Clear all click points."""
         self.click_points = []
         self._redraw()
+        self.pointsChanged.emit()
+
+    def remove_last_point(self):
+        """Remove the most recently selected point."""
+        if self.click_points:
+            self.click_points.pop()
+            self._redraw()
+            self.pointsChanged.emit()
 
     def get_points(self) -> List[QPointF]:
         """Return the current click points."""
@@ -72,23 +93,13 @@ class ImageCanvas(QWidget):
     def mousePressEvent(self, event):
         """Capture mouse click position and convert to percentages."""
         if event.button() == Qt.MouseButton.LeftButton:
-            self._mouse_down = True
-            pos = event.pos()
-            # Convert to percentages (0-100) based on widget size
-            pct_x = (pos.x() / self.width()) * 100.0
-            pct_y = (pos.y() / self.height()) * 100.0
-            self.click_points.append(QPointF(pct_x, pct_y))
-            self._redraw()
+            self._append_point(event.pos())
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event):
         """Capture drawing movement."""
         if self._mouse_down and self.is_drawing:
-            pos = event.pos()
-            pct_x = (pos.x() / self.width()) * 100.0
-            pct_y = (pos.y() / self.height()) * 100.0
-            self.click_points.append(QPointF(pct_x, pct_y))
-            self._redraw()
+            self._append_point(event.pos())
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event):
@@ -107,26 +118,49 @@ class ImageCanvas(QWidget):
             painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "Cap imatge carregada")
             return
 
-        # Draw the image scaled to fit
-        scaled_pixmap = self.image_pixmap.scaled(
-            self.width(),
-            self.height() - 80,
-            Qt.AspectRatioMode.KeepAspectRatio,
-            Qt.TransformationMode.SmoothTransformation
-        )
-        painter.drawPixmap(0, 0, scaled_pixmap)
+        scaled_pixmap, offset_x, offset_y = self._scaled_image()
+        painter.drawPixmap(offset_x, offset_y, scaled_pixmap)
 
-        # Draw click points as colored dots
-        for point in self.click_points:
-            # Scale point coordinates to match image scaling
-            scaled_x = point.x() * scaled_pixmap.width() / self.width()
-            scaled_y = point.y() * scaled_pixmap.height() / self.height()
-            radius = 8
+        for index, point in enumerate(self.click_points, start=1):
+            scaled_x = offset_x + point.x() * scaled_pixmap.width() / 100
+            scaled_y = offset_y + point.y() * scaled_pixmap.height() / 100
+            radius = 12
             painter.setPen(QPen(QColor("#3b82f6"), 2))
             painter.setBrush(QColor("#3b82f6"))
             painter.drawEllipse(int(scaled_x - radius), int(scaled_y - radius), 2 * radius, 2 * radius)
+            painter.setPen(QColor("#ffffff"))
+            painter.drawText(
+                QRectF(scaled_x - radius, scaled_y - radius, 2 * radius, 2 * radius),
+                Qt.AlignmentFlag.AlignCenter,
+                str(index),
+            )
 
         painter.end()
+
+    def _scaled_image(self):
+        scaled_pixmap = self.image_pixmap.scaled(
+            self.size(),
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
+        )
+        offset_x = (self.width() - scaled_pixmap.width()) // 2
+        offset_y = (self.height() - scaled_pixmap.height()) // 2
+        return scaled_pixmap, offset_x, offset_y
+
+    def _append_point(self, pos):
+        if self.image_pixmap is None:
+            return
+        scaled_pixmap, offset_x, offset_y = self._scaled_image()
+        image_x = pos.x() - offset_x
+        image_y = pos.y() - offset_y
+        if not (0 <= image_x <= scaled_pixmap.width() and 0 <= image_y <= scaled_pixmap.height()):
+            return
+        self.click_points.append(QPointF(
+            image_x * 100 / scaled_pixmap.width(),
+            image_y * 100 / scaled_pixmap.height(),
+        ))
+        self._redraw()
+        self.pointsChanged.emit()
 
     def _redraw(self):
         """Redraw the widget."""
@@ -143,7 +177,7 @@ class ImageAuthSetupDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("Configurar autenticació amb imatge")
         self.setModal(True)
-        self.setFixedSize(700, 650)
+        self.setWindowState(Qt.WindowState.WindowFullScreen)
 
         self.pattern_points = []
         self.image_path = None
@@ -175,18 +209,27 @@ class ImageAuthSetupDialog(QDialog):
 
         # Canvas area
         self.canvas = ImageCanvas(self)
-        layout.addWidget(self.canvas)
+        self.canvas.pointsChanged.connect(self._update_point_order)
+        layout.addWidget(self.canvas, stretch=1)
 
         # Point count indicator
-        self.point_count_label = QLabel("Punts seleccionats: 0")
-        self.point_count_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        layout.addWidget(self.point_count_label)
+        self.point_order_label = QLabel("Ordre dels punts: cap")
+        self.point_order_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(self.point_order_label)
 
         # Buttons
         btn_layout = QHBoxLayout()
         self.cancel_btn = QPushButton("Cancel·la")
         self.cancel_btn.clicked.connect(self.reject)
         btn_layout.addWidget(self.cancel_btn)
+
+        self.back_btn = QPushButton("← Enrere")
+        self.back_btn.clicked.connect(self.canvas.remove_last_point)
+        btn_layout.addWidget(self.back_btn)
+
+        self.erase_btn = QPushButton("Esborra selecció")
+        self.erase_btn.clicked.connect(self.canvas.clear_points)
+        btn_layout.addWidget(self.erase_btn)
 
         self.finish_btn = QPushButton("✅ Finalitzar configuració")
         self.finish_btn.setStyleSheet("""
@@ -233,12 +276,22 @@ class ImageAuthSetupDialog(QDialog):
             )
             return
 
+        if self.canvas.image_pixmap is None or not self.image_path:
+            QMessageBox.warning(self, "Error", "Puja una imatge abans de desar el patró.")
+            return
+
         # Save pattern with image path and points
         import secrets
         salt = secrets.token_bytes(32)
+        try:
+            with open(self.image_path, "rb") as image_file:
+                image_b64 = base64.b64encode(image_file.read()).decode("ascii")
+        except OSError as error:
+            QMessageBox.warning(self, "Error", f"No es pot llegir la imatge.\n\n{error}")
+            return
 
         save_image_auth(
-            image_b64="image_auth",
+            image_b64=image_b64,
             hotspots=[
                 {"x_pct": float(p.x()), "y_pct": float(p.y())}
                 for p in points
@@ -254,6 +307,11 @@ class ImageAuthSetupDialog(QDialog):
         )
         self.accept()
 
+    def _update_point_order(self):
+        count = len(self.canvas.get_points())
+        order = " → ".join(str(index) for index in range(1, count + 1)) or "cap"
+        self.point_order_label.setText(f"Punts seleccionats: {count} | Ordre: {order}")
+
 
 class ImageAuthLoginDialog(QDialog):
     """Dialog for logging in with image-based authentication.
@@ -265,7 +323,7 @@ class ImageAuthLoginDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("Entrar a la caixa forta")
         self.setModal(True)
-        self.setFixedSize(700, 650)
+        self.setWindowState(Qt.WindowState.WindowFullScreen)
 
         self.current_points = []
         self.auth_data = load_image_auth()
@@ -298,10 +356,18 @@ class ImageAuthLoginDialog(QDialog):
 
         # Canvas
         self.canvas = ImageCanvas(self)
-        layout.addWidget(self.canvas)
+        layout.addWidget(self.canvas, stretch=1)
+        image_b64 = self.auth_data.get("image_b64")
+        if image_b64:
+            try:
+                image_data = base64.b64decode(image_b64, validate=True)
+                self.canvas.set_image_data(image_data)
+            except (ValueError, TypeError):
+                pass
+        self.canvas.pointsChanged.connect(self._update_point_order)
 
         # Status
-        self.status_label = QLabel("Selecciona els punts del teu patró")
+        self.status_label = QLabel("Selecciona els punts del teu patró | Ordre: cap")
         self.status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.status_label.setStyleSheet("color: #68706c; font-size: 12px;")
         layout.addWidget(self.status_label)
@@ -311,6 +377,10 @@ class ImageAuthLoginDialog(QDialog):
         self.cancel_btn = QPushButton("Cancel·la")
         self.cancel_btn.clicked.connect(self.reject)
         btn_layout.addWidget(self.cancel_btn)
+
+        self.erase_btn = QPushButton("Esborra selecció")
+        self.erase_btn.clicked.connect(self.canvas.clear_points)
+        btn_layout.addWidget(self.erase_btn)
 
         self.verify_btn = QPushButton("🔍 Verificar")
         self.verify_btn.setStyleSheet("""
@@ -328,6 +398,11 @@ class ImageAuthLoginDialog(QDialog):
         layout.addLayout(btn_layout)
 
         self.setLayout(layout)
+
+    def _update_point_order(self):
+        count = len(self.canvas.get_points())
+        order = " → ".join(str(index) for index in range(1, count + 1)) or "cap"
+        self.status_label.setText(f"Punts seleccionats: {count} | Ordre: {order}")
 
     def _on_verify(self):
         """Verify the user's pattern against the stored template."""

@@ -336,7 +336,6 @@ async fn handle_connection(mut stream: TcpStream, peer_addr: SocketAddr, state: 
         }
     }
 
-    // CORS preflight
     if method == "OPTIONS" {
         let res = build_response(204, "text/plain", "", &origin);
         let _ = stream.write_all(res.as_bytes()).await;
@@ -348,7 +347,6 @@ async fn handle_connection(mut stream: TcpStream, peer_addr: SocketAddr, state: 
         None => (full_path, ""),
     };
 
-    // Routing
     let (status, res_body) = route_request(method, path, query, &headers, &body, &state);
 
     let res = build_response(status, "application/json", &res_body, &origin);
@@ -363,7 +361,6 @@ fn route_request(
     body: &str,
     state: &Arc<ServerState>,
 ) -> (u16, String) {
-    // Health & Ping
     if (path == "/health" || path == "/api/v1/health") && method == "GET" {
         let unlocked = state.is_unlocked();
         let count = state.get_entry_count();
@@ -377,7 +374,6 @@ fn route_request(
         return (200, res.to_string());
     }
 
-    // Vault info
     if path == "/api/v1/vault-info" && method == "GET" {
         let unlocked = state.is_unlocked();
         let count = state.get_entry_count();
@@ -458,7 +454,6 @@ fn route_request(
         );
     }
 
-    // Unlock
     if path == "/api/v1/unlock" && method == "POST" {
         let parsed: serde_json::Value = match serde_json::from_str(body) {
             Ok(v) => v,
@@ -500,7 +495,6 @@ fn route_request(
         }
     }
 
-    // Lock
     if path == "/api/v1/lock" && method == "POST" {
         state.lock();
         return (
@@ -509,7 +503,6 @@ fn route_request(
         );
     }
 
-    // Generate Password
     if path == "/api/v1/generate-password" && method == "POST" {
         let parsed: serde_json::Value = serde_json::from_str(body).unwrap_or_default();
         let length = parsed["length"].as_u64().unwrap_or(16) as u32;
@@ -527,7 +520,6 @@ fn route_request(
         return (200, res.to_string());
     }
 
-    // Check auth for protected endpoints (credentials query & save)
     let is_authenticated = check_request_auth(headers, state);
     if !is_authenticated {
         return (
@@ -536,7 +528,6 @@ fn route_request(
         );
     }
 
-    // Get credentials
     if path == "/api/v1/credentials" && method == "GET" {
         let unlocked = state.unlocked_data.lock().unwrap();
         let vault = match &*unlocked {
@@ -589,7 +580,6 @@ fn route_request(
         return (200, res.to_string());
     }
 
-    // Save credential
     if path == "/api/v1/credentials" && method == "POST" {
         // Acquire write semaphore to prevent concurrent file operations
         let _semaphore = state.write_semaphore.clone();

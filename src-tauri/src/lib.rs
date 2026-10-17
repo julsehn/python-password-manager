@@ -9,6 +9,7 @@ pub mod server;
 
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
+use tauri::{Emitter, Manager};
 use railway::{SyncConfig, SyncResponse};
 use server::ServerState;
 
@@ -101,13 +102,27 @@ struct VaultFile {
     version: String,
 }
 
-/// Initialize the application
 pub fn run() {
     let server_state = Arc::new(ServerState::new());
     let server_state_clone = Arc::clone(&server_state);
     let server_state_setup = Arc::clone(&server_state);
 
     tauri::Builder::default()
+        .plugin(
+            tauri_plugin_global_shortcut::Builder::new()
+                .with_shortcut("CommandOrControl+Shift+P")
+                .expect("failed to register command palette shortcut")
+                .with_handler(|app, _shortcut, event| {
+                    if event.state() == tauri_plugin_global_shortcut::ShortcutState::Pressed {
+                        if let Some(window) = app.get_webview_window("main") {
+                            let _ = window.show();
+                            let _ = window.set_focus();
+                        }
+                        let _ = app.emit("palette-shortcut", ());
+                    }
+                })
+                .build(),
+        )
         .setup(move |app| {
             println!("Caixa Forta Tauri application started");
             server_state_setup.set_app_handle(app.handle().clone());
@@ -119,50 +134,40 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            // Core vault operations
             init_empty_vault,
             unlock_vault,
             save_vault,
             reset_vault,
             lock_vault,
+            hide_main_window,
             get_vault_info,
             get_vault_entries,
-
-            // Password generator
             generate_password,
             generate_passphrase,
             generate_username,
-
-            // Entry management
             create_entry,
             update_entry,
             trash_entry,
             restore_entry,
             delete_entry_permanently,
-
-            // Folder management
             create_folder,
             update_folder,
             delete_folder,
-
-            // Railway sync
             sync_upload_vault,
             sync_download_vault,
             register_vault,
             delete_vault,
             set_railway_sync_config,
             get_railway_sync_config,
-
-            // Master password management
             change_master_password,
-
-            // Grid authentication
             get_auth_info,
             set_grid_auth,
+            get_image_grid_auth,
+            set_image_grid_auth,
+            change_vault_to_image_grid,
+            change_vault_to_password,
             unlock_vault_grid,
             change_auth_method,
-
-            // Export/Import
             export_vault,
             import_vault,
         ])
@@ -172,9 +177,6 @@ pub fn run() {
         .expect("error while running tauri application");
 }
 
-/// Create an empty vault with the given master password
-/// This is used for image-based authentication where the master password
-/// is derived from the image pattern coordinates.
 #[tauri::command]
 async fn init_empty_vault(
     password: String,
@@ -182,7 +184,6 @@ async fn init_empty_vault(
 ) -> Result<(), String> {
     println!("Creating new vault...");
 
-    // Create empty vault data
     let vault_data = VaultData {
         entries: vec![],
         folders: vec![],
@@ -190,18 +191,15 @@ async fn init_empty_vault(
         history: vec![],
     };
 
-    // Serialize and encrypt
     let data = serde_json::to_string(&vault_data)
         .map_err(|e| format!("Failed to serialize: {}", e))?;
 
     let salt = security::generate_salt()
         .map_err(|e| format!("Failed to generate salt: {}", e))?;
 
-    // Derive key from master password using PBKDF2
     let key = security::derive_key_from_password(&password, &salt)
         .map_err(|e| format!("Failed to derive key: {}", e))?;
 
-    // Encrypt the data
     let nonce_bytes = security::generate_nonce()
         .map_err(|e| format!("Failed to generate nonce: {}", e))?;
     let ciphertext = security::encrypt_aes_gcm(&key, &nonce_bytes, &data.into_bytes())
@@ -218,7 +216,6 @@ async fn init_empty_vault(
     std::fs::create_dir_all(&vault_dir)
         .map_err(|e| format!("Failed to create vault directory: {}", e))?;
 
-    // Write encrypted vault
     let payload = serde_json::json!({
         "salt": base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &salt),
         "nonce": base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &nonce_bytes),
@@ -231,7 +228,6 @@ async fn init_empty_vault(
 
     println!("Vault created successfully");
 
-    // Unlock the vault
     server_state.set_unlocked(password, vec![], vec![], vec![], vec![]);
 
     Ok(())
@@ -252,10 +248,6 @@ fn reset_vault() -> Result<(), String> {
     Ok(())
 }
 
-/// Unlock the vault with master password
-/// This command decrypts the vault and returns the vault data
-/// If the vault doesn't exist, returns an empty vault state (first use)
-/// If the password is incorrect, decryption will fail with an error
 #[tauri::command]
 fn unlock_vault(
     master_password: String,
@@ -268,11 +260,9 @@ fn unlock_vault(
         .map(|h| format!("{}/.password_manager/vault.json", h))
         .unwrap_or_else(|| "./vault.json".to_string());
 
-    // Check if vault file exists
     if !std::path::Path::new(&vault_path).exists() {
         println!("Vault file not found, creating new empty vault state");
         server_state.set_unlocked(master_password, vec![], vec![], vec![], vec![]);
-        // Return empty vault state for first use
         return Ok(VaultState {
             is_new: true,
             entries: vec![],
@@ -282,27 +272,22 @@ fn unlock_vault(
         });
     }
 
-    // Load and decrypt vault
     let content = std::fs::read_to_string(&vault_path)
         .map_err(|e| format!("Failed to read vault file: {}", e))?;
 
-    // Parse vault structure
     let vault_file: VaultFile = serde_json::from_str(&content).map_err(|e| {
         format!("Failed to parse vault structure: {}", e)
     })?;
 
-    // Derive key from master password
     let salt_bytes = security::decode_hex_or_base64(&vault_file.salt, "salt")?;
     let key = security::derive_key_from_password(&master_password, &salt_bytes).map_err(|e| {
         format!("Failed to derive key from password: {}", e)
     })?;
 
-    // Decrypt the ciphertext
     let nonce_bytes = security::decode_hex_or_base64(&vault_file.nonce, "nonce")?;
     let ciphertext_bytes = security::decode_hex_or_base64(&vault_file.ciphertext, "ciphertext")?;
 
     let decrypted = security::decrypt_aes_gcm(&key, &nonce_bytes, &ciphertext_bytes).map_err(|e| {
-        // Decryption failed - likely wrong password or corrupted vault
         format!("Failed to decrypt vault: {}. Please verify your master password is correct.", e)
     })?;
 
@@ -333,8 +318,6 @@ fn unlock_vault(
     })
 }
 
-/// Save the encrypted vault
-/// This command saves the vault locally and optionally syncs with Railway
 #[tauri::command]
 async fn save_vault(
     master_password: String,
@@ -348,7 +331,6 @@ async fn save_vault(
 ) -> Result<Option<String>, String> {
     println!("Saving vault...");
 
-    // Serialize entries to filter out deleted ones
     let active_entries: Vec<_> = entries
         .into_iter()
         .filter(|e| e.deleted_at.is_none())
@@ -361,22 +343,18 @@ async fn save_vault(
         history,
     };
 
-    // Validate master password is not empty
     if master_password.is_empty() {
         return Err("Master password cannot be empty".to_string());
     }
 
-    // Serialize and encrypt
     let data = serde_json::to_string(&vault_data).map_err(|e| format!("Failed to serialize: {}", e))?;
 
     let salt = security::generate_salt().map_err(|e| format!("Failed to generate salt: {}", e))?;
 
-    // Derive key from master password using PBKDF2
     let key = security::derive_key_from_password(&master_password, &salt).map_err(|e| {
         format!("Failed to derive key: {}", e)
     })?;
 
-    // Encrypt the data
     let nonce_bytes = security::generate_nonce().map_err(|e| format!("Failed to generate nonce: {}", e))?;
     let ciphertext = security::encrypt_aes_gcm(&key, &nonce_bytes, &data.into_bytes()).map_err(|e| {
         format!("Failed to encrypt: {}", e)
@@ -411,7 +389,6 @@ async fn save_vault(
 
     println!("Vault saved successfully");
 
-    // Optionally sync with Railway
     if sync_to_railway {
         let config = sync_state.lock().map_err(|_| "Failed to access Railway configuration".to_string())?.clone();
 
@@ -428,7 +405,6 @@ async fn save_vault(
     Ok(None)
 }
 
-/// Lock the vault (clear sensitive data from memory)
 #[tauri::command]
 fn lock_vault(server_state: tauri::State<'_, Arc<ServerState>>) -> Result<(), String> {
     println!("Vault locked");
@@ -436,7 +412,11 @@ fn lock_vault(server_state: tauri::State<'_, Arc<ServerState>>) -> Result<(), St
     Ok(())
 }
 
-/// Get vault information
+#[tauri::command]
+fn hide_main_window(window: tauri::WebviewWindow) -> Result<(), String> {
+    window.hide().map_err(|error| error.to_string())
+}
+
 #[tauri::command]
 fn get_vault_info() -> VaultInfo {
     let vault_path = std::env::var("HOME")
@@ -454,7 +434,6 @@ fn get_vault_info() -> VaultInfo {
     }
 }
 
-/// Get current vault entries when already unlocked
 #[tauri::command]
 fn get_vault_entries(
     server_state: tauri::State<'_, Arc<ServerState>>,
@@ -480,7 +459,6 @@ fn get_vault_entries(
     }
 }
 
-/// Generate a secure random password
 #[tauri::command]
 fn generate_password(
     length: u32,
@@ -494,7 +472,6 @@ fn generate_password(
     security::generate_password(length, uppercase, lowercase, numbers, symbols)
 }
 
-/// Generate a passphrase using Diceware-style word list
 #[tauri::command]
 fn generate_passphrase(
     word_count: u32,
@@ -509,7 +486,6 @@ fn generate_passphrase(
     security::generate_passphrase(word_count, separator, uppercase_words, include_number, remove_accents, language)
 }
 
-/// Generate a unique username
 #[tauri::command]
 fn generate_username(
     first_name: Option<String>,
@@ -521,7 +497,6 @@ fn generate_username(
     security::generate_username(first_name, last_name, include_numbers)
 }
 
-/// Create a new entry in the vault
 #[tauri::command]
 fn create_entry(
     site: String,
@@ -546,7 +521,6 @@ fn create_entry(
         deleted_at: None,
     };
 
-    // Save to vault (entry will be saved in update_entry after this)
     let vault_path = std::env::var("HOME")
         .ok()
         .map(|h| format!("{}/.password_manager/vault.json", h))
@@ -571,7 +545,6 @@ fn create_entry(
     Ok(entry)
 }
 
-/// Update an existing entry
 #[tauri::command]
 fn update_entry(
     entry_id: String,
@@ -599,7 +572,6 @@ fn update_entry(
 
     let entry_index = vault_data.entries.iter().position(|e| e.id == entry_id).ok_or("Entry not found")?;
 
-    // Update the existing entry in place, preserving id and created_at
     vault_data.entries[entry_index] = Entry {
         id: entry_id.clone(),
         site,
@@ -620,7 +592,6 @@ fn update_entry(
     Ok(updated_entry)
 }
 
-/// Move entry to trash
 #[tauri::command]
 fn trash_entry(entry_id: String) -> Result<(), String> {
     println!("Trashing entry: {}", entry_id);
@@ -662,7 +633,6 @@ fn trash_entry(entry_id: String) -> Result<(), String> {
     Ok(())
 }
 
-/// Restore entry from trash
 #[tauri::command]
 fn restore_entry(entry_id: String) -> Result<(), String> {
     println!("Restoring entry: {}", entry_id);
@@ -702,7 +672,6 @@ fn restore_entry(entry_id: String) -> Result<(), String> {
     Ok(())
 }
 
-/// Permanently delete an entry
 #[tauri::command]
 fn delete_entry_permanently(entry_id: String) -> Result<(), String> {
     println!("Permanently deleting entry: {}", entry_id);
@@ -726,13 +695,11 @@ fn delete_entry_permanently(entry_id: String) -> Result<(), String> {
     let data = serde_json::to_string(&vault_data).map_err(|e| format!("Failed to serialize: {}", e))?;
     std::fs::write(&vault_path, data).map_err(|e| format!("Failed to write vault: {}", e))?;
 
-    // Also delete the file on disk
     std::fs::remove_file(&vault_path).ok();
 
     Ok(())
 }
 
-/// Create a new folder
 #[tauri::command]
 fn create_folder(name: String, icon: String, color: String) -> Result<Folder, String> {
     println!("Creating folder: {}", name);
@@ -761,7 +728,6 @@ fn create_folder(name: String, icon: String, color: String) -> Result<Folder, St
     Ok(folder)
 }
 
-/// Update a folder
 #[tauri::command]
 fn update_folder(folder_id: String, name: String, icon: String, color: String) -> Result<Folder, String> {
     println!("Updating folder: {}", folder_id);
@@ -793,7 +759,6 @@ fn update_folder(folder_id: String, name: String, icon: String, color: String) -
     Ok(vault_data.folders[index].clone())
 }
 
-/// Delete a folder
 #[tauri::command]
 fn delete_folder(folder_id: String) -> Result<(), String> {
     println!("Deleting folder: {}", folder_id);
@@ -818,7 +783,6 @@ fn delete_folder(folder_id: String) -> Result<(), String> {
     Ok(())
 }
 
-/// Sync vault to Railway
 #[tauri::command]
 async fn sync_upload_vault(
     master_password: String,
@@ -826,7 +790,6 @@ async fn sync_upload_vault(
 ) -> Result<SyncResponse, String> {
     println!("Syncing vault to Railway: {}", config.vault_id);
 
-    // Read and decrypt vault from local storage
     let vault_path = std::env::var("HOME")
         .ok()
         .map(|h| format!("{}/.password_manager/vault.json", h))
@@ -844,7 +807,6 @@ async fn sync_upload_vault(
         format!("Failed to parse vault structure: {}", e)
     })?;
 
-    // Decrypt with master password
     let salt_bytes = security::decode_hex_or_base64(&vault_file.salt, "salt")?;
     let key = security::derive_key_from_password(&master_password, &salt_bytes).map_err(|e| {
         format!("Failed to derive key: {}", e)
@@ -859,24 +821,19 @@ async fn sync_upload_vault(
 
     let _data: String = String::from_utf8_lossy(&decrypted).into();
 
-    // Upload encrypted vault to Railway (re-encrypt with new key)
     railway::upload_vault(master_password, &config).await
 }
 
-/// Download vault from Railway
 #[tauri::command]
 async fn sync_download_vault(master_password: String, config: SyncConfig) -> Result<String, String> {
     println!("Downloading vault from Railway: {}", config.vault_id);
 
-    // Download encrypted vault from Railway
     let blob = railway::download_vault(master_password.clone(), &config).await?;
 
-    // Parse the downloaded blob (should be encrypted vault)
     let vault_file: VaultFile = serde_json::from_str(&blob).map_err(|e| {
         format!("Failed to parse downloaded vault structure: {}", e)
     })?;
 
-    // Derive key from master password
     let salt_bytes = security::decode_hex_or_base64(&vault_file.salt, "salt")?;
     let key = security::derive_key_from_password(&master_password, &salt_bytes).map_err(|e| {
         format!("Failed to derive key: {}", e)
@@ -885,7 +842,6 @@ async fn sync_download_vault(master_password: String, config: SyncConfig) -> Res
     let nonce_bytes = security::decode_hex_or_base64(&vault_file.nonce, "nonce")?;
     let ciphertext_bytes = security::decode_hex_or_base64(&vault_file.ciphertext, "ciphertext")?;
 
-    // Decrypt vault
     let decrypted = security::decrypt_aes_gcm(&key, &nonce_bytes, &ciphertext_bytes).map_err(|e| {
         format!("Failed to decrypt downloaded vault: {}. Please verify your master password.", e)
     })?;
@@ -895,7 +851,6 @@ async fn sync_download_vault(master_password: String, config: SyncConfig) -> Res
         format!("Failed to parse decrypted vault: {}", e)
     })?;
 
-    // Return the VaultData as JSON
     Ok(serde_json::to_string(&vault_data).map_err(|e| format!("Failed to serialize vault: {}", e))? )
 }
 
@@ -904,7 +859,6 @@ async fn register_vault(master_password: String, config: SyncConfig) -> Result<S
     railway::register_vault(master_password, &config).await
 }
 
-/// Authenticate user with official cloud
 #[tauri::command]
 #[allow(dead_code)]
 async fn auth_official_cloud(username: String, password: String) -> Result<String, String> {
@@ -916,7 +870,6 @@ async fn delete_vault(master_password: String, config: SyncConfig) -> Result<boo
     railway::delete_vault(master_password, &config).await
 }
 
-/// Configure Railway sync settings
 #[tauri::command]
 fn set_railway_sync_config(
     railway_url: String,
@@ -936,7 +889,6 @@ fn set_railway_sync_config(
         return Err("Token cannot be empty".to_string());
     }
 
-    // Update the SyncConfig in app state
     let mut config = state.lock().map_err(|_| "Failed to access Railway configuration".to_string())?;
     *config = SyncConfig {
         railway_url,
@@ -948,7 +900,6 @@ fn set_railway_sync_config(
     Ok(())
 }
 
-/// Get current Railway sync configuration
 #[tauri::command]
 fn get_railway_sync_config(state: tauri::State<'_, Mutex<SyncConfig>>) -> Result<SyncConfig, String> {
     state.lock()
@@ -956,9 +907,6 @@ fn get_railway_sync_config(state: tauri::State<'_, Mutex<SyncConfig>>) -> Result
         .map_err(|_| "Failed to access Railway configuration".to_string())
 }
 
-/// Change master password
-/// This command re-encrypts the vault with a new master password
-/// It first decrypts the vault with the current password, then re-encrypts with the new password
 #[tauri::command]
 fn change_master_password(
     current_password: String,
@@ -971,7 +919,6 @@ fn change_master_password(
     println!("Changing master password...");
     let _ = (&entries, &folders, &trash, &history);
 
-    // Validate passwords
     if current_password.is_empty() {
         return Err("Current password cannot be empty".to_string());
     }
@@ -982,7 +929,6 @@ fn change_master_password(
         return Err("New password must be at least 12 characters".to_string());
     }
 
-    // Read existing encrypted vault
     let vault_path = std::env::var("HOME")
         .ok()
         .map(|h| format!("{}/.password_manager/vault.json", h))
@@ -992,7 +938,6 @@ fn change_master_password(
         return Err("No existing vault found. Create a vault first with your master password.".to_string());
     }
 
-    // Decrypt existing vault with current password
     let content = std::fs::read_to_string(&vault_path).map_err(|e| {
         format!("Failed to read encrypted vault file: {}", e)
     })?;
@@ -1020,7 +965,6 @@ fn change_master_password(
 
     println!("Successfully decrypted vault with current password");
 
-    // Create new VaultData with preserved entries, folders, trash, history
     let new_vault_data = VaultData {
         entries: old_vault_data.entries,
         folders: old_vault_data.folders,
@@ -1028,7 +972,6 @@ fn change_master_password(
         history: old_vault_data.history,
     };
 
-    // Re-encrypt with new password, generating new salt and nonce
     let new_salt = security::generate_salt().map_err(|e| format!("Failed to generate salt: {}", e))?;
     let new_key = security::derive_key_from_password(&new_password, &new_salt).map_err(|e| {
         format!("Failed to derive key with new password: {}", e)
@@ -1055,8 +998,6 @@ fn change_master_password(
     Ok(())
 }
 
-/// Get authentication method information
-/// Returns whether grid auth is configured or not
 #[tauri::command]
 fn get_auth_info() -> VaultInfo {
     let grid_auth_path = std::env::var("HOME")
@@ -1074,30 +1015,335 @@ fn get_auth_info() -> VaultInfo {
     }
 }
 
-/// Set grid (image) authentication
-/// Stores coordinate pairs for image-based authentication
+fn grid_auth_path() -> std::path::PathBuf {
+    std::env::var("HOME")
+        .map(|home| std::path::PathBuf::from(home).join(".password_manager/grid_auth.json"))
+        .unwrap_or_else(|_| std::path::PathBuf::from("./grid_auth.json"))
+}
+
+fn grid_password_from_cells(cells: &[u8], cell_values: &[String]) -> Result<String, String> {
+    let mut seen = std::collections::HashSet::new();
+    if cells.len() < 5 || cells.iter().any(|cell| *cell >= 25 || !seen.insert(*cell)) {
+        return Err("Select at least 5 unique valid grid cells".to_string());
+    }
+    cells
+        .iter()
+        .map(|cell| {
+            cell_values
+                .get(*cell as usize)
+                .map(String::as_str)
+                .ok_or_else(|| "Selected grid cell is invalid".to_string())
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .map(|parts| parts.concat())
+}
+
+fn legacy_image_password(selected: &[u8], stored: &[u8]) -> Result<String, String> {
+    if selected.len() != stored.len() {
+        return Err("Pattern length mismatch".to_string());
+    }
+    if selected
+        .iter()
+        .zip(stored)
+        .any(|(point, saved)| (*point as i16 - *saved as i16).abs() > 15)
+    {
+        return Err("Pattern verification failed".to_string());
+    }
+    Ok(stored
+        .iter()
+        .map(u8::to_string)
+        .collect::<Vec<_>>()
+        .join("-"))
+}
+
+fn validate_image_grid(image_data: &str, cell_values: &[String]) -> Result<(), String> {
+    if !image_data.starts_with("data:image/") || image_data.len() > 20_000_000 {
+        return Err("Invalid image data".to_string());
+    }
+    if cell_values.len() != 25
+        || cell_values.iter().any(|value| !valid_image_grid_fragment(value))
+        || cell_values.iter().collect::<std::collections::HashSet<_>>().len() != 25
+    {
+        return Err("Image grid cells must be valid 2-character legacy or mixed 4-character fragments".to_string());
+    }
+    Ok(())
+}
+
+fn validate_new_image_grid(image_data: &str, cell_values: &[String]) -> Result<(), String> {
+    validate_image_grid(image_data, cell_values)?;
+    if cell_values.iter().any(|value| {
+        value.len() != 4
+            || !value.bytes().any(|byte| byte.is_ascii_uppercase())
+            || !value.bytes().any(|byte| byte.is_ascii_lowercase())
+            || !value.bytes().any(|byte| byte.is_ascii_digit())
+            || !value
+                .bytes()
+                .any(|byte| b"!@#$%^&*()-_=+[]{}".contains(&byte))
+    }) {
+        return Err("Every new grid fragment must contain uppercase, lowercase, a number, and a symbol".to_string());
+    }
+    Ok(())
+}
+
+fn valid_image_grid_fragment(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    if bytes.len() == 2 {
+        return bytes.iter().all(u8::is_ascii_alphanumeric);
+    }
+    if bytes.len() != 4 {
+        return false;
+    }
+    if bytes.iter().all(u8::is_ascii_alphanumeric)
+        && !bytes.iter().any(u8::is_ascii_lowercase)
+    {
+        return true;
+    }
+
+    let has_uppercase = bytes.iter().any(u8::is_ascii_uppercase);
+    let has_lowercase = bytes.iter().any(u8::is_ascii_lowercase);
+    let has_digit = bytes.iter().any(u8::is_ascii_digit);
+    let has_symbol = bytes.iter().any(|byte| b"!@#$%^&*()-_=+[]{}".contains(byte));
+    has_uppercase
+        && has_lowercase
+        && has_digit
+        && has_symbol
+        && bytes.iter().all(|byte| {
+            byte.is_ascii_alphanumeric() || b"!@#$%^&*()-_=+[]{}".contains(byte)
+        })
+}
+
+fn save_image_grid_metadata(image_data: &str, cell_values: &[String]) -> Result<(), String> {
+    validate_image_grid(image_data, cell_values)?;
+    let auth_data = serde_json::json!({
+        "type": "image_grid",
+        "version": 3,
+        "image_data": image_data,
+        "cell_values": cell_values,
+    });
+    let path = grid_auth_path();
+    let directory = path.parent().unwrap_or(std::path::Path::new("."));
+    std::fs::create_dir_all(directory)
+        .map_err(|error| format!("Failed to create grid auth directory: {}", error))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(directory, std::fs::Permissions::from_mode(0o700))
+            .map_err(|error| format!("Failed to secure grid auth directory: {}", error))?;
+    }
+    std::fs::write(&path, auth_data.to_string())
+        .map_err(|error| format!("Failed to write grid auth data: {}", error))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
+            .map_err(|error| format!("Failed to secure grid auth data: {}", error))?;
+    }
+    Ok(())
+}
+
+/// Return the public image and password-fragment grid used by the image auth screen.
+#[tauri::command]
+fn get_image_grid_auth() -> Result<Option<serde_json::Value>, String> {
+    let path = grid_auth_path();
+    if !path.exists() {
+        return Ok(None);
+    }
+    let content = std::fs::read_to_string(path)
+        .map_err(|error| format!("Failed to read grid auth data: {}", error))?;
+    let data: serde_json::Value = serde_json::from_str(&content)
+        .map_err(|error| format!("Failed to parse grid auth data: {}", error))?;
+    Ok(Some(data))
+}
+
+/// Persist the image and generated cell fragments in plaintext for pre-unlock display.
+#[tauri::command]
+fn set_image_grid_auth(image_data: String, cell_values: Vec<String>) -> Result<(), String> {
+    validate_new_image_grid(&image_data, &cell_values)?;
+    save_image_grid_metadata(&image_data, &cell_values)
+}
+
+/// Re-encrypt an existing vault using the selected image-grid fragments.
+#[tauri::command]
+fn change_vault_to_image_grid(
+    current_password: String,
+    selected_cells: Vec<u8>,
+    image_data: String,
+    cell_values: Vec<String>,
+    server_state: tauri::State<'_, Arc<ServerState>>,
+) -> Result<VaultState, String> {
+    validate_new_image_grid(&image_data, &cell_values)?;
+    let new_password = grid_password_from_cells(&selected_cells, &cell_values)?;
+    let vault_path = std::env::var("HOME")
+        .map(|home| format!("{}/.password_manager/vault.json", home))
+        .unwrap_or_else(|_| "./vault.json".to_string());
+    let auth_path = grid_auth_path();
+    let previous_auth = std::fs::read_to_string(&auth_path).ok();
+    let content = std::fs::read_to_string(&vault_path)
+        .map_err(|error| format!("Failed to read encrypted vault: {}", error))?;
+    let old_vault: VaultFile = serde_json::from_str(&content)
+        .map_err(|error| format!("Failed to parse encrypted vault: {}", error))?;
+    let old_salt = security::decode_hex_or_base64(&old_vault.salt, "salt")?;
+    let old_key = security::derive_key_from_password(&current_password, &old_salt)?;
+    let old_nonce = security::decode_hex_or_base64(&old_vault.nonce, "nonce")?;
+    let old_ciphertext = security::decode_hex_or_base64(&old_vault.ciphertext, "ciphertext")?;
+    let plaintext = security::decrypt_aes_gcm(&old_key, &old_nonce, &old_ciphertext)
+        .map_err(|error| format!("Failed to decrypt existing vault: {}", error))?;
+    let vault_data: VaultData = serde_json::from_slice(&plaintext)
+        .map_err(|error| format!("Failed to parse existing vault data: {}", error))?;
+
+    let new_salt = security::generate_salt()
+        .map_err(|error| format!("Failed to generate salt: {}", error))?;
+    let new_key = security::derive_key_from_password(&new_password, &new_salt)?;
+    let new_nonce = security::generate_nonce()
+        .map_err(|error| format!("Failed to generate nonce: {}", error))?;
+    let new_plaintext = serde_json::to_vec(&vault_data)
+        .map_err(|error| format!("Failed to serialize vault data: {}", error))?;
+    let new_ciphertext = security::encrypt_aes_gcm(&new_key, &new_nonce, &new_plaintext)
+        .map_err(|error| format!("Failed to encrypt vault data: {}", error))?;
+    let payload = serde_json::json!({
+        "salt": base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &new_salt),
+        "nonce": base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &new_nonce),
+        "ciphertext": base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &new_ciphertext),
+        "version": "1"
+    });
+
+    let vault_dir = std::path::Path::new(&vault_path)
+        .parent()
+        .unwrap_or(std::path::Path::new("."));
+    std::fs::create_dir_all(vault_dir)
+        .map_err(|error| format!("Failed to create vault directory: {}", error))?;
+    std::fs::write(&vault_path, payload.to_string())
+        .map_err(|error| format!("Failed to save re-encrypted vault: {}", error))?;
+    if let Err(metadata_error) = save_image_grid_metadata(&image_data, &cell_values) {
+        let vault_restore = std::fs::write(&vault_path, content);
+        let auth_restore = match previous_auth {
+            Some(previous) => std::fs::write(&auth_path, previous),
+            None => match std::fs::remove_file(&auth_path) {
+                Ok(()) => Ok(()),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                Err(error) => Err(error),
+            },
+        };
+        if let Err(restore_error) = vault_restore.and(auth_restore) {
+            return Err(format!(
+                "{}; failed to restore prior auth data: {}",
+                metadata_error, restore_error
+            ));
+        }
+        return Err(metadata_error);
+    }
+
+    server_state.set_unlocked(
+        new_password,
+        vault_data.entries.clone(),
+        vault_data.folders.clone(),
+        vault_data.deleted_entries.clone(),
+        vault_data.history.clone(),
+    );
+    let now = chrono::Utc::now().timestamp();
+    Ok(VaultState {
+        is_new: false,
+        entries: vault_data.entries,
+        folders: vault_data.folders,
+        trash: vault_data
+            .deleted_entries
+            .into_iter()
+            .filter(|entry| entry.deleted_at.parse::<i64>().unwrap_or(0) <= now)
+            .collect(),
+        history: vault_data.history,
+    })
+}
+
+/// Re-encrypt an existing vault with a new password and remove image-grid auth.
+#[tauri::command]
+fn change_vault_to_password(
+    current_password: String,
+    new_password: String,
+    server_state: tauri::State<'_, Arc<ServerState>>,
+) -> Result<(), String> {
+    if current_password.is_empty() {
+        return Err("Current password cannot be empty".to_string());
+    }
+    if new_password.len() < 12 {
+        return Err("New password must be at least 12 characters".to_string());
+    }
+
+    let vault_path = std::env::var("HOME")
+        .map(|home| format!("{}/.password_manager/vault.json", home))
+        .unwrap_or_else(|_| "./vault.json".to_string());
+    let auth_path = grid_auth_path();
+    let old_content = std::fs::read_to_string(&vault_path)
+        .map_err(|error| format!("Failed to read encrypted vault: {}", error))?;
+    let old_vault: VaultFile = serde_json::from_str(&old_content)
+        .map_err(|error| format!("Failed to parse encrypted vault: {}", error))?;
+    let old_salt = security::decode_hex_or_base64(&old_vault.salt, "salt")?;
+    let old_key = security::derive_key_from_password(&current_password, &old_salt)?;
+    let old_nonce = security::decode_hex_or_base64(&old_vault.nonce, "nonce")?;
+    let old_ciphertext = security::decode_hex_or_base64(&old_vault.ciphertext, "ciphertext")?;
+    let plaintext = security::decrypt_aes_gcm(&old_key, &old_nonce, &old_ciphertext)
+        .map_err(|error| format!("Failed to decrypt existing vault: {}", error))?;
+    let vault_data: VaultData = serde_json::from_slice(&plaintext)
+        .map_err(|error| format!("Failed to parse existing vault data: {}", error))?;
+
+    let new_salt = security::generate_salt()
+        .map_err(|error| format!("Failed to generate salt: {}", error))?;
+    let new_key = security::derive_key_from_password(&new_password, &new_salt)?;
+    let new_nonce = security::generate_nonce()
+        .map_err(|error| format!("Failed to generate nonce: {}", error))?;
+    let new_plaintext = serde_json::to_vec(&vault_data)
+        .map_err(|error| format!("Failed to serialize vault data: {}", error))?;
+    let new_ciphertext = security::encrypt_aes_gcm(&new_key, &new_nonce, &new_plaintext)
+        .map_err(|error| format!("Failed to encrypt vault data: {}", error))?;
+    let payload = serde_json::json!({
+        "salt": base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &new_salt),
+        "nonce": base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &new_nonce),
+        "ciphertext": base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &new_ciphertext),
+        "version": "1"
+    });
+    std::fs::write(&vault_path, payload.to_string())
+        .map_err(|error| format!("Failed to save re-encrypted vault: {}", error))?;
+
+    if auth_path.exists() {
+        if let Err(error) = std::fs::remove_file(&auth_path) {
+            let restore_result = std::fs::write(&vault_path, old_content);
+            if let Err(restore_error) = restore_result {
+                return Err(format!(
+                    "Failed to remove image authentication: {}; failed to restore vault: {}",
+                    error, restore_error
+                ));
+            }
+            return Err(format!("Failed to remove image authentication: {}", error));
+        }
+    }
+
+    server_state.set_unlocked(
+        new_password,
+        vault_data.entries,
+        vault_data.folders,
+        vault_data.deleted_entries,
+        vault_data.history,
+    );
+    Ok(())
+}
+
 #[tauri::command]
 fn set_grid_auth(pattern: Vec<u8>, _master_password: Option<String>) -> Result<(), String> {
     println!("Setting up image authentication...");
 
-    // For image auth, pattern contains coordinate pairs (x,y) as bytes (0-100 each)
-    // Must have even number of bytes (pairs)
     if pattern.len() < 4 || pattern.len() % 2 != 0 {
         return Err("Image pattern must have at least 2 coordinate pairs".to_string());
     }
 
-    // Validate coordinate values (0-100 for percentage coordinates)
     for byte in &pattern {
         if *byte > 100 {
             return Err("Invalid coordinate value (must be 0-100)".to_string());
         }
     }
 
-    // Store pattern directly (no encryption)
     let grid_auth_data = serde_json::json!({
         "pattern": pattern.to_vec(),
         "type": "image",
-        "grid_size": 4, // Kept for backward compatibility
+        "grid_size": 4,
         "version": "2"
     });
 
@@ -1118,8 +1364,6 @@ fn set_grid_auth(pattern: Vec<u8>, _master_password: Option<String>) -> Result<(
     Ok(())
 }
 
-/// Unlock vault using grid (image) authentication
-/// Compares provided coordinates with stored coordinates using tolerance
 #[tauri::command]
 fn unlock_vault_grid(
     pattern: Vec<u8>,
@@ -1142,39 +1386,33 @@ fn unlock_vault_grid(
     let grid_auth: serde_json::Value = serde_json::from_str(&content)
         .map_err(|e| format!("Failed to parse grid auth data: {}", e))?;
 
-    // Get stored pattern
-    let stored: Vec<u8> = serde_json::from_value(grid_auth["pattern"].clone())
-        .map_err(|e| format!("Failed to parse stored pattern: {}", e))?;
-
-    // Verify pattern length matches
-    if pattern.len() != stored.len() {
-        return Err("Pattern length mismatch".to_string());
-    }
-
-    // Compare coordinates with tolerance (15% of coordinate range)
-    let tolerance = 15.0;
-
-    for (i, byte) in pattern.iter().enumerate() {
-        let stored_byte = stored[i];
-        let diff = (*byte as i32 - stored_byte as i32).abs();
-        if diff as f64 > tolerance {
-            return Err("Pattern verification failed".to_string());
+    let master_password = if grid_auth.get("type").and_then(serde_json::Value::as_str) == Some("image_grid") {
+        let cell_values: Vec<String> = serde_json::from_value(
+            grid_auth["cell_values"].clone(),
+        )
+        .map_err(|error| format!("Failed to parse image grid: {}", error))?;
+        if cell_values.len() != 25
+            || cell_values
+                .iter()
+                .any(|value| !valid_image_grid_fragment(value))
+            || cell_values.iter().collect::<std::collections::HashSet<_>>().len() != 25
+        {
+            return Err("Stored image grid is invalid".to_string());
         }
-    }
+        grid_password_from_cells(&pattern, &cell_values)?
+    } else {
+        // Legacy image auth stores exact coordinate bytes. Verify approximate clicks,
+        // but derive with the original bytes so tolerated click drift cannot change the key.
+        let stored: Vec<u8> = serde_json::from_value(grid_auth["pattern"].clone())
+            .map_err(|error| format!("Failed to parse stored pattern: {}", error))?;
+        legacy_image_password(&pattern, &stored)?
+    };
 
     println!("Image authentication verified successfully");
-
-    // Now unlock the actual vault
-    // For image auth, we derive the master password from the coordinates
-    let master_password = pattern.iter()
-        .map(|b| format!("{}", b))
-        .collect::<Vec<String>>()
-        .join("-");
 
     unlock_vault(master_password, server_state)
 }
 
-/// Change authentication method
 #[tauri::command]
 fn change_auth_method(
     current_password: String,
@@ -1183,13 +1421,11 @@ fn change_auth_method(
 ) -> Result<(), String> {
     println!("Changing authentication method...");
 
-    // Validate new auth type
     match new_auth_type.as_str() {
         "password" | "grid" | "image" => {}
         _ => return Err("Invalid authentication method type".to_string()),
     }
 
-    // Verify current password
     let vault_path = std::env::var("HOME")
         .ok()
         .map(|h| format!("{}/.password_manager/vault.json", h))
@@ -1199,7 +1435,6 @@ fn change_auth_method(
         return Err("No existing vault found".to_string());
     }
 
-    // Check current auth method
     let grid_auth_path = std::env::var("HOME")
         .ok()
         .map(|h| format!("{}/.password_manager/grid_auth.json", h))
@@ -1207,7 +1442,6 @@ fn change_auth_method(
 
     let has_grid_auth = std::path::Path::new(&grid_auth_path).exists();
 
-    // Verify current password by attempting to unlock
     let content = std::fs::read_to_string(&vault_path)
         .map_err(|e| format!("Failed to read vault: {}", e))?;
 
@@ -1224,7 +1458,6 @@ fn change_auth_method(
     let _decrypted = security::decrypt_aes_gcm(&key, &nonce_bytes, &ciphertext_bytes)
         .map_err(|e| format!("Failed to verify current password: {}. Please verify your current master password is correct.", e))?;
 
-    // If changing to grid/image auth, set up grid auth
     if new_auth_type == "grid" || new_auth_type == "image" {
         if grid_pattern.is_none() {
             return Err("Grid pattern required for grid/image authentication".to_string());
@@ -1234,7 +1467,6 @@ fn change_auth_method(
         set_grid_auth(pattern, None)?;
     }
 
-    // If changing to password auth, delete grid auth
     if new_auth_type == "password" {
         if has_grid_auth {
             std::fs::remove_file(&grid_auth_path).ok();
@@ -1245,12 +1477,10 @@ fn change_auth_method(
     Ok(())
 }
 
-/// Export vault to JSON file
 #[tauri::command]
 fn export_vault(path: String) -> Result<(), String> {
     println!("Exporting vault to: {}", path);
 
-    // Warning: This exports unencrypted data - user should manually encrypt
     let vault_path = std::env::var("HOME")
         .ok()
         .map(|h| format!("{}/.password_manager/vault.json", h))
@@ -1265,7 +1495,6 @@ fn export_vault(path: String) -> Result<(), String> {
     Ok(())
 }
 
-/// Import vault from JSON file
 #[tauri::command]
 fn import_vault(path: String) -> Result<(), String> {
     println!("Importing vault from: {}", path);
@@ -1285,4 +1514,84 @@ fn import_vault(path: String) -> Result<(), String> {
     std::fs::write(&dest_path, content).map_err(|e| format!("Failed to import: {}", e))?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod image_grid_tests {
+    use super::{
+        grid_password_from_cells, legacy_image_password, validate_image_grid,
+        validate_new_image_grid,
+    };
+
+    fn cell_values() -> Vec<String> {
+        (0..25)
+            .map(|index| format!("{}a1!", char::from(b'A' + index)))
+            .collect()
+    }
+
+    #[test]
+    fn selected_fragments_are_concatenated_in_selection_order() {
+        let values = cell_values();
+        let pattern = vec![4, 2, 8, 1, 6, 0, 3, 5, 7, 9, 10, 11];
+
+        assert_eq!(
+            grid_password_from_cells(&pattern, &values).unwrap(),
+            "Ea1!Ca1!Ia1!Ba1!Ga1!Aa1!Da1!Fa1!Ha1!Ja1!Ka1!La1!"
+        );
+    }
+
+    #[test]
+    fn too_short_or_repeated_patterns_are_rejected() {
+        let values = cell_values();
+
+        assert!(grid_password_from_cells(&[0, 1, 2, 3], &values).is_err());
+        assert!(grid_password_from_cells(&[0, 1, 2, 3, 4], &values).is_ok());
+        assert!(
+            grid_password_from_cells(&[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 10], &values).is_err()
+        );
+    }
+
+    #[test]
+    fn tolerated_legacy_clicks_keep_the_original_vault_password() {
+        let stored = [20, 35, 48, 60, 75, 85];
+        let clicked = [22, 33, 50, 61, 73, 84];
+
+        assert_eq!(
+            legacy_image_password(&clicked, &stored).unwrap(),
+            "20-35-48-60-75-85"
+        );
+        assert!(legacy_image_password(&[0], &stored).is_err());
+    }
+
+    #[test]
+    fn image_grid_metadata_requires_unique_fragments() {
+        let mut values = cell_values();
+        values[1] = values[0].clone();
+
+        assert!(validate_image_grid("data:image/png;base64,AA==", &values).is_err());
+    }
+
+    #[test]
+    fn image_grid_metadata_accepts_legacy_two_character_fragments() {
+        let values: Vec<String> = (0..25).map(|index| format!("{:02}", index)).collect();
+
+        assert!(validate_image_grid("data:image/png;base64,AA==", &values).is_ok());
+    }
+
+    #[test]
+    fn image_grid_metadata_accepts_previous_uppercase_fragments() {
+        let values: Vec<String> = (0..25)
+            .map(|index| format!("{:04X}", index + 100))
+            .collect();
+
+        assert!(validate_image_grid("data:image/png;base64,AA==", &values).is_ok());
+    }
+
+    #[test]
+    fn image_grid_metadata_requires_all_character_classes_in_new_fragments() {
+        let mut values = cell_values();
+        values[0] = "AB12".to_string();
+
+        assert!(validate_new_image_grid("data:image/png;base64,AA==", &values).is_err());
+    }
 }

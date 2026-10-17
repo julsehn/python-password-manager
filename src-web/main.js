@@ -1,9 +1,5 @@
-/**
- * Caixa Forta - Gestor de contrasenyes local segur
- * Frontend principal amb arquitectura modular i neta.
- */
-
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import {
   createIcons,
   Search,
@@ -56,10 +52,6 @@ import {
 import "./styles.css";
 import "./secure.css";
 
-/* ==========================================================================
-   Icones de l'aplicació
-   ========================================================================== */
-
 const icons = {
   Search,
   Plus,
@@ -109,10 +101,6 @@ const icons = {
   Cloud,
 };
 
-/* ==========================================================================
-   Estat global i configuració per defecte
-   ========================================================================== */
-
 const defaultSettings = {
   theme: "auto",
   fontSize: "16",
@@ -160,6 +148,7 @@ const folderColors = [
 
 let autoLockTimer;
 let clipboardClearTimer;
+let paletteHideTimer;
 
 const savedSettings = (() => {
   try {
@@ -195,13 +184,16 @@ const state = {
   history: [],
   trash: [],
   query: "",
+  showCommandPalette: false,
+  paletteQuery: "",
+  paletteIndex: 0,
+  paletteCopiedId: null,
   error: "",
   toast: "",
   viewingEntryId: null,
   editingEntryId: null,
   showEntryForm: false,
   showTrashModal: false,
-  showChangeMasterModal: false,
   showResetConfirm: false,
   showFolderModal: false,
   editingFolderId: null,
@@ -212,10 +204,8 @@ const state = {
   cloudLoading: false,
   cloudError: "",
   formError: "",
-  masterChangeError: "",
   folderFormError: "",
   saving: false,
-  changingMaster: false,
   view: "vault",
   generatorType: "password",
   generatorLanguage: "Català",
@@ -231,7 +221,6 @@ const state = {
     removeAccents: false,
     onlyUnaccented: false,
   },
-  // Grid authentication state
   showAuthMethodSelection: false,
   authMethodSelected: "password",
   gridSeed: null,
@@ -241,16 +230,24 @@ const state = {
   gridSetupStep: 0,
   gridSetupPattern: [],
   gridSetupError: "",
+  imageAuthImage: "",
+  imageGridCellValues: [],
+  imageGridPattern: [],
+  imageGridBrushPath: [],
+  imageUnlockBrushPath: [],
+  legacyImageAuthPattern: [],
+  changingAuthMethod: false,
   showGridUnlock: false,
   gridUnlockPattern: [],
   gridUnlockError: "",
   showChangeAuthModal: false,
+  changeAuthSelected: "password",
+  changeAuthBusy: false,
   changeAuthError: "",
 };
 
-/* ==========================================================================
-   Funcions d'utilitat
-   ========================================================================== */
+let imageAuthRenderSource = "";
+let imageAuthRenderBitmap = null;
 
 const isTauriRuntime = () => Boolean(window.__TAURI_INTERNALS__);
 
@@ -312,26 +309,70 @@ function showToast(message) {
 
 function resetAutoLock() {
   clearTimeout(autoLockTimer);
-  const minutes = Number(state.settings.autoLock) || 15;
-  if (minutes <= 0) return;
+  if (state.settings.autoLock === "never") return;
+  const minutes = Number(state.settings.autoLock);
+  if (!Number.isFinite(minutes) || minutes <= 0) return;
   autoLockTimer = setTimeout(() => lockVault(), minutes * 60_000);
 }
 
-// Lock screen check
+async function lockVault() {
+  if (state.locked) return;
+  clearTimeout(autoLockTimer);
+  try {
+    await invoke("lock_vault");
+  } catch (error) {
+    showToast(`No s'ha pogut bloquejar la caixa forta: ${error}`);
+    resetAutoLock();
+    return;
+  }
+
+  state.locked = true;
+  state.masterPassword = "";
+  state.entries = [];
+  state.folders = [];
+  state.history = [];
+  state.trash = [];
+  state.query = "";
+  state.showChangeAuthModal = false;
+  state.showGridSetup = false;
+  state.gridUnlockError = "";
+  state.gridUnlockPattern = [];
+  state.imageGridPattern = [];
+  state.imageUnlockBrushPath = [];
+  state.imageGridCellValues = [];
+  state.legacyImageAuthPattern = [];
+  state.imageAuthImage = "";
+  state.showGridUnlock = false;
+
+  try {
+    const authData = await invoke("get_image_grid_auth");
+    if (authData?.type === "image_grid") {
+      state.imageAuthImage = authData.image_data || "";
+      state.imageGridCellValues = authData.cell_values || [];
+      state.showGridUnlock = true;
+    } else if (authData?.pattern) {
+      state.legacyImageAuthPattern = authData.pattern;
+      state.imageAuthImage = localStorage.getItem("image_auth_image") || "";
+      state.showGridUnlock = true;
+    }
+  } catch {
+    state.showGridUnlock = false;
+  }
+  state.view = "vault";
+  render();
+}
+
 async function checkVaultLocked() {
   try {
     const info = await invoke("get_vault_info");
     if (info.exists) {
-      // Try to unlock - if it fails with wrong password, user will be shown error
       try {
         await invoke("unlock_vault", { masterPassword: "" });
       } catch (error) {
-        // Vault exists but is locked (wrong password or just locked)
         return true;
       }
     }
   } catch (error) {
-    // Vault doesn't exist yet
   }
   return false;
 }
@@ -357,19 +398,29 @@ async function initializeApp() {
   try {
     const info = await invoke("get_vault_info");
     state.vaultExists = Boolean(info.exists);
-    
+
     if (!state.vaultExists) {
-      // New vault - show auth method selection
       state.showWelcome = false;
       state.showAuthMethodSelection = true;
     } else {
-      // Check if image auth is configured
       const hasGridAuth = await checkGridAuth();
       if (hasGridAuth) {
+        state.gridUnlockPattern = [];
+        state.imageGridPattern = [];
+        const imageGrid = await invoke("get_image_grid_auth");
+        if (imageGrid?.type === "image_grid") {
+          state.imageAuthImage = imageGrid.image_data;
+          state.imageGridCellValues = imageGrid.cell_values || [];
+          state.legacyImageAuthPattern = [];
+        } else {
+          state.imageGridCellValues = [];
+          state.legacyImageAuthPattern = imageGrid?.pattern || [];
+          state.imageAuthImage = localStorage.getItem("image_auth_image") || "";
+        }
         state.showGridUnlock = true;
       }
     }
-    
+
     render();
   } catch {
     state.vaultExists = null;
@@ -408,13 +459,11 @@ async function saveCloudConfig(event) {
 async function downloadCloudVault() {
   const config = cloudFormConfig();
 
-  // If user is not authenticated and we're on official cloud, show unlock dialog
   if (config.provider === "official" && !state.cloudConfig.authUser) {
     if (!state.locked) {
       showToast("L'usuari no està autenticat. Autentica primer.");
       return;
     }
-    // Show unlock dialog
     if (!confirm("La contrasenya mestra per obrir la caixa forta:")) return;
   }
 
@@ -483,13 +532,11 @@ async function registerCloudVault() {
   state.cloudError = "";
   render();
   try {
-    // For official cloud, authenticate user first
     if (config.provider === "official") {
       await invoke("auth_official_cloud", {
         username: config.username,
         password: masterPassword,
       });
-      // Update config with auth user
       state.cloudConfig.authUser = config.username;
     } else {
       await invoke("register_vault", {
@@ -539,18 +586,14 @@ async function cloudAuthSubmit(event) {
   render();
 
   try {
-    // For official cloud, authenticate user
     if (config.provider === "official") {
       await invoke("auth_official_cloud", {
         username: config.username,
         password: config.password,
       });
-      // Update config with auth user
       state.cloudConfig.authUser = config.username;
-      // Update UI to show locked state and allow opening vault
       state.locked = false;
     } else {
-      // For custom cloud, use existing flow
       await invoke("set_railway_sync_config", rustCloudConfig(config));
       state.cloudConfig = config;
       localStorage.setItem("caixa-forta-cloud", JSON.stringify(config));
@@ -603,13 +646,10 @@ async function confirmResetLocalVault() {
   render();
 }
 
-/* ==========================================================================
-   Renderització i sincronització de configuració
-   ========================================================================== */
-
 function render() {
   const appContainer = document.querySelector("#app");
   if (!appContainer) return;
+  document.documentElement.dataset.locked = String(state.locked);
 
   if (state.locked) {
     appContainer.innerHTML = lockScreen();
@@ -619,6 +659,16 @@ function render() {
     appContainer.innerHTML = settingsScreen();
   } else {
     appContainer.innerHTML = vaultScreen();
+  }
+
+  if (!state.locked && state.showCommandPalette) {
+    appContainer.insertAdjacentHTML("beforeend", commandPalette());
+  }
+  if (!state.locked && state.toast) {
+    appContainer.insertAdjacentHTML(
+      "beforeend",
+      `<div class="toast show">${escapeHtml(state.toast)}</div>`,
+    );
   }
 
   createIcons({ icons });
@@ -725,10 +775,6 @@ function enhanceRenderedUi() {
   }
 }
 
-/* ==========================================================================
-   Components de navegació i estructurals
-   ========================================================================== */
-
 function bottomNavComponent(activeTab = "vault") {
   return `
     <footer class="bottom-nav">
@@ -803,7 +849,7 @@ function entryCard(entry) {
         <button class="icon-btn" title="Obrir lloc web" data-open="${escapeHtml(entry.site)}">
           ${icon("ExternalLink")}
         </button>
-        <button class="icon-btn" title="Copiar la contrasenya" data-copy="${entry.id}">
+        <button class="icon-btn copy-action" title="Copiar la contrasenya" data-copy="${entry.id}">
           ${icon("Copy")}
         </button>
         <button class="icon-btn more" title="Detalls, editar o eliminar" data-view-action="${entry.id}">
@@ -814,9 +860,87 @@ function entryCard(entry) {
   `;
 }
 
-/* ==========================================================================
-   Pantalles principals (Screens)
-   ========================================================================== */
+function commandPalette() {
+  const query = state.paletteQuery.trim().toLowerCase();
+  const results = state.entries
+    .filter((entry) =>
+      `${entry.site} ${entry.username}`.toLowerCase().includes(query),
+    )
+    .slice(0, 8);
+
+  return `
+    <div class="palette-backdrop" id="palette-backdrop">
+      <section class="command-palette" role="dialog" aria-modal="true" aria-label="Cerca accessos">
+        <label class="palette-search">
+          ${icon("Search", 20)}
+          <input id="palette-search" type="search" value="${escapeHtml(state.paletteQuery)}" placeholder="Cerca un servei o usuari…" autocomplete="off" />
+          <kbd>ESC</kbd>
+        </label>
+        <div class="palette-results" id="palette-results" role="listbox" aria-label="Accessos">
+          ${
+            results.length
+              ? results
+                  .map(
+                    (entry, index) => `
+            <button class="palette-result ${index === state.paletteIndex ? "selected" : ""}" data-palette-entry="${escapeHtml(entry.id)}" role="option" aria-selected="${index === state.paletteIndex}">
+                          <button class="palette-result ${index === state.paletteIndex ? "selected" : ""} ${state.paletteCopiedId === entry.id ? "is-copied" : ""}" data-palette-entry="${escapeHtml(entry.id)}" role="option" aria-selected="${index === state.paletteIndex}">
+              <span class="palette-result-mark">${icon("Globe", 18)}</span>
+                            <span class="palette-result-mark">${icon(state.paletteCopiedId === entry.id ? "Check" : "Globe", 18)}</span>
+              <span class="palette-result-copy"><strong>${escapeHtml(entry.site)}</strong><small>${escapeHtml(entry.username)}</small></span>
+              <span class="palette-result-action">${icon("Copy", 15)} <kbd>Enter</kbd></span>
+            </button>
+          `,
+                  )
+                  .join("")
+              : `<p class="palette-empty">${query ? "Cap accés coincideix amb la cerca." : "La caixa forta no conté accessos."}</p>`
+          }
+        </div>
+        <footer class="palette-footer"><span>${results.length} ${results.length === 1 ? "accés" : "accessos"}</span><span><kbd>↑</kbd><kbd>↓</kbd> navegar</span><span><kbd>Enter</kbd> copiar</span></footer>
+      </section>
+    </div>
+  `;
+}
+
+function focusPaletteSearch() {
+  const input = document.querySelector("#palette-search");
+  input?.focus();
+  input?.setSelectionRange(input.value.length, input.value.length);
+}
+
+function openCommandPalette() {
+  clearTimeout(paletteHideTimer);
+  if (state.locked) return;
+  state.showCommandPalette = true;
+  state.paletteQuery = "";
+  state.paletteIndex = 0;
+  state.paletteCopiedId = null;
+  render();
+  focusPaletteSearch();
+}
+
+function closeCommandPalette() {
+  clearTimeout(paletteHideTimer);
+  state.showCommandPalette = false;
+  render();
+}
+
+async function selectPaletteEntry(id) {
+  clearTimeout(paletteHideTimer);
+  const entry = state.entries.find((item) => item.id === id);
+  if (!entry) return;
+  const copied = await copySensitiveText(
+    entry.password,
+    "Contrasenya copiada.",
+  );
+  if (!copied) return;
+  state.paletteCopiedId = id;
+  render();
+  paletteHideTimer = setTimeout(() => {
+    state.showCommandPalette = false;
+    render();
+    if (isTauriRuntime()) invoke("hide_main_window").catch(() => {});
+  }, 850);
+}
 
 function lockScreen() {
   return `
@@ -837,7 +961,7 @@ function lockScreen() {
               type="password"
               minlength="12"
               autocomplete="current-password"
-              placeholder="Crea una contrasenya de 12 caràcters o més"
+              placeholder="12 caràcters o més"
               required
             />
             <button type="button" class="reveal" id="reveal-password" title="Mostrar contrasenya">
@@ -939,7 +1063,7 @@ function authMethodSelectionModal() {
               <p>Utilitza una imatge i punts de clic per autenticar-te.</p>
             </button>
           </div>
-          ${state.gridSetupError ? `<p class="error">${escapeHtml(state.gridSetupError)}</p>` : ""}
+          ${state.gridSetupError ? `<p class="error" id="image-auth-setup-error">${escapeHtml(state.gridSetupError)}</p>` : ""}
         </div>
         <footer class="modal-footer">
           <button type="button" class="secondary" id="cancel-auth-selection-bottom">Cancel·la</button>
@@ -952,7 +1076,7 @@ function authMethodSelectionModal() {
 
 function imageAuthSetupModal() {
   return `
-    <div class="modal-backdrop">
+    <div class="modal-backdrop image-auth-modal-backdrop">
       <section class="entry-modal image-auth-setup-modal" role="dialog" aria-modal="true" aria-labelledby="image-auth-setup-title">
         <header class="modal-header">
           <button class="modal-icon" id="cancel-image-auth-setup" title="Tancar">${icon("X", 20)}</button>
@@ -960,17 +1084,22 @@ function imageAuthSetupModal() {
         </header>
         <div class="modal-scroll">
           <div class="image-auth-instructions">
-            <p>Puja una imatge i fes clic per seleccionar els punts del teu patró.</p>
-            <p class="hint">Selecciona almenys 5 punts per al teu patró.</p>
+            <p>Puja una imatge i marca els punts fent clic o dibuixant-hi a sobre.</p>
+            <p class="hint">Selecciona almenys 5 punts; l'ordre forma la contrasenya.</p>
           </div>
-          <div class="image-upload-area" id="image-upload-area">
+          <div class="image-upload-area" id="image-upload-area" style="${state.imageAuthImage ? "display:none;" : ""}">
             <p>${icon("Camera", 40)}</p>
             <p>Fes clic per pujar la teva imatge</p>
             <input type="file" accept="image/*" id="image-auth-upload" style="display:none;" />
           </div>
-          <div class="image-auth-canvas-area" id="image-auth-canvas-area" style="display:none;">
+          <div class="image-auth-canvas-area" id="image-auth-canvas-area" style="${state.imageAuthImage ? "" : "display:none;"}">
             <canvas id="image-auth-canvas" width="500" height="400"></canvas>
             <p class="image-auth-status">Punts seleccionats: <strong id="image-auth-count">0</strong></p>
+            <p class="image-auth-order">Ordre dels punts: <strong id="image-auth-order">cap</strong></p>
+            <div class="image-auth-point-actions">
+              <button type="button" class="secondary" id="undo-image-auth-point">${icon("Undo2", 17)} Enrere</button>
+              <button type="button" class="secondary" id="clear-image-auth-points">${icon("Eraser", 17)} Esborra selecció</button>
+            </div>
           </div>
           ${state.gridSetupError ? `<p class="error">${escapeHtml(state.gridSetupError)}</p>` : ""}
         </div>
@@ -986,7 +1115,7 @@ function imageAuthSetupModal() {
 function imageAuthUnlockModal() {
   const persistedImage = localStorage.getItem("image_auth_image") || "";
   return `
-    <div class="modal-backdrop">
+    <div class="modal-backdrop image-auth-modal-backdrop">
       <section class="entry-modal image-auth-unlock-modal" role="dialog" aria-modal="true" aria-labelledby="image-auth-unlock-title">
         <header class="modal-header">
           <button class="modal-icon" id="cancel-image-auth-unlock" title="Tancar">${icon("X", 20)}</button>
@@ -994,17 +1123,34 @@ function imageAuthUnlockModal() {
         </header>
         <div class="modal-scroll">
           <div class="image-auth-instructions">
-            <p>Fes clic als punts del teu patró per desbloquejar.</p>
+            <p>Marca almenys 5 punts a la imatge, en el mateix ordre.</p>
           </div>
           <div class="image-auth-canvas-area">
-            <canvas id="image-auth-unlock-canvas" width="500" height="400"></canvas>
+            <canvas id="image-auth-unlock-canvas" class="${state.loading ? "is-unlocking" : ""}" width="500" height="400"></canvas>
             <p class="image-auth-status">Punts seleccionats: <strong id="image-auth-unlock-count">0</strong></p>
+            <p class="image-auth-order">Ordre dels punts: <strong id="image-auth-unlock-order">cap</strong></p>
+            <div class="image-auth-point-actions">
+              <button type="button" class="secondary" id="undo-image-auth-unlock-point" ${state.loading ? "disabled" : ""}>${icon("Undo2", 17)} Enrere</button>
+              <button type="button" class="secondary" id="clear-image-auth-unlock-points" ${state.loading ? "disabled" : ""}>${icon("Eraser", 17)} Esborra selecció</button>
+            </div>
+            ${
+              state.loading
+                ? `
+              <div class="unlock-loading" role="status" aria-live="polite">
+                <div class="unlock-progress-track" role="progressbar" aria-label="Desxifrant la caixa forta" aria-valuetext="En curs">
+                  <span class="unlock-progress-indicator"></span>
+                </div>
+                <span>Verificant el patró i desxifrant la caixa forta…</span>
+              </div>
+            `
+                : ""
+            }
           </div>
           ${state.gridUnlockError ? `<p class="error">${escapeHtml(state.gridUnlockError)}</p>` : ""}
         </div>
         <footer class="modal-footer">
-          <button type="button" class="secondary" id="cancel-image-auth-unlock-bottom">Cancel·la</button>
-          <button type="button" class="primary" id="verify-image-auth-unlock">Verifica i desbloqueja</button>
+          <button type="button" class="secondary" id="cancel-image-auth-unlock-bottom" ${state.loading ? "disabled" : ""}>Cancel·la</button>
+          <button type="button" class="primary" id="verify-image-auth-unlock" ${state.loading ? "disabled" : ""}>${state.loading ? "Desbloquejant…" : "Verifica i desbloqueja"}</button>
         </footer>
       </section>
     </div>
@@ -1017,26 +1163,39 @@ function changeAuthMethodModal() {
       <section class="entry-modal change-auth-modal" role="dialog" aria-modal="true" aria-labelledby="change-auth-title">
         <header class="modal-header">
           <button class="modal-icon" id="cancel-change-auth" title="Tancar">${icon("X", 20)}</button>
-          <h2 id="change-auth-title">Canvia el mètode d'autenticació</h2>
+          <h2 id="change-auth-title">Canvia la contrasenya o l'autenticació</h2>
         </header>
         <div class="modal-scroll">
           <div class="auth-method-options">
-            <button class="auth-method-card ${state.changeAuthSelected === "password" ? "selected" : ""}" id="change-auth-password">
+            <button type="button" class="auth-method-card ${state.changeAuthSelected === "password" ? "selected" : ""}" id="change-auth-password">
               ${icon("LockKeyhole", 32)}
               <h3>Contrasenya mestra</h3>
-              <p>Utilitza una contrasenya text per obrir la caixa forta.</p>
+              <p>Tria una contrasenya mestra nova per obrir la caixa forta.</p>
             </button>
-            <button class="auth-method-card ${state.changeAuthSelected === "image" ? "selected" : ""}" id="change-auth-image">
+            <button type="button" class="auth-method-card ${state.changeAuthSelected === "image" ? "selected" : ""}" id="change-auth-image">
               ${icon("Camera", 32)}
               <h3>Autenticació amb imatge</h3>
               <p>Utilitza una imatge i punts de clic per autenticar-te.</p>
             </button>
           </div>
-          ${state.changeAuthError ? `<p class="error">${escapeHtml(state.changeAuthError)}</p>` : ""}
+          ${
+            state.changeAuthSelected === "password"
+              ? `
+            <div class="change-auth-password-fields">
+              <p class="helper">La caixa es tornarà a xifrar. Tria una contrasenya nova de 12 caràcters com a mínim.</p>
+              <label class="form-label" for="change-auth-new-password">Contrasenya mestra nova</label>
+              <input class="form-input" id="change-auth-new-password" type="password" autocomplete="new-password" minlength="12" required />
+              <label class="form-label" for="change-auth-confirm-password">Confirma la contrasenya nova</label>
+              <input class="form-input" id="change-auth-confirm-password" type="password" autocomplete="new-password" minlength="12" required />
+            </div>
+          `
+              : ""
+          }
+          <p class="error" id="change-auth-error" ${state.changeAuthError ? "" : "hidden"}>${escapeHtml(state.changeAuthError)}</p>
         </div>
         <footer class="modal-footer">
           <button type="button" class="secondary" id="cancel-change-auth-bottom">Cancel·la</button>
-          <button type="button" class="primary" id="save-auth-method">Desa el mètode</button>
+          <button type="button" class="primary" id="save-auth-method" ${state.changeAuthBusy ? "disabled" : ""}>${state.changeAuthBusy ? "Canviant..." : state.changeAuthSelected === "image" ? "Continua amb imatge" : "Canvia la contrasenya"}</button>
         </footer>
       </section>
     </div>
@@ -1127,6 +1286,7 @@ function vaultScreen() {
               placeholder="Cerca per lloc o usuari"
               value="${escapeHtml(state.query)}"
             />
+            <kbd class="search-shortcut">Ctrl/⌘ Shift P</kbd>
           </label>
           <button class="primary ${state.showFirstEntryGuide && state.firstEntryGuideStep === 1 ? "guide-highlight" : ""}" id="new-entry">
             ${icon("Plus", 17)} Nou accés
@@ -1172,9 +1332,7 @@ function vaultScreen() {
     ${state.showEntryForm ? entryFormModal() : ""}
     ${state.showFirstEntryGuide ? firstEntryGuideModal() : ""}
     ${state.showTrashModal ? trashModal() : ""}
-    ${state.showChangeMasterModal ? changeMasterPasswordModal() : ""}
     ${state.showFolderModal ? folderModal() : ""}
-    ${state.toast ? `<div class="toast show">${escapeHtml(state.toast)}</div>` : ""}
   `;
 }
 
@@ -1210,7 +1368,7 @@ function generatorScreen() {
         </div>
 
         <section class="generated-card">
-          <output>${escapeHtml(state.generatedValue || generateValue())}</output>
+          <output class="generated-value" draggable="true" title="Arrossega-la a un camp de text">${escapeHtml(state.generatedValue || generateValue())}</output>
           <button class="icon-btn" id="regenerate" title="Regenerar">
             ${icon("RefreshCw", 20)}
           </button>
@@ -1300,11 +1458,8 @@ function settingsScreen() {
               <option value="30">30 minuts</option>
             </select>
           </label>
-          <button class="setting-action" id="change-master">
-            ${icon("LockKeyhole", 18)} Canvi de contrasenya mestra
-          </button>
           <button class="setting-action" id="change-auth-method">
-            ${icon("Grid", 18)} Canvia el mètode d'autenticació
+            ${icon("KeyRound", 18)} Canvia la contrasenya o l'autenticació
           </button>
         </section>
 
@@ -1393,16 +1548,12 @@ function settingsScreen() {
     </main>
 
     ${state.showTrashModal ? trashModal() : ""}
-    ${state.showChangeMasterModal ? changeMasterPasswordModal() : ""}
+    ${state.showChangeAuthModal ? changeAuthMethodModal() : ""}
+    ${state.showGridSetup ? imageAuthSetupModal() : ""}
     ${state.showResetConfirm ? resetConfirmModal() : ""}
     ${state.showCloudLogin ? cloudLoginModal() : ""}
-    ${state.toast ? `<div class="toast show">${escapeHtml(state.toast)}</div>` : ""}
   `;
 }
-
-/* ==========================================================================
-   Modals i diàlegs
-   ========================================================================== */
 
 function entryDetailsModal() {
   const entry = state.entries.find((e) => e.id === state.viewingEntryId);
@@ -1592,6 +1743,11 @@ function entryFormModal() {
                   ${icon("RefreshCw", 18)}
                 </button>
               </div>
+              <div class="inline-password-strength" id="entry-password-strength" ${entry.password ? "" : "hidden"}>
+                <div class="strength-label"><span>Força</span><strong>${entry.password ? passwordStrength(entry.password).label : ""}</strong></div>
+                <div class="strength-track"><span class="strength-fill strength-${entry.password ? passwordStrength(entry.password).level : "weak"}" style="width:${entry.password ? passwordStrength(entry.password).percent : 0}%"></span></div>
+                <small>${entry.password ? passwordStrength(entry.password).hint : ""}</small>
+              </div>
               <small class="helper">
                 La contrasenya és visible. Utilitza el generador per crear-ne una de forta i única.
               </small>
@@ -1694,47 +1850,6 @@ function resetConfirmModal() {
             ${icon("Trash2", 17)} Elimina les dades
           </button>
         </footer>
-      </section>
-    </div>
-  `;
-}
-
-function changeMasterPasswordModal() {
-  return `
-    <div class="modal-backdrop">
-      <section class="entry-modal" role="dialog" aria-modal="true" aria-labelledby="change-master-title">
-        <header class="modal-header">
-          <button class="modal-icon" id="cancel-change-master" title="Tancar">
-            ${icon("X", 20)}
-          </button>
-          <h2 id="change-master-title">Canvia la contrasenya mestra</h2>
-        </header>
-
-        <form id="change-master-form">
-          <div class="modal-scroll">
-            <section class="form-section master-password-section">
-              <p class="helper master-password-help">La caixa forta es tornarà a xifrar amb la nova contrasenya. No podràs recuperar-la si l'oblides.</p>
-
-              <label class="form-label" for="current-master-password">Contrasenya mestra actual</label>
-              <input class="form-input" id="current-master-password" name="currentPassword" type="password" autocomplete="current-password" required autofocus />
-
-              <label class="form-label" for="new-master-password">Contrasenya mestra nova</label>
-              <input class="form-input" id="new-master-password" name="newPassword" type="password" autocomplete="new-password" minlength="12" required aria-describedby="new-master-password-help" />
-              <small class="helper" id="new-master-password-help">Ha de tenir com a mínim 12 caràcters.</small>
-
-              <label class="form-label" for="confirm-master-password">Confirma la contrasenya nova</label>
-              <input class="form-input" id="confirm-master-password" name="confirmPassword" type="password" autocomplete="new-password" minlength="12" required />
-            </section>
-            ${state.masterChangeError ? `<p class="error form-error">${escapeHtml(state.masterChangeError)}</p>` : ""}
-          </div>
-
-          <footer class="modal-footer">
-            <button type="button" class="secondary" id="cancel-change-master-bottom">Cancel·la</button>
-            <button type="submit" class="primary" ${state.changingMaster ? "disabled" : ""}>
-              ${state.changingMaster ? "Canviant..." : "Canvia la contrasenya"}
-            </button>
-          </footer>
-        </form>
       </section>
     </div>
   `;
@@ -1881,10 +1996,6 @@ function historyItem(item) {
   `;
 }
 
-/* ==========================================================================
-   Opcions i algorismes del generador
-   ========================================================================== */
-
 function passwordOptions() {
   return `
     <label class="range-label">
@@ -1919,10 +2030,11 @@ function passwordOptions() {
 }
 
 function passphraseOptions() {
+  const maxWords = Math.max(3, Math.min(20, passphraseWordPool().length));
   return `
     <label>
       Nombre de paraules
-      <input id="generator-words" type="number" min="3" max="20" value="${state.generatorOptions.words}" />
+      <input id="generator-words" type="number" min="3" max="${maxWords}" value="${Math.min(state.generatorOptions.words, maxWords)}" />
     </label>
     <label>
       Separador
@@ -1944,6 +2056,7 @@ function passphraseOptions() {
       <input data-option="onlyUnaccented" type="checkbox" ${state.generatorOptions.onlyUnaccented ? "checked" : ""} />
       Només paraules sense accents
     </label>
+    <small class="helper">Cada paraula apareix una sola vegada.</small>
   `;
 }
 
@@ -2097,6 +2210,23 @@ function formatGeneratorWord(word) {
   return state.generatorOptions.removeAccents ? withoutAccents(word) : word;
 }
 
+function passphraseWordPool() {
+  const seen = new Set();
+  return generatorWords().reduce((pool, word) => {
+    const formatted = formatGeneratorWord(word);
+    const displayWord =
+      state.generatorOptions.uppercaseWords === false
+        ? formatted
+        : formatted.charAt(0).toUpperCase() + formatted.slice(1);
+    const key = displayWord.normalize("NFC").toLocaleLowerCase();
+    if (!seen.has(key)) {
+      seen.add(key);
+      pool.push(displayWord);
+    }
+    return pool;
+  }, []);
+}
+
 function generateValue() {
   if (state.generatorType === "password") {
     const characterSets = [
@@ -2123,19 +2253,16 @@ function generateValue() {
     return characters.join("");
   }
   if (state.generatorType === "passphrase") {
-    const words = generatorWords();
-    const result = Array.from({ length: state.generatorOptions.words }, () =>
-      randomItem(words),
-    );
-    const value =
-      state.generatorOptions.uppercaseWords === false
-        ? result.map(formatGeneratorWord).join(state.generatorOptions.separator)
-        : result
-            .map((word) => {
-              const formatted = formatGeneratorWord(word);
-              return formatted.charAt(0).toUpperCase() + formatted.slice(1);
-            })
-            .join(state.generatorOptions.separator);
+    const words = passphraseWordPool();
+    for (let index = words.length - 1; index > 0; index -= 1) {
+      const swapIndex = secureRandomIndex(index + 1);
+      [words[index], words[swapIndex]] = [words[swapIndex], words[index]];
+    }
+    const wordCount = Math.min(state.generatorOptions.words, words.length);
+    state.generatorOptions.words = wordCount;
+    const value = words
+      .slice(0, wordCount)
+      .join(state.generatorOptions.separator);
     return state.generatorOptions.includeNumber
       ? `${value}${secureRandomIndex(10)}`
       : value;
@@ -2157,7 +2284,7 @@ function updateGeneratorOptions(event) {
     );
   if (event.target.id === "generator-words")
     state.generatorOptions.words = Math.min(
-      20,
+      Math.max(3, Math.min(20, passphraseWordPool().length)),
       Math.max(3, Number(event.target.value) || 6),
     );
   if (event.target.id === "generator-separator")
@@ -2173,8 +2300,45 @@ function updateGeneratorOptions(event) {
 async function copyGenerated() {
   const value = state.generatedValue || generateValue();
   state.generatedValue = value;
-  await copySensitiveText(value, "Generació copiada.");
-  addHistory();
+  if (
+    await copySensitiveText(
+      value,
+      "Generació copiada.",
+      document.querySelector("#copy-generated"),
+    )
+  ) {
+    addHistory();
+  }
+}
+
+async function copySensitiveText(value, successMessage, button = null) {
+  try {
+    await navigator.clipboard.writeText(value);
+  } catch (error) {
+    showToast(`No s'ha pogut copiar: ${error}`);
+    return false;
+  }
+
+  const feedbackTarget = button?.id
+    ? `#${CSS.escape(button.id)}`
+    : button?.dataset.copy
+      ? `[data-copy="${CSS.escape(button.dataset.copy)}"]`
+      : null;
+  showToast(successMessage);
+  const feedbackButton = feedbackTarget
+    ? document.querySelector(feedbackTarget)
+    : null;
+  if (feedbackButton) {
+    feedbackButton.classList.remove("is-copied");
+    void feedbackButton.offsetWidth;
+    feedbackButton.classList.add("is-copied");
+    clearTimeout(feedbackButton.copyFeedbackTimer);
+    feedbackButton.copyFeedbackTimer = setTimeout(
+      () => feedbackButton.classList.remove("is-copied"),
+      2100,
+    );
+  }
+  return true;
 }
 
 function addHistory() {
@@ -2243,10 +2407,19 @@ function passwordStrength(password) {
   ];
   return levels[Math.min(levels.length - 1, Math.max(0, score - 1))];
 }
-
-/* ==========================================================================
-   Operacions de dades (CRUD Vault, Import/Export, Lock/Unlock)
-   ========================================================================== */
+function updateEntryStrength(password) {
+  const meter = document.querySelector("#entry-password-strength");
+  if (!meter) return;
+  meter.hidden = !password;
+  if (!password) return;
+  const strength = passwordStrength(password);
+  meter.dataset.strength = strength.level;
+  meter.querySelector(".strength-fill").style.width = `${strength.percent}%`;
+  meter.querySelector(".strength-fill").className =
+    `strength-fill strength-${strength.level}`;
+  meter.querySelector("strong").textContent = strength.label;
+  meter.querySelector("small").textContent = strength.hint;
+}
 
 async function unlock(event) {
   event.preventDefault();
@@ -2279,7 +2452,6 @@ async function unlock(event) {
     const isNewVault = Boolean(result.isNew ?? result.is_new);
     if (isNewVault) {
       state.firstEntryGuideStep = 1;
-      // Create initial folder structure
       const defaultFolders = [
         {
           id: "default",
@@ -2291,7 +2463,7 @@ async function unlock(event) {
         { id: "social", name: "Social", icon: "Heart", color: "#ec4899" },
       ];
       state.folders = defaultFolders;
-      await saveVault(masterPassword, true); // Enable sync for new vault
+      await saveVault(masterPassword, true);
       state.showFirstEntryGuide = true;
     }
   } catch (error) {
@@ -2312,7 +2484,6 @@ async function checkGridAuth() {
 }
 
 async function saveVault(masterPassword = null, syncToRailway = false) {
-  // Convert entries to the expected format
   const entries = state.entries.map((e) => ({
     id: e.id,
     site: e.site,
@@ -2352,7 +2523,6 @@ async function saveVault(masterPassword = null, syncToRailway = false) {
     created_at: h.createdAt,
   }));
 
-  // Get master password from secure storage if not provided
   let password = masterPassword || state.masterPassword;
   if (!password) {
     try {
@@ -2378,12 +2548,10 @@ async function saveVault(masterPassword = null, syncToRailway = false) {
       folders,
       syncToRailway,
     });
-    // Store password for next save (auto-save)
     if (masterPassword === null) {
       try {
         localStorage.setItem("caixa-forta-master-password", password);
       } catch (e) {
-        // Storage might be disabled
       }
     }
   } catch (error) {
@@ -2544,55 +2712,6 @@ async function persistImportedVault(
     await saveVault(masterPassword);
   } else {
     await invoke("save_vault", { entries, history, trash, folders });
-  }
-}
-
-async function changeMasterPassword(event) {
-  event.preventDefault();
-  const form = new FormData(event.currentTarget);
-  const currentPassword = String(form.get("currentPassword") || "");
-  const newPassword = String(form.get("newPassword") || "");
-  const confirmPassword = String(form.get("confirmPassword") || "");
-
-  if (newPassword.length < 12) {
-    state.masterChangeError =
-      "La contrasenya nova ha de tenir com a mínim 12 caràcters.";
-    render();
-    return;
-  }
-  if (newPassword !== confirmPassword) {
-    state.masterChangeError = "Les contrasenyes noves no coincideixen.";
-    render();
-    return;
-  }
-
-  state.masterChangeError = "";
-  state.changingMaster = true;
-  render();
-  try {
-    // Use the Rust implementation that handles re-encryption
-    await invoke("change_master_password", {
-      currentPassword,
-      newPassword,
-      entries: state.entries,
-      history: state.history,
-      trash: state.trash,
-      folders: state.folders,
-    });
-    state.masterPassword = newPassword;
-    // Clear stored password for security
-    try {
-      localStorage.removeItem("caixa-forta-master-password");
-    } catch (e) {
-      // Storage might be disabled
-    }
-    state.showChangeMasterModal = false;
-    showToast("Contrasenya mestra canviada correctament.");
-  } catch (error) {
-    state.masterChangeError = String(error);
-  } finally {
-    state.changingMaster = false;
-    render();
   }
 }
 
@@ -2932,15 +3051,11 @@ function useGeneratedPassword() {
   if (input) {
     input.value = state.generatedValue;
     input.focus();
+    updateEntryStrength(input.value);
   }
 }
 
-/* ==========================================================================
-   Assignació d'esdeveniments (Event Listeners)
-   ========================================================================== */
-
 function bindEvents() {
-  // Desbloqueig
   document.querySelector("#unlock-form")?.addEventListener("submit", unlock);
   document.querySelector("#next-welcome")?.addEventListener("click", () => {
     const lastWelcomeStep = 2;
@@ -2954,7 +3069,6 @@ function bindEvents() {
     document.querySelector("#master-password")?.focus();
   });
 
-  // Grid authentication handlers
   document
     .querySelector("#auth-method-password")
     ?.addEventListener("click", () => {
@@ -2975,26 +3089,31 @@ function bindEvents() {
         render();
       } else if (state.authMethodSelected === "image") {
         state.showGridSetup = true;
+        state.changingAuthMethod = false;
+        state.gridSetupPattern = [];
+        state.imageGridPattern = [];
+        state.imageGridBrushPath = [];
+        state.imageGridCellValues = generateGridFragments();
+        state.gridSetupError = "";
+        state.imageAuthImage = "";
+        imageAuthRenderSource = "";
+        localStorage.removeItem("image_auth_image");
         render();
       }
     });
-  document
-    .querySelectorAll("[data-grid-cell]")
-    .forEach((cell) => {
-      cell.addEventListener("click", () => {
-        const cellIndex = Number(cell.dataset.gridCell);
-        if (cell.classList.contains("selected")) {
-          // Remove from pattern
-          state.gridSetupPattern = state.gridSetupPattern.filter(
-            (i) => i !== cellIndex,
-          );
-        } else {
-          // Add to pattern
-          state.gridSetupPattern.push(cellIndex);
-        }
-        render();
-      });
+  document.querySelectorAll("[data-grid-cell]").forEach((cell) => {
+    cell.addEventListener("click", () => {
+      const cellIndex = Number(cell.dataset.gridCell);
+      if (cell.classList.contains("selected")) {
+        state.gridSetupPattern = state.gridSetupPattern.filter(
+          (i) => i !== cellIndex,
+        );
+      } else {
+        state.gridSetupPattern.push(cellIndex);
+      }
+      render();
     });
+  });
   document
     .querySelector("#save-grid-setup")
     ?.addEventListener("click", async () => {
@@ -3024,7 +3143,6 @@ function bindEvents() {
       state.gridSetupError = "";
       render();
     });
-  // Image authentication handlers
   document
     .querySelector("#image-upload-area")
     ?.addEventListener("click", () => {
@@ -3039,12 +3157,9 @@ function bindEvents() {
         const reader = new FileReader();
         reader.onload = (e) => {
           state.imageAuthImage = e.target.result;
-          // Persist image for unlock
-          try {
-            localStorage.setItem("image_auth_image", e.target.result);
-          } catch (err) {
-            console.warn("Could not persist auth image:", err);
-          }
+          state.imageGridPattern = [];
+          state.imageGridBrushPath = [];
+          imageAuthRenderSource = "";
           document.querySelector("#image-upload-area").style.display = "none";
           document.querySelector("#image-auth-canvas-area").style.display = "";
           renderImageOnCanvas();
@@ -3053,39 +3168,128 @@ function bindEvents() {
       }
     });
 
+  if (state.showGridSetup && state.imageAuthImage) {
+    const uploadArea = document.querySelector("#image-upload-area");
+    const canvasArea = document.querySelector("#image-auth-canvas-area");
+    if (uploadArea) uploadArea.style.display = "none";
+    if (canvasArea) canvasArea.style.display = "";
+    renderImageOnCanvas();
+    updateImageAuthOrder(
+      "image-auth-count",
+      "image-auth-order",
+      state.imageGridPattern,
+    );
+  }
+
+  const imageSetupCanvas = document.querySelector("#image-auth-canvas");
+  imageSetupCanvas?.addEventListener("pointerdown", (event) => {
+    state.imageGridPointerActive = true;
+    if (state.imageGridBrushPath.length) state.imageGridBrushPath.push(null);
+    imageSetupCanvas.setPointerCapture(event.pointerId);
+    selectImageGridCell(
+      event,
+      state.imageGridPattern,
+      "image-auth-count",
+      "image-auth-order",
+      state.imageGridBrushPath,
+    );
+  });
+  imageSetupCanvas?.addEventListener("pointermove", (event) => {
+    if (state.imageGridPointerActive) {
+      selectImageGridCell(
+        event,
+        state.imageGridPattern,
+        "image-auth-count",
+        "image-auth-order",
+        state.imageGridBrushPath,
+      );
+    }
+  });
+  imageSetupCanvas?.addEventListener("pointerup", () => {
+    state.imageGridPointerActive = false;
+  });
+  imageSetupCanvas?.addEventListener("pointercancel", () => {
+    state.imageGridPointerActive = false;
+  });
+
   document
-    .querySelector("#image-auth-canvas")
-    ?.addEventListener("click", (event) => {
-      const canvas = event.target;
-      const rect = canvas.getBoundingClientRect();
-      const x = (event.clientX - rect.left) / rect.width * 100;
-      const y = (event.clientY - rect.top) / rect.height * 100;
-      state.gridSetupPattern.push({ x, y });
-      document.getElementById("image-auth-count").textContent =
-        state.gridSetupPattern.length;
-      drawPointOnCanvas(canvas, x, y, "#3b82f6");
+    .querySelector("#undo-image-auth-point")
+    ?.addEventListener("click", () => {
+      state.imageGridPattern.pop();
+      redrawImageAuthGridCanvas(
+        "image-auth-canvas",
+        state.imageGridPattern,
+        "image-auth-count",
+        "image-auth-order",
+        state.imageGridBrushPath,
+      );
+    });
+
+  document
+    .querySelector("#clear-image-auth-points")
+    ?.addEventListener("click", () => {
+      state.imageGridPattern = [];
+      state.imageGridBrushPath = [];
+      redrawImageAuthGridCanvas(
+        "image-auth-canvas",
+        state.imageGridPattern,
+        "image-auth-count",
+        "image-auth-order",
+        state.imageGridBrushPath,
+      );
     });
 
   document
     .querySelector("#save-image-auth-setup")
     ?.addEventListener("click", async () => {
-      if (state.gridSetupPattern.length < 3) {
-        state.gridSetupError = "Has de seleccionar almenys 3 punts.";
+      if (!state.imageAuthImage || state.imageGridCellValues.length !== 25) {
+        state.gridSetupError = "Puja una imatge abans de desar la graella.";
         render();
         return;
       }
-      state.showGridSetup = false;
-      state.showAuthMethodSelection = false;
+      if (state.imageGridPattern.length < 5) {
+        state.gridSetupError = "Has de seleccionar almenys 5 punts.";
+        render();
+        return;
+      }
       try {
-        // Convert click points to byte pattern
-        const pattern = encodeImageAuthPattern(state.gridSetupPattern);
-        await invoke("set_grid_auth", {
-          pattern,
-        });
-        // Create vault with derived master password
-        const masterPassword = pattern.map((b) => String(b)).join("-");
-        await invoke("init_empty_vault", { password: masterPassword });
-        state.masterPassword = "";
+        const masterPassword = state.imageGridPattern
+          .map((cell) => state.imageGridCellValues[cell])
+          .join("");
+        if (state.changingAuthMethod) {
+          const result = await invoke("change_vault_to_image_grid", {
+            currentPassword: state.masterPassword,
+            selectedCells: state.imageGridPattern,
+            imageData: state.imageAuthImage,
+            cellValues: state.imageGridCellValues,
+          });
+          state.entries = (result.entries || []).map((entry) => ({
+            ...entry,
+            folderId: entry.folder_id || entry.folderId || null,
+            createdAt: entry.created_at || entry.createdAt,
+            updatedAt: entry.updated_at || entry.updatedAt || null,
+          }));
+          state.history = result.history || [];
+          state.trash = (result.trash || []).map((entry) => ({
+            ...entry,
+            folderId: entry.folder_id || entry.folderId || null,
+            createdAt: entry.created_at || entry.createdAt,
+            updatedAt: entry.updated_at || entry.updatedAt || null,
+          }));
+          state.folders = result.folders || [];
+        } else {
+          await invoke("set_image_grid_auth", {
+            imageData: state.imageAuthImage,
+            cellValues: state.imageGridCellValues,
+          });
+          await invoke("init_empty_vault", { password: masterPassword });
+        }
+        localStorage.removeItem("image_auth_image");
+        state.masterPassword = masterPassword;
+        state.locked = false;
+        state.changingAuthMethod = false;
+        state.showGridSetup = false;
+        state.showAuthMethodSelection = false;
         showToast("Autenticació amb imatge configurada correctament.");
         render();
       } catch (error) {
@@ -3097,9 +3301,33 @@ function bindEvents() {
   document
     .querySelector("#cancel-image-auth-setup")
     ?.addEventListener("click", () => {
+      const returningToChangeAuth = state.changingAuthMethod;
       state.showGridSetup = false;
       state.gridSetupError = "";
       state.gridSetupPattern = [];
+      state.imageGridPattern = [];
+      state.imageAuthImage = "";
+      state.imageGridCellValues = [];
+      state.showChangeAuthModal = returningToChangeAuth;
+      state.changingAuthMethod = false;
+      imageAuthRenderSource = "";
+      if (!returningToChangeAuth) {
+        localStorage.removeItem("image_auth_image");
+      }
+      render();
+    });
+
+  document
+    .querySelector("#cancel-image-auth-setup-bottom")
+    ?.addEventListener("click", () => {
+      state.showGridSetup = false;
+      state.gridSetupError = "";
+      state.imageGridPattern = [];
+      state.imageAuthImage = "";
+      state.imageGridCellValues = [];
+      state.showChangeAuthModal = state.changingAuthMethod;
+      state.changingAuthMethod = false;
+      imageAuthRenderSource = "";
       render();
     });
 
@@ -3109,24 +3337,43 @@ function bindEvents() {
       state.showGridUnlock = false;
       state.gridUnlockError = "";
       state.gridUnlockPattern = [];
+      state.imageGridPattern = [];
+      state.imageUnlockBrushPath = [];
       render();
     });
 
-  // Render image on unlock canvas
+  document
+    .querySelector("#cancel-image-auth-unlock-bottom")
+    ?.addEventListener("click", () => {
+      state.showGridUnlock = false;
+      state.gridUnlockError = "";
+      state.gridUnlockPattern = [];
+      state.imageGridPattern = [];
+      state.imageUnlockBrushPath = [];
+      render();
+    });
+
   const unlockCanvas = document.querySelector("#image-auth-unlock-canvas");
   if (unlockCanvas) {
-    const persistedImage = localStorage.getItem("image_auth_image");
-    console.log("Unlock canvas found, persisted image:", persistedImage ? "yes" : "no");
+    const persistedImage =
+      state.imageAuthImage || localStorage.getItem("image_auth_image");
+    console.log(
+      "Unlock canvas found, persisted image:",
+      persistedImage ? "yes" : "no",
+    );
     if (persistedImage) {
-      const ctx = unlockCanvas.getContext("2d");
       const img = new Image();
       img.onload = () => {
         console.log("Image loaded, drawing to canvas");
-        const aspect = img.width / img.height;
-        if (aspect > unlockCanvas.width / unlockCanvas.height) {
-          ctx.drawImage(img, 0, 0, unlockCanvas.width, img.height * unlockCanvas.width / img.width);
+        drawImageAuthBackground(unlockCanvas, img);
+        if (state.imageGridCellValues.length === 25) {
+          drawImageAuthGrid(
+            unlockCanvas,
+            state.imageGridPattern,
+            state.imageUnlockBrushPath,
+          );
         } else {
-          ctx.drawImage(img, 0, 0, img.width * unlockCanvas.height / img.height, unlockCanvas.height);
+          drawLegacyImagePoints(unlockCanvas, state.gridUnlockPattern);
         }
       };
       img.onerror = () => {
@@ -3139,20 +3386,94 @@ function bindEvents() {
   document
     .querySelector("#image-auth-unlock-canvas")
     ?.addEventListener("click", (event) => {
+      if (state.imageGridCellValues.length === 25) return;
       const canvas = event.target;
       const rect = canvas.getBoundingClientRect();
-      const x = (event.clientX - rect.left) / rect.width * 100;
-      const y = (event.clientY - rect.top) / rect.height * 100;
+      const x = ((event.clientX - rect.left) / rect.width) * 100;
+      const y = ((event.clientY - rect.top) / rect.height) * 100;
       state.gridUnlockPattern.push({ x, y });
-      document.getElementById("image-auth-unlock-count").textContent =
-        state.gridUnlockPattern.length;
-      drawPointOnCanvas(canvas, x, y, "#3b82f6");
+      drawLegacyImagePoints(canvas, state.gridUnlockPattern);
+      updateImageAuthOrder(
+        "image-auth-unlock-count",
+        "image-auth-unlock-order",
+        state.gridUnlockPattern,
+      );
+    });
+
+  const imageUnlockCanvas = document.querySelector("#image-auth-unlock-canvas");
+  imageUnlockCanvas?.addEventListener("pointerdown", (event) => {
+    if (state.imageGridCellValues.length !== 25) return;
+    state.imageGridPointerActive = true;
+    if (state.imageUnlockBrushPath.length) {
+      state.imageUnlockBrushPath.push(null);
+    }
+    imageUnlockCanvas.setPointerCapture(event.pointerId);
+    selectImageGridCell(
+      event,
+      state.imageGridPattern,
+      "image-auth-unlock-count",
+      "image-auth-unlock-order",
+      state.imageUnlockBrushPath,
+    );
+  });
+  imageUnlockCanvas?.addEventListener("pointermove", (event) => {
+    if (
+      state.imageGridCellValues.length === 25 &&
+      state.imageGridPointerActive
+    ) {
+      selectImageGridCell(
+        event,
+        state.imageGridPattern,
+        "image-auth-unlock-count",
+        "image-auth-unlock-order",
+        state.imageUnlockBrushPath,
+      );
+    }
+  });
+  imageUnlockCanvas?.addEventListener("pointerup", () => {
+    state.imageGridPointerActive = false;
+  });
+  imageUnlockCanvas?.addEventListener("pointercancel", () => {
+    state.imageGridPointerActive = false;
+  });
+
+  document
+    .querySelector("#undo-image-auth-unlock-point")
+    ?.addEventListener("click", () => {
+      state.gridUnlockPattern.pop();
+      state.imageGridPattern.pop();
+      redrawImageAuthGridCanvas(
+        "image-auth-unlock-canvas",
+        state.imageGridPattern,
+        "image-auth-unlock-count",
+        "image-auth-unlock-order",
+        state.imageUnlockBrushPath,
+      );
+    });
+
+  document
+    .querySelector("#clear-image-auth-unlock-points")
+    ?.addEventListener("click", () => {
+      state.gridUnlockPattern = [];
+      state.imageGridPattern = [];
+      state.imageUnlockBrushPath = [];
+      redrawImageAuthGridCanvas(
+        "image-auth-unlock-canvas",
+        state.imageGridPattern,
+        "image-auth-unlock-count",
+        "image-auth-unlock-order",
+        state.imageUnlockBrushPath,
+      );
     });
 
   document
     .querySelector("#verify-image-auth-unlock")
     ?.addEventListener("click", async () => {
-      if (state.gridUnlockPattern.length === 0) {
+      const selectedCells =
+        state.imageGridCellValues.length === 25
+          ? state.imageGridPattern
+          : state.gridUnlockPattern;
+      if (selectedCells.length === 0) {
         state.gridUnlockError = "Selecciona els punts del teu patró.";
         render();
         return;
@@ -3160,11 +3481,23 @@ function bindEvents() {
       state.loading = true;
       render();
       try {
-        const pattern = encodeImageAuthPattern(state.gridUnlockPattern);
+        const pattern =
+          state.imageGridCellValues.length === 25
+            ? state.imageGridPattern.slice()
+            : encodeImageAuthPattern(state.gridUnlockPattern);
+        const masterPassword =
+          state.imageGridCellValues.length === 25
+            ? pattern.map((cell) => state.imageGridCellValues[cell]).join("")
+            : (state.legacyImageAuthPattern.length
+                ? state.legacyImageAuthPattern
+                : pattern
+              )
+                .map((byte) => String(byte))
+                .join("-");
         const result = await invoke("unlock_vault_grid", {
           pattern,
         });
-        state.masterPassword = "";
+        state.masterPassword = masterPassword;
         state.entries = (result.entries || []).map((entry) => ({
           ...entry,
           folderId: entry.folder_id || null,
@@ -3178,17 +3511,18 @@ function bindEvents() {
         state.locked = false;
         state.showGridUnlock = false;
         state.gridUnlockPattern = [];
+        state.imageGridPattern = [];
         resetAutoLock();
       } catch (error) {
         state.gridUnlockError = String(error);
         state.gridUnlockPattern = [];
+        state.imageGridPattern = [];
       } finally {
         state.loading = false;
         render();
       }
     });
 
-  // Helper function to encode image auth pattern to bytes
   function encodeImageAuthPattern(points) {
     return points
       .map((p) => {
@@ -3199,30 +3533,288 @@ function bindEvents() {
       .flat();
   }
 
-  // Helper function to draw a point on the canvas
-  function drawPointOnCanvas(canvas, x, y, color) {
+  function drawImageAuthBackground(canvas, image) {
+    const bitmapScale = Math.min(
+      1,
+      1400 / Math.max(image.naturalWidth, image.naturalHeight),
+    );
+    const bitmapWidth = Math.max(
+      1,
+      Math.round(image.naturalWidth * bitmapScale),
+    );
+    const bitmapHeight = Math.max(
+      1,
+      Math.round(image.naturalHeight * bitmapScale),
+    );
+    if (canvas.width !== bitmapWidth || canvas.height !== bitmapHeight) {
+      canvas.width = bitmapWidth;
+      canvas.height = bitmapHeight;
+    }
     const ctx = canvas.getContext("2d");
-    const radius = 8;
-    ctx.beginPath();
-    ctx.arc(x * canvas.width / 100, y * canvas.height / 100, radius, 0, 2 * Math.PI);
-    ctx.fillStyle = color;
-    ctx.fill();
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
   }
 
-  // Helper function to render image on canvas
+  function withImageAuthBackground(canvas, drawOverlay) {
+    const source =
+      state.imageAuthImage || localStorage.getItem("image_auth_image") || "";
+    if (!source) return;
+    const draw = (image) => {
+      drawImageAuthBackground(canvas, image);
+      drawOverlay(canvas.getContext("2d"));
+    };
+    if (source === imageAuthRenderSource && imageAuthRenderBitmap) {
+      draw(imageAuthRenderBitmap);
+      return;
+    }
+    imageAuthRenderSource = source;
+    imageAuthRenderBitmap = null;
+    const image = new Image();
+    image.onload = () => {
+      if (imageAuthRenderSource !== source) return;
+      imageAuthRenderBitmap = image;
+      draw(image);
+    };
+    image.src = source;
+  }
+
+  function drawImageAuthGrid(
+    canvas,
+    selectedCells,
+    brushPath = [],
+    animatedCell = -1,
+    markerScale = 1,
+  ) {
+    withImageAuthBackground(canvas, (ctx) => {
+      const cellWidth = canvas.width / 5;
+      const cellHeight = canvas.height / 5;
+      const displayScale = canvasDisplayScale(canvas);
+      const selectedOrder = new Map(
+        selectedCells.map((cell, index) => [cell, index + 1]),
+      );
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      drawImageAuthBrushPath(ctx, canvas, brushPath, displayScale);
+      for (const [cell, order] of selectedOrder) {
+        const column = cell % 5;
+        const row = Math.floor(cell / 5);
+        const x = column * cellWidth;
+        const y = row * cellHeight;
+        const centerX = x + cellWidth / 2;
+        const centerY = y + cellHeight / 2;
+        const pointScale = cell === animatedCell ? markerScale : 1;
+        const radius = 19 * displayScale * pointScale;
+        ctx.beginPath();
+        ctx.arc(centerX, centerY, radius + 3 * displayScale, 0, 2 * Math.PI);
+        ctx.fillStyle = "rgba(255, 255, 255, 0.96)";
+        ctx.fill();
+        ctx.beginPath();
+        ctx.arc(centerX, centerY, radius, 0, 2 * Math.PI);
+        ctx.fillStyle = "#078b68";
+        ctx.fill();
+        ctx.fillStyle = "#ffffff";
+        ctx.font = `700 ${15 * displayScale * pointScale}px 'DM Sans', sans-serif`;
+        ctx.fillText(String(order), centerX, centerY);
+      }
+    });
+  }
+
+  function canvasDisplayScale(canvas) {
+    const displayedWidth = canvas.getBoundingClientRect().width;
+    return displayedWidth > 0 ? canvas.width / displayedWidth : 1;
+  }
+
+  function drawImageAuthBrushPath(ctx, canvas, brushPath, displayScale) {
+    let previousPoint = null;
+    ctx.save();
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    for (const point of brushPath) {
+      if (!point) {
+        previousPoint = null;
+        continue;
+      }
+      const x = (point.x * canvas.width) / 100;
+      const y = (point.y * canvas.height) / 100;
+      if (previousPoint) {
+        const previousX = (previousPoint.x * canvas.width) / 100;
+        const previousY = (previousPoint.y * canvas.height) / 100;
+        ctx.beginPath();
+        ctx.moveTo(previousX, previousY);
+        ctx.lineTo(x, y);
+        ctx.strokeStyle = "rgba(255, 255, 255, 0.95)";
+        ctx.lineWidth = 8 * displayScale;
+        ctx.stroke();
+        ctx.strokeStyle = "#10b981";
+        ctx.lineWidth = 5 * displayScale;
+        ctx.stroke();
+      }
+      ctx.beginPath();
+      ctx.arc(x, y, 7 * displayScale, 0, 2 * Math.PI);
+      ctx.fillStyle = "#10b981";
+      ctx.fill();
+      ctx.strokeStyle = "#ffffff";
+      ctx.lineWidth = 2 * displayScale;
+      ctx.stroke();
+      previousPoint = point;
+    }
+    ctx.restore();
+  }
+
+  function drawLegacyImagePoints(canvas, points) {
+    withImageAuthBackground(canvas, (ctx) => {
+      const displayScale = canvasDisplayScale(canvas);
+      points.forEach((point, index) => {
+        const x = (point.x * canvas.width) / 100;
+        const y = (point.y * canvas.height) / 100;
+        ctx.beginPath();
+        ctx.arc(x, y, 19 * displayScale, 0, 2 * Math.PI);
+        ctx.fillStyle = "#2471d1";
+        ctx.fill();
+        ctx.strokeStyle = "#ffffff";
+        ctx.lineWidth = 3 * displayScale;
+        ctx.stroke();
+        ctx.fillStyle = "#ffffff";
+        ctx.font = `700 ${15 * displayScale}px 'DM Sans', sans-serif`;
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText(String(index + 1), x, y);
+      });
+    });
+  }
+
+  function updateImageAuthOrder(countId, orderId, selectedCells) {
+    document.getElementById(countId).textContent = selectedCells.length;
+    document.getElementById(orderId).textContent = !selectedCells.length
+      ? "cap"
+      : selectedCells.map((_, index) => String(index + 1)).join(" → ");
+  }
+
+  function selectImageGridCell(
+    event,
+    selectedCells,
+    countId,
+    orderId,
+    brushPath = [],
+  ) {
+    if (state.imageGridCellValues.length !== 25) return;
+    const rect = event.currentTarget.getBoundingClientRect();
+    const x = (event.clientX - rect.left) / rect.width;
+    const y = (event.clientY - rect.top) / rect.height;
+    if (x < 0 || x >= 1 || y < 0 || y >= 1) return;
+    const cell = Math.floor(y * 5) * 5 + Math.floor(x * 5);
+    const point = { x: x * 100, y: y * 100 };
+    const previousPoint = brushPath.at(-1);
+    if (
+      !previousPoint ||
+      Math.hypot(point.x - previousPoint.x, point.y - previousPoint.y) >= 0.25
+    ) {
+      brushPath.push(point);
+    }
+    const isNewCell = !selectedCells.includes(cell);
+    if (isNewCell) selectedCells.push(cell);
+    if (
+      countId === "image-auth-count" &&
+      selectedCells.length >= 5 &&
+      state.gridSetupError.startsWith("Has de seleccionar almenys 5")
+    ) {
+      state.gridSetupError = "";
+      document.getElementById("image-auth-setup-error")?.remove();
+    }
+    drawImageAuthGrid(event.currentTarget, selectedCells, brushPath);
+    if (isNewCell) {
+      animateImageAuthCell(event.currentTarget, selectedCells, brushPath, cell);
+    }
+    updateImageAuthOrder(countId, orderId, selectedCells);
+  }
+
+  function animateImageAuthCell(canvas, selectedCells, brushPath, cell) {
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    const duration = 260;
+    const startedAt = performance.now();
+    const animate = (now) => {
+      if (!canvas.isConnected) return;
+      const progress = Math.min((now - startedAt) / duration, 1);
+      const offset = progress - 1;
+      const eased = 1 + 2.2 * offset ** 3 + 1.2 * offset ** 2;
+      const scale = 0.72 + eased * 0.28;
+      drawImageAuthGrid(canvas, selectedCells, brushPath, cell, scale);
+      if (progress < 1) requestAnimationFrame(animate);
+      else drawImageAuthGrid(canvas, selectedCells, brushPath);
+    };
+    requestAnimationFrame(animate);
+  }
+
+  function redrawImageAuthGridCanvas(
+    canvasId,
+    selectedCells,
+    countId,
+    orderId,
+    brushPath = [],
+  ) {
+    const canvas = document.getElementById(canvasId);
+    if (!canvas) return;
+    if (state.imageGridCellValues.length === 25) {
+      drawImageAuthGrid(canvas, selectedCells, brushPath);
+      updateImageAuthOrder(countId, orderId, selectedCells);
+    } else {
+      drawLegacyImagePoints(canvas, state.gridUnlockPattern);
+      document.getElementById(countId).textContent =
+        state.gridUnlockPattern.length;
+      document.getElementById(orderId).textContent =
+        state.gridUnlockPattern
+          .map((_, index) => String(index + 1))
+          .join(" → ") || "cap";
+    }
+  }
+
+  function generateGridFragments() {
+    const characterSets = [
+      "ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+      "abcdefghijklmnopqrstuvwxyz",
+      "0123456789",
+      "!@#$%^&*()-_=+[]{}",
+    ];
+    const fragments = [];
+    const uniqueFragments = new Set();
+    while (fragments.length < 25) {
+      const characters = characterSets.map(
+        (set) => set[secureRandomIndex(set.length)],
+      );
+      for (let index = characters.length - 1; index > 0; index -= 1) {
+        const swapIndex = secureRandomIndex(index + 1);
+        [characters[index], characters[swapIndex]] = [
+          characters[swapIndex],
+          characters[index],
+        ];
+      }
+      const fragment = characters.join("");
+      if (uniqueFragments.has(fragment)) continue;
+      uniqueFragments.add(fragment);
+      fragments.push(fragment);
+    }
+    return fragments;
+  }
+
+  function secureRandomIndex(limit) {
+    const range = 0x100000000;
+    const cutoff = range - (range % limit);
+    const value = new Uint32Array(1);
+    do {
+      crypto.getRandomValues(value);
+    } while (value[0] >= cutoff);
+    return value[0] % limit;
+  }
+
   function renderImageOnCanvas() {
     const canvas = document.getElementById("image-auth-canvas");
-    const ctx = canvas.getContext("2d");
-    const img = new Image();
-    img.onload = () => {
-      const aspect = img.width / img.height;
-      if (aspect > canvas.width / canvas.height) {
-        ctx.drawImage(img, 0, 0, canvas.width, img.height * canvas.width / img.width);
-      } else {
-        ctx.drawImage(img, 0, 0, img.width * canvas.height / img.height, canvas.height);
-      }
-    };
-    img.src = state.imageAuthImage;
+    if (canvas) {
+      drawImageAuthGrid(
+        canvas,
+        state.imageGridPattern,
+        state.imageGridBrushPath,
+      );
+    }
   }
   document
     .querySelector("#change-auth-method")
@@ -3234,39 +3826,97 @@ function bindEvents() {
     .querySelector("#change-auth-password")
     ?.addEventListener("click", () => {
       state.changeAuthSelected = "password";
+      state.changeAuthError = "";
       render();
     });
   document
     .querySelector("#change-auth-image")
     ?.addEventListener("click", () => {
       state.changeAuthSelected = "image";
+      state.changeAuthError = "";
       render();
     });
   document
     .querySelector("#save-auth-method")
     ?.addEventListener("click", async () => {
-      try {
-        if (state.changeAuthSelected === "image") {
-          state.showGridSetup = true;
-          state.showChangeAuthModal = false;
-          render();
-        } else {
-          await invoke("change_auth_method", {
-            currentPassword: state.masterPassword,
-            newAuthType: "password",
-          });
-          state.showChangeAuthModal = false;
-          state.masterPassword = "";
-          state.locked = true;
-          state.showWelcome = false;
-          showToast("Mètode d'autenticació canviat correctament.");
-          render();
+      if (state.changeAuthSelected === "image") {
+        state.showGridSetup = true;
+        state.gridSetupPattern = [];
+        state.imageGridPattern = [];
+        state.imageGridBrushPath = [];
+        state.imageGridCellValues = generateGridFragments();
+        state.gridSetupError = "";
+        state.imageAuthImage = "";
+        state.changingAuthMethod = true;
+        imageAuthRenderSource = "";
+        state.showChangeAuthModal = false;
+        render();
+        return;
+      }
+
+      const newPassword =
+        document.querySelector("#change-auth-new-password")?.value || "";
+      const confirmPassword =
+        document.querySelector("#change-auth-confirm-password")?.value || "";
+      const errorMessage =
+        newPassword.length < 12
+          ? "La contrasenya nova ha de tenir com a mínim 12 caràcters."
+          : newPassword !== confirmPassword
+            ? "Les contrasenyes no coincideixen."
+            : "";
+      if (errorMessage) {
+        state.changeAuthError = errorMessage;
+        const errorElement = document.querySelector("#change-auth-error");
+        if (errorElement) {
+          errorElement.textContent = errorMessage;
+          errorElement.hidden = false;
         }
+        return;
+      }
+
+      state.changeAuthBusy = true;
+      const saveButton = document.querySelector("#save-auth-method");
+      if (saveButton) {
+        saveButton.disabled = true;
+        saveButton.textContent = "Canviant...";
+      }
+      try {
+        await invoke("change_vault_to_password", {
+          currentPassword: state.masterPassword,
+          newPassword,
+        });
+        state.masterPassword = newPassword;
+        state.showChangeAuthModal = false;
+        state.changeAuthError = "";
+        state.changeAuthSelected = "password";
+        localStorage.removeItem("image_auth_image");
+        showToast("Mètode d'autenticació canviat a contrasenya.");
+        render();
       } catch (error) {
         state.changeAuthError = String(error);
-        render();
+        const errorElement = document.querySelector("#change-auth-error");
+        if (errorElement) {
+          errorElement.textContent = state.changeAuthError;
+          errorElement.hidden = false;
+        }
+      } finally {
+        state.changeAuthBusy = false;
+        if (saveButton?.isConnected) {
+          saveButton.disabled = false;
+          saveButton.textContent = "Desa el mètode";
+        }
       }
     });
+
+  document
+    .querySelectorAll("#cancel-change-auth, #cancel-change-auth-bottom")
+    .forEach((button) =>
+      button.addEventListener("click", () => {
+        state.showChangeAuthModal = false;
+        state.changeAuthError = "";
+        render();
+      }),
+    );
   document
     .querySelectorAll("#dismiss-entry-guide, #dismiss-entry-guide-later")
     .forEach((button) =>
@@ -3321,7 +3971,6 @@ function bindEvents() {
     .querySelector("#reset-vault")
     ?.addEventListener("click", resetLocalVault);
 
-  // Cercador
   document.querySelector("#search")?.addEventListener("input", (event) => {
     state.query = event.target.value.toLowerCase();
     render();
@@ -3330,7 +3979,41 @@ function bindEvents() {
     search?.setSelectionRange(search.value.length, search.value.length);
   });
 
-  // Carpetes
+  document
+    .querySelector("#palette-search")
+    ?.addEventListener("input", (event) => {
+      state.paletteQuery = event.target.value;
+      state.paletteIndex = 0;
+      state.paletteCopiedId = null;
+      clearTimeout(paletteHideTimer);
+      render();
+      focusPaletteSearch();
+    });
+  document
+    .querySelector("#palette-backdrop")
+    ?.addEventListener("click", (event) => {
+      if (event.target.id === "palette-backdrop") closeCommandPalette();
+    });
+  document.querySelectorAll("[data-palette-entry]").forEach((button) => {
+    button.addEventListener("mouseenter", () => {
+      state.paletteIndex = Array.from(button.parentElement.children).indexOf(
+        button,
+      );
+      document
+        .querySelectorAll("[data-palette-entry]")
+        .forEach((item, index) => {
+          item.classList.toggle("selected", index === state.paletteIndex);
+          item.setAttribute(
+            "aria-selected",
+            String(index === state.paletteIndex),
+          );
+        });
+    });
+    button.addEventListener("click", () =>
+      selectPaletteEntry(button.dataset.paletteEntry),
+    );
+  });
+
   document.querySelectorAll("[data-folder]").forEach((button) =>
     button.addEventListener("click", () => {
       state.activeFolderId = button.dataset.folder || "";
@@ -3367,7 +4050,6 @@ function bindEvents() {
     }),
   );
 
-  // Navegació de vistes
   document.querySelector("#nav-vault")?.addEventListener("click", () => {
     state.view = "vault";
     render();
@@ -3383,7 +4065,6 @@ function bindEvents() {
     render();
   });
 
-  // Configuració d'aparença i bloqueig
   document
     .querySelector("#theme-setting")
     ?.addEventListener("change", (event) => {
@@ -3421,25 +4102,6 @@ function bindEvents() {
     }),
   );
 
-  document.querySelector("#change-master")?.addEventListener("click", () => {
-    state.masterChangeError = "";
-    state.showChangeMasterModal = true;
-    render();
-  });
-
-  document
-    .querySelector("#change-master-form")
-    ?.addEventListener("submit", changeMasterPassword);
-  document
-    .querySelectorAll("#cancel-change-master, #cancel-change-master-bottom")
-    .forEach((button) =>
-      button.addEventListener("click", () => {
-        state.showChangeMasterModal = false;
-        state.masterChangeError = "";
-        render();
-      }),
-    );
-
   document
     .querySelectorAll("#cancel-reset-vault, #cancel-reset-vault-bottom")
     .forEach((button) =>
@@ -3449,7 +4111,6 @@ function bindEvents() {
     .querySelector("#confirm-reset-vault")
     ?.addEventListener("click", confirmResetLocalVault);
 
-  // Paperera
   document.querySelector("#open-trash")?.addEventListener("click", () => {
     state.showTrashModal = true;
     render();
@@ -3484,7 +4145,6 @@ function bindEvents() {
       ),
     );
 
-  // Importació i exportació
   document
     .querySelector("#export-vault")
     ?.addEventListener("click", exportVault);
@@ -3497,7 +4157,18 @@ function bindEvents() {
     .querySelector("#import-file")
     ?.addEventListener("change", importVault);
 
-  // Generador de credencials
+  const generatedOutput = document.querySelector(".generated-card output");
+  generatedOutput?.addEventListener("dragstart", (event) => {
+    const value = generatedOutput.textContent?.trim();
+    if (!value || !event.dataTransfer) return;
+    event.dataTransfer.setData("text/plain", value);
+    event.dataTransfer.effectAllowed = "copy";
+    generatedOutput.classList.add("is-dragging");
+  });
+  generatedOutput?.addEventListener("dragend", () => {
+    generatedOutput.classList.remove("is-dragging");
+  });
+
   document.querySelectorAll("[data-generator-type]").forEach((button) =>
     button.addEventListener("click", () => {
       state.generatorType = button.dataset.generatorType;
@@ -3561,7 +4232,6 @@ function bindEvents() {
       input.addEventListener("change", updateGeneratorOptions),
     );
 
-  // Formulari i targetes d'entrades
   document
     .querySelectorAll("#new-entry, #empty-new, #nav-new")
     .forEach((button) =>
@@ -3587,7 +4257,6 @@ function bindEvents() {
     });
   });
 
-  // Modal de detalls d'accés
   document
     .querySelector("#close-details")
     ?.addEventListener("click", closeViewEntry);
@@ -3622,15 +4291,10 @@ function bindEvents() {
   document.querySelectorAll("[data-copy-text]").forEach((button) =>
     button.addEventListener("click", () => {
       const text = button.dataset.copyText;
-      if (text) {
-        navigator.clipboard
-          .writeText(text)
-          .then(() => showToast("Copiat al porta-retalls."));
-      }
+      if (text) copySensitiveText(text, "Copiat al porta-retalls.", button);
     }),
   );
 
-  // Formulari d'edició / creació
   document.querySelector("#entry-form")?.addEventListener("submit", saveEntry);
   document
     .querySelector("#save-entry-top")
@@ -3659,7 +4323,7 @@ function bindEvents() {
   document.querySelectorAll("[data-copy]").forEach((button) =>
     button.addEventListener("click", (e) => {
       e.stopPropagation();
-      copyEntry(button.dataset.copy);
+      copyEntry(button.dataset.copy, button);
     }),
   );
 
@@ -3677,7 +4341,6 @@ function bindEvents() {
     }),
   );
 
-  // Refresc manual i bloqueig
   document
     .querySelector("#refresh-vault")
     ?.addEventListener("click", async () => {
@@ -3690,7 +4353,6 @@ function bindEvents() {
   });
 }
 
-// Observador del tema del sistema operatiu per al mode 'auto'
 try {
   window
     .matchMedia("(prefers-color-scheme: dark)")
@@ -3700,13 +4362,46 @@ try {
       }
     });
 } catch {
-  // Ignorat en entorns webview antics
 }
 
-// Inicialització de la interfície
 ["pointerdown", "keydown", "touchstart"].forEach((eventName) =>
   window.addEventListener(eventName, resetAutoLock, { passive: true }),
 );
+
+window.addEventListener("keydown", (event) => {
+  const isPaletteShortcut =
+    (event.metaKey || event.ctrlKey) && event.shiftKey && event.code === "KeyP";
+  if (isPaletteShortcut && !isTauriRuntime()) {
+    event.preventDefault();
+    state.showCommandPalette ? closeCommandPalette() : openCommandPalette();
+    return;
+  }
+  if (!state.showCommandPalette) return;
+
+  if (event.key === "Escape") {
+    event.preventDefault();
+    closeCommandPalette();
+    return;
+  }
+  const results = [...document.querySelectorAll("[data-palette-entry]")];
+  if (!results.length) return;
+  if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+    event.preventDefault();
+    const direction = event.key === "ArrowDown" ? 1 : -1;
+    state.paletteIndex =
+      (state.paletteIndex + direction + results.length) % results.length;
+    render();
+    focusPaletteSearch();
+  } else if (event.key === "Enter") {
+    event.preventDefault();
+    selectPaletteEntry(results[state.paletteIndex].dataset.paletteEntry);
+  }
+});
+document
+  .querySelector("#entry-password")
+  ?.addEventListener("input", (event) => {
+    updateEntryStrength(event.target.value);
+  });
 
 async function reloadVaultEntries() {
   if (state.locked) return;
@@ -3735,22 +4430,18 @@ async function reloadVaultEntries() {
       render();
     }
   } catch (err) {
-    // Silently ignore if locked or error
   }
 }
 
-try {
-  import("@tauri-apps/api/event")
-    .then(({ listen }) => {
-      listen("vault-updated", async () => {
-        await reloadVaultEntries();
-        showToast("Caixa forta sincronitzada amb l'extensió.");
-      });
-    })
-    .catch(() => {});
-} catch {
-  // Ignored in non-tauri or fallback mode
-}
+listen("vault-updated", async () => {
+  await reloadVaultEntries();
+  showToast("Caixa forta sincronitzada amb l'extensió.");
+}).catch(() => {});
+
+listen("palette-shortcut", () => {
+  if (state.locked) return;
+  state.showCommandPalette ? closeCommandPalette() : openCommandPalette();
+}).catch(() => {});
 
 window.addEventListener("focus", () => {
   if (!state.locked) {
