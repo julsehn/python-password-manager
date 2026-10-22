@@ -1326,6 +1326,9 @@ fn change_vault_to_password(
     Ok(())
 }
 
+/// Set grid (image) authentication
+/// Stores coordinate pairs for image-based authentication
+
 #[tauri::command]
 fn set_grid_auth(pattern: Vec<u8>, _master_password: Option<String>) -> Result<(), String> {
     println!("Setting up image authentication...");

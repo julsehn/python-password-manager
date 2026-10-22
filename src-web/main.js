@@ -248,6 +248,10 @@ const state = {
 
 let imageAuthRenderSource = "";
 let imageAuthRenderBitmap = null;
+/* ==========================================================================
+   Funcions d'utilitat
+   ========================================================================== */
+
 
 const isTauriRuntime = () => Boolean(window.__TAURI_INTERNALS__);
 
@@ -361,6 +365,8 @@ async function lockVault() {
   state.view = "vault";
   render();
 }
+
+// Lock screen check
 
 async function checkVaultLocked() {
   try {
@@ -3105,10 +3111,14 @@ function bindEvents() {
     cell.addEventListener("click", () => {
       const cellIndex = Number(cell.dataset.gridCell);
       if (cell.classList.contains("selected")) {
+        // Remove from pattern
+
         state.gridSetupPattern = state.gridSetupPattern.filter(
           (i) => i !== cellIndex,
         );
       } else {
+        // Add to pattern
+
         state.gridSetupPattern.push(cellIndex);
       }
       render();
@@ -4156,6 +4166,8 @@ function bindEvents() {
   document
     .querySelector("#import-file")
     ?.addEventListener("change", importVault);
+
+  // Generador de credencials
 
   const generatedOutput = document.querySelector(".generated-card output");
   generatedOutput?.addEventListener("dragstart", (event) => {
