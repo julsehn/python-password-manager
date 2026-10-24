@@ -8,7 +8,7 @@ import time
 from typing import List, Optional
 import binascii
 from cryptography.exceptions import InvalidTag
-from src.encryption import derive_key, derive_legacy_pbkdf2_key, encrypt, decrypt
+from src.encryption import derive_key, encrypt, decrypt
 from src.models import PasswordEntry
 from threading import Lock
 
@@ -221,7 +221,6 @@ def serialize_vault(entries: List[PasswordEntry], master_password: str) -> str:
         "salt": base64.b64encode(salt).decode("ascii"),
         "nonce": base64.b64encode(nonce).decode("ascii"),
         "ciphertext": base64.b64encode(ciphertext).decode("ascii"),
-        "kdf": "argon2id",
         "version": "1",
     }
 
@@ -249,13 +248,7 @@ def deserialize_vault(blob: str, master_password: str, lockout_key: str = VAULT_
         ciphertext = base64.b64decode(payload["ciphertext"], validate=True)
         if len(salt) != 16 or len(nonce) != 12:
             raise ValueError("Format de caixa forta invàlid")
-        kdf = payload.get("kdf", "pbkdf2-sha256")
-        if kdf == "argon2id":
-            key, _ = derive_key(master_password, salt=salt)
-        elif kdf == "pbkdf2-sha256":
-            key = derive_legacy_pbkdf2_key(master_password, salt)
-        else:
-            raise ValueError("Algoritme de derivació de clau no compatible")
+        key, _ = derive_key(master_password, salt=salt)
         data = json.loads(decrypt(nonce, ciphertext, key).decode("utf-8"))
         entries = data.get("entries", []) if isinstance(data, dict) else []
         if not isinstance(entries, list) or len(entries) > 10_000:
@@ -379,7 +372,7 @@ def _generate_key_from_hotspots(hotspots: list[dict], salt: bytes) -> str:
     """Generate a deterministic master key string from hotspot coordinates.
 
     The hotspots represent the user's drawn pattern. We convert these to a
-    canonical string that can be used as input for PBKDF2 key derivation.
+    canonical string that can be used as input for Argon2id key derivation.
 
     Format: "x1,y1;x2,y2;...;salt_hex"
     This creates a unique "password" from the user's biometric pattern.

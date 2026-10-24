@@ -123,7 +123,7 @@ The response flows back through the same path to the extension.
 
 1. **Native Messaging**: Direct OS stdio bridge, no network exposure
 2. **AES-256-GCM**: Strong encryption for all vault data
-3. **Argon2id**: Memory-hard key derivation raises the cost of offline guessing; legacy PBKDF2 vaults remain readable
+3. **Argon2id**: Memory-hard key derivation raises the cost of offline guessing
 4. **Session Management**: In-memory sessions with secure temp files
 5. **No credentials in transit**: All communication is local
 

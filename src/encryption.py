@@ -2,8 +2,6 @@ import os
 from typing import Tuple
 
 from argon2.low_level import Type, hash_secret_raw
-from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
-from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 
@@ -11,7 +9,6 @@ ARGON2_MEMORY_COST_KIB = 19 * 1024
 ARGON2_TIME_COST = 2
 ARGON2_PARALLELISM = 1
 KEY_LENGTH = 32
-LEGACY_PBKDF2_ITERATIONS = 600_000
 
 
 def derive_key(
@@ -35,17 +32,6 @@ def derive_key(
         type=Type.ID,
     )
     return key, salt
-
-
-def derive_legacy_pbkdf2_key(password: str, salt: bytes) -> bytes:
-    """Derive keys for vaults created before Argon2id was introduced."""
-    kdf = PBKDF2HMAC(
-        algorithm=hashes.SHA256(),
-        length=KEY_LENGTH,
-        salt=salt,
-        iterations=LEGACY_PBKDF2_ITERATIONS,
-    )
-    return kdf.derive(password.encode("utf-8"))
 
 
 def encrypt(plaintext: bytes, key: bytes) -> tuple[bytes, bytes]:
