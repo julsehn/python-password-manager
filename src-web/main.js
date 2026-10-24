@@ -192,6 +192,7 @@ const state = {
   toast: "",
   viewingEntryId: null,
   editingEntryId: null,
+  entryFormDraft: null,
   showEntryForm: false,
   showTrashModal: false,
   showResetConfirm: false,
@@ -251,7 +252,6 @@ let imageAuthRenderBitmap = null;
 /* ==========================================================================
    Funcions d'utilitat
    ========================================================================== */
-
 
 const isTauriRuntime = () => Boolean(window.__TAURI_INTERNALS__);
 
@@ -378,8 +378,7 @@ async function checkVaultLocked() {
         return true;
       }
     }
-  } catch (error) {
-  }
+  } catch (error) {}
   return false;
 }
 
@@ -1681,6 +1680,15 @@ function entryFormModal() {
     ? state.entries.find((e) => e.id === state.editingEntryId) || {}
     : {};
   const { url, cleanNotes } = parseEntryNotes(entry.notes || "");
+  const draft = state.entryFormDraft || {};
+  const values = {
+    site: draft.site ?? entry.site ?? "",
+    folderId: draft.folderId ?? entry.folderId ?? "",
+    username: draft.username ?? entry.username ?? "",
+    password: draft.password ?? entry.password ?? "",
+    url: draft.url ?? url ?? "",
+    notes: draft.notes ?? cleanNotes ?? "",
+  };
 
   return `
     <div class="modal-backdrop">
@@ -1710,13 +1718,13 @@ function entryFormModal() {
                 required
                 autofocus
                 placeholder="Ex. YouTube"
-                value="${escapeHtml(entry.site || "")}"
+                value="${escapeHtml(values.site)}"
               />
 
               <label class="form-label" for="entry-folder">Carpeta</label>
               <select class="form-input" id="entry-folder" name="folder">
                 <option value="">Sense carpeta</option>
-                ${state.folders.map((folder) => `<option value="${escapeHtml(folder.id)}" ${entry.folderId === folder.id ? "selected" : ""}>${escapeHtml(folder.name)}</option>`).join("")}
+                ${state.folders.map((folder) => `<option value="${escapeHtml(folder.id)}" ${values.folderId === folder.id ? "selected" : ""}>${escapeHtml(folder.name)}</option>`).join("")}
               </select>
             </section>
 
@@ -1728,7 +1736,7 @@ function entryFormModal() {
                 id="entry-username"
                 name="username"
                 autocomplete="username"
-                value="${escapeHtml(entry.username || "")}"
+                value="${escapeHtml(values.username)}"
               />
 
               <label class="form-label" for="entry-password">Contrasenya <b>*</b></label>
@@ -1737,25 +1745,25 @@ function entryFormModal() {
                   class="form-input"
                   id="entry-password"
                   name="password"
-                  type="text"
+                  type="password"
                   required
                   autocomplete="new-password"
-                  value="${escapeHtml(entry.password || "")}"
+                  value="${escapeHtml(values.password)}"
                 />
-                <button type="button" class="field-action" id="entry-password-reveal" title="Ocultar contrasenya">
+                <button type="button" class="field-action" id="entry-password-reveal" title="Mostrar contrasenya">
                   ${icon("Eye", 18)}
                 </button>
                 <button type="button" class="field-action ${state.showFirstEntryGuide && state.firstEntryGuideStep === 3 ? "guide-highlight" : ""}" id="generate-password" title="Generar contrasenya">
                   ${icon("RefreshCw", 18)}
                 </button>
               </div>
-              <div class="inline-password-strength" id="entry-password-strength" ${entry.password ? "" : "hidden"}>
-                <div class="strength-label"><span>Força</span><strong>${entry.password ? passwordStrength(entry.password).label : ""}</strong></div>
-                <div class="strength-track"><span class="strength-fill strength-${entry.password ? passwordStrength(entry.password).level : "weak"}" style="width:${entry.password ? passwordStrength(entry.password).percent : 0}%"></span></div>
-                <small>${entry.password ? passwordStrength(entry.password).hint : ""}</small>
+              <div class="inline-password-strength" id="entry-password-strength" ${values.password ? "" : "hidden"}>
+                <div class="strength-label"><span>Força</span><strong>${values.password ? passwordStrength(values.password).label : ""}</strong></div>
+                <div class="strength-track"><span class="strength-fill strength-${values.password ? passwordStrength(values.password).level : "weak"}" style="width:${values.password ? passwordStrength(values.password).percent : 0}%"></span></div>
+                <small>${values.password ? passwordStrength(values.password).hint : ""}</small>
               </div>
               <small class="helper">
-                La contrasenya és visible. Utilitza el generador per crear-ne una de forta i única.
+                La contrasenya està oculta. Utilitza el generador per crear-ne una de forta i única.
               </small>
             </section>
 
@@ -1768,12 +1776,12 @@ function entryFormModal() {
                 name="url"
                 type="url"
                 placeholder="https://"
-                value="${escapeHtml(url || "")}"
+                value="${escapeHtml(values.url)}"
               />
 
               <h3>Opcions addicionals</h3>
               <label class="form-label" for="entry-notes">Notes</label>
-              <textarea class="form-input notes-input" id="entry-notes" name="notes">${escapeHtml(cleanNotes || "")}</textarea>
+              <textarea class="form-input notes-input" id="entry-notes" name="notes">${escapeHtml(values.notes)}</textarea>
             </section>
 
             ${state.formError ? `<p class="error form-error">${escapeHtml(state.formError)}</p>` : ""}
@@ -2557,8 +2565,7 @@ async function saveVault(masterPassword = null, syncToRailway = false) {
     if (masterPassword === null) {
       try {
         localStorage.setItem("caixa-forta-master-password", password);
-      } catch (e) {
-      }
+      } catch (e) {}
     }
   } catch (error) {
     showToast(`Error saving vault: ${error}`);
@@ -4373,8 +4380,7 @@ try {
         applySettings();
       }
     });
-} catch {
-}
+} catch {}
 
 ["pointerdown", "keydown", "touchstart"].forEach((eventName) =>
   window.addEventListener(eventName, resetAutoLock, { passive: true }),
@@ -4441,8 +4447,7 @@ async function reloadVaultEntries() {
       }
       render();
     }
-  } catch (err) {
-  }
+  } catch (err) {}
 }
 
 listen("vault-updated", async () => {

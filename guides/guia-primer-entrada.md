@@ -171,7 +171,7 @@
 │  ✅ La teva dada està protegida:                │
 │                                                  │
 │  • Encriptació: AES-256-GCM                    │
-│  • Derivació de clau: PBKDF2 (600k iteracions) │
+│  • Derivació de clau: Argon2id                  │
 │  • Protecció contra força bruta: 10 intents     │
 │  • Bloqueig automàtic: 5 minuts                │
 │                                                  │

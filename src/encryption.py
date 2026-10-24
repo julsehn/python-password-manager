@@ -1,41 +1,51 @@
 import os
 from typing import Tuple
 
+from argon2.low_level import Type, hash_secret_raw
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 
-# Minimum iterations per OWASP 2023 guidelines for PBKDF2-SHA256 (600k+ recommended for modern threats)
-# (200k is the old default; 600k+ is recommended for modern threats)
-DEFAULT_ITERATIONS = 600_000
+ARGON2_MEMORY_COST_KIB = 19 * 1024
+ARGON2_TIME_COST = 2
+ARGON2_PARALLELISM = 1
+KEY_LENGTH = 32
+LEGACY_PBKDF2_ITERATIONS = 600_000
 
 
 def derive_key(
     password: str,
     salt: bytes | None = None,
-    iterations: int = DEFAULT_ITERATIONS,
 ) -> Tuple[bytes, bytes]:
-    """Derive a 32-byte key from password using PBKDF2-HMAC-SHA256.
+    """Derive a 32-byte key from password using Argon2id.
 
     Returns (key, salt). If salt is None a new random 16-byte salt is generated.
     """
-    if iterations < DEFAULT_ITERATIONS:
-        raise ValueError(
-            f"PBKDF2 iterations must be >= {DEFAULT_ITERATIONS}, got {iterations}"
-        )
-
     if salt is None:
         salt = os.urandom(16)
 
+    key = hash_secret_raw(
+        secret=password.encode("utf-8"),
+        salt=salt,
+        time_cost=ARGON2_TIME_COST,
+        memory_cost=ARGON2_MEMORY_COST_KIB,
+        parallelism=ARGON2_PARALLELISM,
+        hash_len=KEY_LENGTH,
+        type=Type.ID,
+    )
+    return key, salt
+
+
+def derive_legacy_pbkdf2_key(password: str, salt: bytes) -> bytes:
+    """Derive keys for vaults created before Argon2id was introduced."""
     kdf = PBKDF2HMAC(
         algorithm=hashes.SHA256(),
-        length=32,
+        length=KEY_LENGTH,
         salt=salt,
-        iterations=iterations,
+        iterations=LEGACY_PBKDF2_ITERATIONS,
     )
-    key = kdf.derive(password.encode("utf-8"))
-    return key, salt
+    return kdf.derive(password.encode("utf-8"))
 
 
 def encrypt(plaintext: bytes, key: bytes) -> tuple[bytes, bytes]:
@@ -53,11 +63,11 @@ def decrypt(nonce: bytes, ciphertext: bytes, key: bytes) -> bytes:
     return aesgcm.decrypt(nonce, ciphertext, associated_data=None)
 
 
-def derive_key_from_hotspots(hotspots: list[dict], salt_hex: str, iterations: int = DEFAULT_ITERATIONS) -> Tuple[bytes, bytes]:
+def derive_key_from_hotspots(hotspots: list[dict], salt_hex: str) -> Tuple[bytes, bytes]:
     """Derive an AES key from biometric hotspot coordinates.
 
     This function converts a sequence of (x, y) percentage coordinates into
-    a deterministic key using PBKDF2. The coordinates act as the "password" input,
+    a deterministic key using Argon2id. The coordinates act as the "password" input,
     and the salt provides key stretching to prevent brute-force attacks.
 
     This is used for image-based biometric authentication where the user's
@@ -66,8 +76,6 @@ def derive_key_from_hotspots(hotspots: list[dict], salt_hex: str, iterations: in
     Args:
         hotspots: List of {"x_pct": float, "y_pct": float} representing the user's drawn pattern
         salt_hex: Hex-encoded random salt bytes (32 bytes encoded as hex)
-        iterations: PBKDF2 iteration count for key derivation
-
     Returns:
         Tuple of (derived_32_byte_key, salt_bytes) for use with encrypt/decrypt
     """
@@ -78,29 +86,21 @@ def derive_key_from_hotspots(hotspots: list[dict], salt_hex: str, iterations: in
     # Create the key derivation input from coordinates
     password_string = f"hotspots:{coords_str};salt:{salt.hex()}"
 
-    kdf = PBKDF2HMAC(
-        algorithm=hashes.SHA256(),
-        length=32,
-        salt=salt,
-        iterations=iterations,
-    )
-    key = kdf.derive(password_string.encode("utf-8"))
+    key, _ = derive_key(password_string, salt=salt)
 
     return key, salt
 
 
-def derive_key_from_grid_pattern(pattern_cells: list[int], salt_hex: str, iterations: int = DEFAULT_ITERATIONS) -> Tuple[bytes, bytes]:
+def derive_key_from_grid_pattern(pattern_cells: list[int], salt_hex: str) -> Tuple[bytes, bytes]:
     """Derive an AES key from a grid-based pattern (cell indices).
 
     This converts grid cell indices to a password-like string and derives
-    a key from it using PBKDF2. Each cell index represents a discrete choice,
+    a key from it using Argon2id. Each cell index represents a discrete choice,
     making this resistant to keyloggers and RATs that see screen interactions.
 
     Args:
         pattern_cells: List of grid cell indices (each 0-24 for 5x5 grid)
         salt_hex: Hex-encoded random salt bytes (32 bytes encoded as hex)
-        iterations: PBKDF2 iteration count for key derivation
-
     Returns:
         Tuple of (derived_32_byte_key, salt_bytes) for use with encrypt/decrypt
     """
@@ -110,12 +110,6 @@ def derive_key_from_grid_pattern(pattern_cells: list[int], salt_hex: str, iterat
     from src.storage import generate_grid_password
     password_string = generate_grid_password(pattern_cells)
     
-    kdf = PBKDF2HMAC(
-        algorithm=hashes.SHA256(),
-        length=32,
-        salt=salt,
-        iterations=iterations,
-    )
-    key = kdf.derive(password_string.encode("utf-8"))
+    key, _ = derive_key(password_string, salt=salt)
 
     return key, salt

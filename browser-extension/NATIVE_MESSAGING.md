@@ -6,7 +6,7 @@ The Caixa Forta browser extension uses **native messaging** for secure, direct c
 
 ✅ **Direct stdio communication** - No network exposure  
 ✅ **AES-256-GCM encryption** - Industry-standard security  
-✅ **PBKDF2 key derivation** - 600k iterations for brute-force protection  
+✅ **Argon2id key derivation** - Memory-hard protection for vault passwords
 ✅ **Cross-platform** - Works on macOS, Windows, and Linux  
 ✅ **Tauri integration** - Communicates with the desktop app when running
 
@@ -31,6 +31,7 @@ The Caixa Forta browser extension uses **native messaging** for secure, direct c
 **Location**: `browser-extension/native/caixa_forta_native.py`
 
 This Python script:
+
 - Implements the WebExtension Native Messaging protocol
 - Uses length-prefixed messages for efficiency
 - Manages secure in-memory sessions
@@ -48,6 +49,7 @@ The `Obrir_Caixa_Forta.command` script automatically sets up native messaging:
 ```
 
 This will:
+
 - Build the browser extension
 - Register the native messaging host with Firefox and Chrome
 - Launch the application
@@ -65,12 +67,14 @@ chmod +x browser-extension/native/caixa_forta_native.py
 ```
 
 This creates registration files at:
+
 - **Firefox**: `~/.mozilla/native-messaging-hosts/caixa_forta.json`
 - **Chrome**: `~/.config/google-chrome/NativeMessagingHosts/caixa_forta.json`
 
 ### 3. Load the Extension
 
 #### Chrome:
+
 1. Go to `chrome://extensions/`
 2. Enable **Developer mode**
 3. Click **"Load unpacked"**
@@ -78,6 +82,7 @@ This creates registration files at:
 5. **Accept native messaging permissions** when prompted
 
 #### Firefox:
+
 1. Go to `about:debugging`
 2. Click **"This Firefox"**
 3. Click **"Load Temporary Add-on"**
@@ -87,7 +92,9 @@ This creates registration files at:
 ## How It Works
 
 ### 1. Extension Requests Data
+
 The extension sends a JSON message to the native host:
+
 ```json
 {
   "action": "fetchCredentials",
@@ -96,22 +103,27 @@ The extension sends a JSON message to the native host:
 ```
 
 ### 2. Native Host Checks Tauri
+
 The native host first checks if the Tauri desktop app is running:
+
 - If running and unlocked → forwards request to Tauri API
 - If not running → uses local session cache
 
 ### 3. Tauri Handles Request
+
 If Tauri is running, it handles the request via its HTTPS API:
+
 - `/api/v1/vault/credentials?domain=example.com`
 
 ### 4. Response Returns
+
 The response flows back through the same path to the extension.
 
 ## Security Features
 
 1. **Native Messaging**: Direct OS stdio bridge, no network exposure
 2. **AES-256-GCM**: Strong encryption for all vault data
-3. **PBKDF2 (600k iterations)**: Slow key derivation prevents brute-force
+3. **Argon2id**: Memory-hard key derivation raises the cost of offline guessing; legacy PBKDF2 vaults remain readable
 4. **Session Management**: In-memory sessions with secure temp files
 5. **No credentials in transit**: All communication is local
 
@@ -120,6 +132,7 @@ The response flows back through the same path to the extension.
 ### Extension shows "Disconnected"
 
 1. **Check the native host is executable**:
+
    ```bash
    chmod +x browser-extension/native/caixa_forta_native.py
    ```
@@ -130,6 +143,7 @@ The response flows back through the same path to the extension.
    - Look for `caixa_forta` in the list
 
 3. **Re-run the setup script**:
+
    ```bash
    ./tools/install_native_host.sh
    ```

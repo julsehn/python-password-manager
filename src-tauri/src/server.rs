@@ -171,6 +171,7 @@ pub fn save_vault_data(master_password: &str, vault_data: &VaultData) -> Result<
         "salt": base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &salt),
         "nonce": base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &nonce_bytes),
         "ciphertext": base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &ciphertext),
+        "kdf": "argon2id",
         "version": "1"
     });
 
@@ -230,7 +231,7 @@ pub fn decrypt_vault_from_disk(master_password: &str) -> Result<VaultData, Strin
     let nonce_bytes = security::decode_hex_or_base64(nonce_str, "nonce")?;
     let ciphertext_bytes = security::decode_hex_or_base64(ciphertext_str, "ciphertext")?;
 
-    let key = security::derive_key_from_password(master_password, &salt_bytes)
+    let key = security::derive_key_for_vault(master_password, &salt_bytes, vault_file["kdf"].as_str())
         .map_err(|e| format!("Failed to derive key: {}", e))?;
 
     let decrypted = security::decrypt_aes_gcm(&key, &nonce_bytes, &ciphertext_bytes)

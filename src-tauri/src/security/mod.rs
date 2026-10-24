@@ -2,6 +2,7 @@ use aes_gcm::{aead::{Aead, KeyInit, Payload}, Aes256Gcm, Nonce};
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use rand::{rngs::OsRng, Rng, RngCore};
 use rand::seq::SliceRandom;
+use argon2::{Algorithm, Argon2, Params, Version};
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 
@@ -75,26 +76,33 @@ pub fn generate_nonce() -> Result<Vec<u8>, String> {
 
 pub fn derive_key_from_password(password: &str, salt: &[u8]) -> Result<Vec<u8>, String> {
     let mut key = [0u8; 32];
-
-    // Match the Python vault format: 600,000 PBKDF2-SHA256 iterations.
-    pbkdf2::pbkdf2_hmac::<Sha256>(
-        password.as_bytes(),
-        salt,
-        600_000,
-        &mut key,
-    );
+    let params = Params::new(19 * 1024, 2, 1, Some(key.len()))
+        .map_err(|e| format!("Invalid Argon2id parameters: {}", e))?;
+    let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
+    argon2.hash_password_into(password.as_bytes(), salt, &mut key)
+        .map_err(|e| format!("Failed to derive key with Argon2id: {}", e))?;
 
     Ok(key.to_vec())
 }
 
+pub fn derive_key_for_vault(
+    password: &str,
+    salt: &[u8],
+    kdf: Option<&str>,
+) -> Result<Vec<u8>, String> {
+    match kdf.unwrap_or("pbkdf2-sha256") {
+        "argon2id" => derive_key_from_password(password, salt),
+        "pbkdf2-sha256" => {
+            let mut key = [0u8; 32];
+            pbkdf2::pbkdf2_hmac::<Sha256>(password.as_bytes(), salt, 600_000, &mut key);
+            Ok(key.to_vec())
+        }
+        algorithm => Err(format!("Unsupported vault key derivation algorithm: {}", algorithm)),
+    }
+}
+
 pub fn derive_key_with_argon2(password: &str, salt: &[u8]) -> Result<Vec<u8>, String> {
-    let mut key = [0u8; 32];
-
-    let argon2 = argon2::Argon2::default();
-    argon2.hash_password_into(password.as_bytes(), salt, &mut key)
-        .map_err(|e| format!("Failed to derive key with Argon2: {}", e))?;
-
-    Ok(key.to_vec())
+    derive_key_from_password(password, salt)
 }
 
 pub fn encrypt_aes_gcm(key: &[u8], nonce: &[u8], plaintext: &[u8]) -> Result<Vec<u8>, String> {
@@ -274,5 +282,35 @@ impl std::fmt::Display for PasswordStrength {
             PasswordStrength::Good => write!(f, "Bona"),
             PasswordStrength::Strong => write!(f, "Molt forta"),
         }
+    }
+}
+
+#[cfg(test)]
+mod kdf_tests {
+    use super::{derive_key_for_vault, derive_key_from_password};
+
+    #[test]
+    fn argon2id_matches_python_parameters() {
+        let salt: Vec<u8> = (0..16).collect();
+        let key = derive_key_from_password("shared-test-password", &salt).unwrap();
+
+        assert_eq!(
+            hex::encode(key),
+            "6685b845ce381b544d2390e669f56bed913e879a0f645d6533872e5b6c24b9c0"
+        );
+    }
+
+    #[test]
+    fn untagged_vault_uses_legacy_pbkdf2() {
+        let salt = b"legacy-salt-1234";
+        let untagged = derive_key_for_vault("test-master-password", salt, None).unwrap();
+        let tagged = derive_key_for_vault(
+            "test-master-password",
+            salt,
+            Some("pbkdf2-sha256"),
+        )
+        .unwrap();
+
+        assert_eq!(untagged, tagged);
     }
 }

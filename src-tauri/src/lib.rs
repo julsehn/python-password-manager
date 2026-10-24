@@ -100,6 +100,8 @@ struct VaultFile {
     nonce: String,
     ciphertext: String,
     version: String,
+    #[serde(default)]
+    kdf: Option<String>,
 }
 
 pub fn run() {
@@ -220,6 +222,7 @@ async fn init_empty_vault(
         "salt": base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &salt),
         "nonce": base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &nonce_bytes),
         "ciphertext": base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &ciphertext),
+        "kdf": "argon2id",
         "version": "1"
     });
 
@@ -280,7 +283,7 @@ fn unlock_vault(
     })?;
 
     let salt_bytes = security::decode_hex_or_base64(&vault_file.salt, "salt")?;
-    let key = security::derive_key_from_password(&master_password, &salt_bytes).map_err(|e| {
+    let key = security::derive_key_for_vault(&master_password, &salt_bytes, vault_file.kdf.as_deref()).map_err(|e| {
         format!("Failed to derive key from password: {}", e)
     })?;
 
@@ -369,6 +372,7 @@ async fn save_vault(
         "salt": base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &salt),
         "nonce": base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &nonce_bytes),
         "ciphertext": base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &ciphertext),
+        "kdf": "argon2id",
         "version": "1"
     });
 
@@ -808,7 +812,7 @@ async fn sync_upload_vault(
     })?;
 
     let salt_bytes = security::decode_hex_or_base64(&vault_file.salt, "salt")?;
-    let key = security::derive_key_from_password(&master_password, &salt_bytes).map_err(|e| {
+    let key = security::derive_key_for_vault(&master_password, &salt_bytes, vault_file.kdf.as_deref()).map_err(|e| {
         format!("Failed to derive key: {}", e)
     })?;
 
@@ -835,7 +839,7 @@ async fn sync_download_vault(master_password: String, config: SyncConfig) -> Res
     })?;
 
     let salt_bytes = security::decode_hex_or_base64(&vault_file.salt, "salt")?;
-    let key = security::derive_key_from_password(&master_password, &salt_bytes).map_err(|e| {
+    let key = security::derive_key_for_vault(&master_password, &salt_bytes, vault_file.kdf.as_deref()).map_err(|e| {
         format!("Failed to derive key: {}", e)
     })?;
 
@@ -947,7 +951,7 @@ fn change_master_password(
     })?;
 
     let old_salt_bytes = security::decode_hex_or_base64(&old_vault_file.salt, "salt")?;
-    let old_key = security::derive_key_from_password(&current_password, &old_salt_bytes).map_err(|e| {
+    let old_key = security::derive_key_for_vault(&current_password, &old_salt_bytes, old_vault_file.kdf.as_deref()).map_err(|e| {
         format!("Failed to derive key with current password: {}", e)
     })?;
 
@@ -987,6 +991,7 @@ fn change_master_password(
         "salt": base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &new_salt),
         "nonce": base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &new_nonce_bytes),
         "ciphertext": base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &new_ciphertext),
+        "kdf": "argon2id",
         "version": "1"
     });
 
@@ -1183,7 +1188,7 @@ fn change_vault_to_image_grid(
     let old_vault: VaultFile = serde_json::from_str(&content)
         .map_err(|error| format!("Failed to parse encrypted vault: {}", error))?;
     let old_salt = security::decode_hex_or_base64(&old_vault.salt, "salt")?;
-    let old_key = security::derive_key_from_password(&current_password, &old_salt)?;
+    let old_key = security::derive_key_for_vault(&current_password, &old_salt, old_vault.kdf.as_deref())?;
     let old_nonce = security::decode_hex_or_base64(&old_vault.nonce, "nonce")?;
     let old_ciphertext = security::decode_hex_or_base64(&old_vault.ciphertext, "ciphertext")?;
     let plaintext = security::decrypt_aes_gcm(&old_key, &old_nonce, &old_ciphertext)
@@ -1204,6 +1209,7 @@ fn change_vault_to_image_grid(
         "salt": base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &new_salt),
         "nonce": base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &new_nonce),
         "ciphertext": base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &new_ciphertext),
+        "kdf": "argon2id",
         "version": "1"
     });
 
@@ -1277,7 +1283,7 @@ fn change_vault_to_password(
     let old_vault: VaultFile = serde_json::from_str(&old_content)
         .map_err(|error| format!("Failed to parse encrypted vault: {}", error))?;
     let old_salt = security::decode_hex_or_base64(&old_vault.salt, "salt")?;
-    let old_key = security::derive_key_from_password(&current_password, &old_salt)?;
+    let old_key = security::derive_key_for_vault(&current_password, &old_salt, old_vault.kdf.as_deref())?;
     let old_nonce = security::decode_hex_or_base64(&old_vault.nonce, "nonce")?;
     let old_ciphertext = security::decode_hex_or_base64(&old_vault.ciphertext, "ciphertext")?;
     let plaintext = security::decrypt_aes_gcm(&old_key, &old_nonce, &old_ciphertext)
@@ -1298,6 +1304,7 @@ fn change_vault_to_password(
         "salt": base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &new_salt),
         "nonce": base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &new_nonce),
         "ciphertext": base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &new_ciphertext),
+        "kdf": "argon2id",
         "version": "1"
     });
     std::fs::write(&vault_path, payload.to_string())
@@ -1452,7 +1459,7 @@ fn change_auth_method(
         .map_err(|e| format!("Failed to parse vault: {}", e))?;
 
     let salt_bytes = security::decode_hex_or_base64(&vault_file.salt, "salt")?;
-    let key = security::derive_key_from_password(&current_password, &salt_bytes)
+    let key = security::derive_key_for_vault(&current_password, &salt_bytes, vault_file.kdf.as_deref())
         .map_err(|e| format!("Failed to derive key: {}", e))?;
 
     let nonce_bytes = security::decode_hex_or_base64(&vault_file.nonce, "nonce")?;
