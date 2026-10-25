@@ -1,17 +1,20 @@
 #![deny(warnings)]
 
 #[allow(dead_code)]
-mod security;
-#[allow(dead_code)]
 mod railway;
 #[allow(dead_code)]
+mod security;
+#[allow(dead_code)]
 pub mod server;
+pub mod vault;
 
+use railway::{SyncConfig, SyncResponse};
 use serde::{Deserialize, Serialize};
+use server::ServerState;
 use std::sync::{Arc, Mutex};
 use tauri::{Emitter, Manager};
-use railway::{SyncConfig, SyncResponse};
-use server::ServerState;
+use vault::visible_trash;
+pub use vault::{Entry, Folder, HistoryItem, TrashedEntry, VaultData, VaultInfo, VaultState};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Credentials {
@@ -19,79 +22,6 @@ pub struct Credentials {
     pub password: String,
     pub url: Option<String>,
     pub notes: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Entry {
-    pub id: String,
-    pub site: String,
-    pub username: String,
-    pub password: String,
-    pub notes: String,
-    #[serde(default)]
-    pub folder_id: Option<String>,
-    pub created_at: String,
-    pub updated_at: Option<String>,
-    #[serde(default)]
-    pub deleted_at: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Folder {
-    pub id: String,
-    pub name: String,
-    pub icon: String,
-    pub color: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TrashedEntry {
-    pub id: String,
-    pub site: String,
-    pub username: String,
-    pub password: String,
-    pub notes: String,
-    pub folder_id: Option<String>,
-    pub created_at: String,
-    pub updated_at: Option<String>,
-    pub deleted_at: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HistoryItem {
-    pub id: String,
-    pub kind: String,
-    pub value: String,
-    pub language: String,
-    pub created_at: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct VaultData {
-    pub entries: Vec<Entry>,
-    #[serde(default)]
-    pub folders: Vec<Folder>,
-    #[serde(default)]
-    pub deleted_entries: Vec<TrashedEntry>,
-    #[serde(default)]
-    pub history: Vec<HistoryItem>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct VaultState {
-    pub is_new: bool,
-    pub entries: Vec<Entry>,
-    pub folders: Vec<Folder>,
-    pub trash: Vec<TrashedEntry>,
-    pub history: Vec<HistoryItem>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct VaultInfo {
-    pub exists: bool,
-    pub entry_count: usize,
-    pub folder_count: usize,
-    pub trash_count: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -157,6 +87,9 @@ pub fn run() {
             sync_download_vault,
             register_vault,
             delete_vault,
+            auth_official_cloud,
+            register_official_cloud,
+            check_cloud_health,
             set_railway_sync_config,
             get_railway_sync_config,
             change_master_password,
@@ -191,17 +124,16 @@ async fn init_empty_vault(
         history: vec![],
     };
 
-    let data = serde_json::to_string(&vault_data)
-        .map_err(|e| format!("Failed to serialize: {}", e))?;
+    let data =
+        serde_json::to_string(&vault_data).map_err(|e| format!("Failed to serialize: {}", e))?;
 
-    let salt = security::generate_salt()
-        .map_err(|e| format!("Failed to generate salt: {}", e))?;
+    let salt = security::generate_salt().map_err(|e| format!("Failed to generate salt: {}", e))?;
 
     let key = security::derive_key_from_password(&password, &salt)
         .map_err(|e| format!("Failed to derive key: {}", e))?;
 
-    let nonce_bytes = security::generate_nonce()
-        .map_err(|e| format!("Failed to generate nonce: {}", e))?;
+    let nonce_bytes =
+        security::generate_nonce().map_err(|e| format!("Failed to generate nonce: {}", e))?;
     let ciphertext = security::encrypt_aes_gcm(&key, &nonce_bytes, &data.into_bytes())
         .map_err(|e| format!("Failed to encrypt: {}", e))?;
 
@@ -213,7 +145,7 @@ async fn init_empty_vault(
     let vault_dir = std::path::Path::new(&vault_path)
         .parent()
         .unwrap_or(std::path::Path::new("."));
-    std::fs::create_dir_all(&vault_dir)
+    std::fs::create_dir_all(vault_dir)
         .map_err(|e| format!("Failed to create vault directory: {}", e))?;
 
     let payload = serde_json::json!({
@@ -275,26 +207,27 @@ fn unlock_vault(
     let content = std::fs::read_to_string(&vault_path)
         .map_err(|e| format!("Failed to read vault file: {}", e))?;
 
-    let vault_file: VaultFile = serde_json::from_str(&content).map_err(|e| {
-        format!("Failed to parse vault structure: {}", e)
-    })?;
+    let vault_file: VaultFile = serde_json::from_str(&content)
+        .map_err(|e| format!("Failed to parse vault structure: {}", e))?;
 
     let salt_bytes = security::decode_hex_or_base64(&vault_file.salt, "salt")?;
-    let key = security::derive_key_from_password(&master_password, &salt_bytes).map_err(|e| {
-        format!("Failed to derive key from password: {}", e)
-    })?;
+    let key = security::derive_key_from_password(&master_password, &salt_bytes)
+        .map_err(|e| format!("Failed to derive key from password: {}", e))?;
 
     let nonce_bytes = security::decode_hex_or_base64(&vault_file.nonce, "nonce")?;
     let ciphertext_bytes = security::decode_hex_or_base64(&vault_file.ciphertext, "ciphertext")?;
 
-    let decrypted = security::decrypt_aes_gcm(&key, &nonce_bytes, &ciphertext_bytes).map_err(|e| {
-        format!("Failed to decrypt vault: {}. Please verify your master password is correct.", e)
-    })?;
+    let decrypted =
+        security::decrypt_aes_gcm(&key, &nonce_bytes, &ciphertext_bytes).map_err(|e| {
+            format!(
+                "Failed to decrypt vault: {}. Please verify your master password is correct.",
+                e
+            )
+        })?;
 
     let data: String = String::from_utf8_lossy(&decrypted).into();
-    let vault_data: VaultData = serde_json::from_str(&data).map_err(|e| {
-        format!("Failed to parse decrypted vault data: {}", e)
-    })?;
+    let vault_data: VaultData = serde_json::from_str(&data)
+        .map_err(|e| format!("Failed to parse decrypted vault data: {}", e))?;
 
     server_state.set_unlocked(
         master_password,
@@ -304,21 +237,19 @@ fn unlock_vault(
         vault_data.history.clone(),
     );
 
-    let now = chrono::Utc::now().timestamp() as i64;
+    let now = chrono::Utc::now().timestamp();
 
     Ok(VaultState {
         is_new: false,
         entries: vault_data.entries,
         folders: vault_data.folders,
-        trash: vault_data.deleted_entries
-            .into_iter()
-            .filter(|entry| entry.deleted_at.parse::<i64>().unwrap_or(0) <= now)
-            .collect(),
+        trash: visible_trash(vault_data.deleted_entries, now),
         history: vault_data.history,
     })
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 async fn save_vault(
     master_password: String,
     entries: Vec<Entry>,
@@ -347,18 +278,18 @@ async fn save_vault(
         return Err("Master password cannot be empty".to_string());
     }
 
-    let data = serde_json::to_string(&vault_data).map_err(|e| format!("Failed to serialize: {}", e))?;
+    let data =
+        serde_json::to_string(&vault_data).map_err(|e| format!("Failed to serialize: {}", e))?;
 
     let salt = security::generate_salt().map_err(|e| format!("Failed to generate salt: {}", e))?;
 
-    let key = security::derive_key_from_password(&master_password, &salt).map_err(|e| {
-        format!("Failed to derive key: {}", e)
-    })?;
+    let key = security::derive_key_from_password(&master_password, &salt)
+        .map_err(|e| format!("Failed to derive key: {}", e))?;
 
-    let nonce_bytes = security::generate_nonce().map_err(|e| format!("Failed to generate nonce: {}", e))?;
-    let ciphertext = security::encrypt_aes_gcm(&key, &nonce_bytes, &data.into_bytes()).map_err(|e| {
-        format!("Failed to encrypt: {}", e)
-    })?;
+    let nonce_bytes =
+        security::generate_nonce().map_err(|e| format!("Failed to generate nonce: {}", e))?;
+    let ciphertext = security::encrypt_aes_gcm(&key, &nonce_bytes, &data.into_bytes())
+        .map_err(|e| format!("Failed to encrypt: {}", e))?;
 
     let vault_path = std::env::var("HOME")
         .ok()
@@ -372,9 +303,10 @@ async fn save_vault(
         "version": "1"
     });
 
-    let vault_dir = std::path::Path::new(&vault_path).parent().unwrap_or(std::path::Path::new("."));
-    std::fs::create_dir_all(&vault_dir)
-        .map_err(|e| format!("Failed to create directory: {}", e))?;
+    let vault_dir = std::path::Path::new(&vault_path)
+        .parent()
+        .unwrap_or(std::path::Path::new("."));
+    std::fs::create_dir_all(vault_dir).map_err(|e| format!("Failed to create directory: {}", e))?;
 
     std::fs::write(&vault_path, payload.to_string())
         .map_err(|e| format!("Failed to write vault: {}", e))?;
@@ -390,15 +322,24 @@ async fn save_vault(
     println!("Vault saved successfully");
 
     if sync_to_railway {
-        let config = sync_state.lock().map_err(|_| "Failed to access Railway configuration".to_string())?.clone();
+        let config = sync_state
+            .lock()
+            .map_err(|_| "Failed to access Railway configuration".to_string())?
+            .clone();
 
-        if !config.railway_url.is_empty() && !config.vault_id.is_empty() && !config.token.is_empty() {
+        if !config.railway_url.is_empty() && !config.vault_id.is_empty() && !config.token.is_empty()
+        {
             println!("Syncing vault to Railway...");
-            railway::upload_vault(master_password, &config).await.map_err(|e| {
-                format!("Railway sync failed: {}. Vault saved locally but not synced.", e)
-            })?;
+            railway::upload_vault(master_password, &config)
+                .await
+                .map_err(|e| {
+                    format!(
+                        "Railway sync failed: {}. Vault saved locally but not synced.",
+                        e
+                    )
+                })?;
             println!("Vault synced to Railway successfully");
-            return Ok(Some(format!("Synced to Railway")));
+            return Ok(Some("Synced to Railway".to_string()));
         }
     }
 
@@ -441,17 +382,12 @@ fn get_vault_entries(
     let unlocked = server_state.unlocked_data.lock().unwrap();
     match &*unlocked {
         Some(vault) => {
-            let now = chrono::Utc::now().timestamp() as i64;
+            let now = chrono::Utc::now().timestamp();
             Ok(VaultState {
                 is_new: false,
                 entries: vault.entries.clone(),
                 folders: vault.folders.clone(),
-                trash: vault
-                    .trash
-                    .iter()
-                    .cloned()
-                    .filter(|entry| entry.deleted_at.parse::<i64>().unwrap_or(0) <= now)
-                    .collect(),
+                trash: visible_trash(vault.trash.iter().cloned(), now),
                 history: vault.history.clone(),
             })
         }
@@ -467,7 +403,10 @@ fn generate_password(
     numbers: bool,
     symbols: bool,
 ) -> String {
-    println!("Generating password: length={}, uppercase={}, lowercase={}, numbers={}, symbols={}", length, uppercase, lowercase, numbers, symbols);
+    println!(
+        "Generating password: length={}, uppercase={}, lowercase={}, numbers={}, symbols={}",
+        length, uppercase, lowercase, numbers, symbols
+    );
 
     security::generate_password(length, uppercase, lowercase, numbers, symbols)
 }
@@ -483,7 +422,14 @@ fn generate_passphrase(
 ) -> String {
     println!("Generating passphrase: words={}, separator={}, uppercase={}, include_number={}, language={}", word_count, separator, uppercase_words, include_number, language);
 
-    security::generate_passphrase(word_count, separator, uppercase_words, include_number, remove_accents, language)
+    security::generate_passphrase(
+        word_count,
+        separator,
+        uppercase_words,
+        include_number,
+        remove_accents,
+        language,
+    )
 }
 
 #[tauri::command]
@@ -527,8 +473,10 @@ fn create_entry(
         .unwrap_or_else(|| "./vault.json".to_string());
 
     if std::path::Path::new(&vault_path).exists() {
-        let content = std::fs::read_to_string(&vault_path).map_err(|e| format!("Failed to read vault: {}", e))?;
-        let vault_data: VaultData = serde_json::from_str(&content).map_err(|e| format!("Failed to parse vault: {}", e))?;
+        let content = std::fs::read_to_string(&vault_path)
+            .map_err(|e| format!("Failed to read vault: {}", e))?;
+        let vault_data: VaultData =
+            serde_json::from_str(&content).map_err(|e| format!("Failed to parse vault: {}", e))?;
 
         let mut entries = vault_data.entries;
         entries.push(entry.clone());
@@ -538,7 +486,8 @@ fn create_entry(
             ..vault_data
         };
 
-        let data = serde_json::to_string(&vault_data).map_err(|e| format!("Failed to serialize: {}", e))?;
+        let data = serde_json::to_string(&vault_data)
+            .map_err(|e| format!("Failed to serialize: {}", e))?;
         std::fs::write(&vault_path, data).map_err(|e| format!("Failed to write vault: {}", e))?;
     }
 
@@ -565,12 +514,18 @@ fn update_entry(
         return Err("Vault not found".to_string());
     }
 
-    let content = std::fs::read_to_string(&vault_path).map_err(|e| format!("Failed to read vault: {}", e))?;
-    let mut vault_data: VaultData = serde_json::from_str(&content).map_err(|e| format!("Failed to parse vault: {}", e))?;
+    let content =
+        std::fs::read_to_string(&vault_path).map_err(|e| format!("Failed to read vault: {}", e))?;
+    let mut vault_data: VaultData =
+        serde_json::from_str(&content).map_err(|e| format!("Failed to parse vault: {}", e))?;
 
     let now = chrono::Utc::now().to_rfc3339();
 
-    let entry_index = vault_data.entries.iter().position(|e| e.id == entry_id).ok_or("Entry not found")?;
+    let entry_index = vault_data
+        .entries
+        .iter()
+        .position(|e| e.id == entry_id)
+        .ok_or("Entry not found")?;
 
     vault_data.entries[entry_index] = Entry {
         id: entry_id.clone(),
@@ -586,7 +541,8 @@ fn update_entry(
 
     let updated_entry = vault_data.entries[entry_index].clone();
 
-    let data = serde_json::to_string(&vault_data).map_err(|e| format!("Failed to serialize: {}", e))?;
+    let data =
+        serde_json::to_string(&vault_data).map_err(|e| format!("Failed to serialize: {}", e))?;
     std::fs::write(&vault_path, data).map_err(|e| format!("Failed to write vault: {}", e))?;
 
     Ok(updated_entry)
@@ -605,10 +561,16 @@ fn trash_entry(entry_id: String) -> Result<(), String> {
         return Err("Vault not found".to_string());
     }
 
-    let content = std::fs::read_to_string(&vault_path).map_err(|e| format!("Failed to read vault: {}", e))?;
-    let mut vault_data: VaultData = serde_json::from_str(&content).map_err(|e| format!("Failed to parse vault: {}", e))?;
+    let content =
+        std::fs::read_to_string(&vault_path).map_err(|e| format!("Failed to read vault: {}", e))?;
+    let mut vault_data: VaultData =
+        serde_json::from_str(&content).map_err(|e| format!("Failed to parse vault: {}", e))?;
 
-    let entry_index = vault_data.entries.iter().position(|e| e.id == entry_id).ok_or("Entry not found")?;
+    let entry_index = vault_data
+        .entries
+        .iter()
+        .position(|e| e.id == entry_id)
+        .ok_or("Entry not found")?;
 
     let entry = vault_data.entries.remove(entry_index);
     let now = chrono::Utc::now().to_rfc3339();
@@ -627,7 +589,8 @@ fn trash_entry(entry_id: String) -> Result<(), String> {
 
     vault_data.deleted_entries.push(trashed_entry);
 
-    let data = serde_json::to_string(&vault_data).map_err(|e| format!("Failed to serialize: {}", e))?;
+    let data =
+        serde_json::to_string(&vault_data).map_err(|e| format!("Failed to serialize: {}", e))?;
     std::fs::write(&vault_path, data).map_err(|e| format!("Failed to write vault: {}", e))?;
 
     Ok(())
@@ -646,10 +609,16 @@ fn restore_entry(entry_id: String) -> Result<(), String> {
         return Err("Vault not found".to_string());
     }
 
-    let content = std::fs::read_to_string(&vault_path).map_err(|e| format!("Failed to read vault: {}", e))?;
-    let mut vault_data: VaultData = serde_json::from_str(&content).map_err(|e| format!("Failed to parse vault: {}", e))?;
+    let content =
+        std::fs::read_to_string(&vault_path).map_err(|e| format!("Failed to read vault: {}", e))?;
+    let mut vault_data: VaultData =
+        serde_json::from_str(&content).map_err(|e| format!("Failed to parse vault: {}", e))?;
 
-    let trashed_index = vault_data.deleted_entries.iter().position(|e| e.id == entry_id).ok_or("Entry not found")?;
+    let trashed_index = vault_data
+        .deleted_entries
+        .iter()
+        .position(|e| e.id == entry_id)
+        .ok_or("Entry not found")?;
     let trashed = vault_data.deleted_entries.remove(trashed_index);
 
     let entry = Entry {
@@ -666,7 +635,8 @@ fn restore_entry(entry_id: String) -> Result<(), String> {
 
     vault_data.entries.push(entry);
 
-    let data = serde_json::to_string(&vault_data).map_err(|e| format!("Failed to serialize: {}", e))?;
+    let data =
+        serde_json::to_string(&vault_data).map_err(|e| format!("Failed to serialize: {}", e))?;
     std::fs::write(&vault_path, data).map_err(|e| format!("Failed to write vault: {}", e))?;
 
     Ok(())
@@ -685,14 +655,21 @@ fn delete_entry_permanently(entry_id: String) -> Result<(), String> {
         return Err("Vault not found".to_string());
     }
 
-    let content = std::fs::read_to_string(&vault_path).map_err(|e| format!("Failed to read vault: {}", e))?;
-    let mut vault_data: VaultData = serde_json::from_str(&content).map_err(|e| format!("Failed to parse vault: {}", e))?;
+    let content =
+        std::fs::read_to_string(&vault_path).map_err(|e| format!("Failed to read vault: {}", e))?;
+    let mut vault_data: VaultData =
+        serde_json::from_str(&content).map_err(|e| format!("Failed to parse vault: {}", e))?;
 
-    let trashed_index = vault_data.deleted_entries.iter().position(|e| e.id == entry_id).ok_or("Entry not found")?;
+    let trashed_index = vault_data
+        .deleted_entries
+        .iter()
+        .position(|e| e.id == entry_id)
+        .ok_or("Entry not found")?;
 
     vault_data.deleted_entries.remove(trashed_index);
 
-    let data = serde_json::to_string(&vault_data).map_err(|e| format!("Failed to serialize: {}", e))?;
+    let data =
+        serde_json::to_string(&vault_data).map_err(|e| format!("Failed to serialize: {}", e))?;
     std::fs::write(&vault_path, data).map_err(|e| format!("Failed to write vault: {}", e))?;
 
     std::fs::remove_file(&vault_path).ok();
@@ -717,11 +694,14 @@ fn create_folder(name: String, icon: String, color: String) -> Result<Folder, St
         .unwrap_or_else(|| "./vault.json".to_string());
 
     if std::path::Path::new(&vault_path).exists() {
-        let content = std::fs::read_to_string(&vault_path).map_err(|e| format!("Failed to read vault: {}", e))?;
-        let mut vault_data: VaultData = serde_json::from_str(&content).map_err(|e| format!("Failed to parse vault: {}", e))?;
+        let content = std::fs::read_to_string(&vault_path)
+            .map_err(|e| format!("Failed to read vault: {}", e))?;
+        let mut vault_data: VaultData =
+            serde_json::from_str(&content).map_err(|e| format!("Failed to parse vault: {}", e))?;
         vault_data.folders.push(folder.clone());
 
-        let data = serde_json::to_string(&vault_data).map_err(|e| format!("Failed to serialize: {}", e))?;
+        let data = serde_json::to_string(&vault_data)
+            .map_err(|e| format!("Failed to serialize: {}", e))?;
         std::fs::write(&vault_path, data).map_err(|e| format!("Failed to write vault: {}", e))?;
     }
 
@@ -729,7 +709,12 @@ fn create_folder(name: String, icon: String, color: String) -> Result<Folder, St
 }
 
 #[tauri::command]
-fn update_folder(folder_id: String, name: String, icon: String, color: String) -> Result<Folder, String> {
+fn update_folder(
+    folder_id: String,
+    name: String,
+    icon: String,
+    color: String,
+) -> Result<Folder, String> {
     println!("Updating folder: {}", folder_id);
 
     let vault_path = std::env::var("HOME")
@@ -741,10 +726,16 @@ fn update_folder(folder_id: String, name: String, icon: String, color: String) -
         return Err("Vault not found".to_string());
     }
 
-    let content = std::fs::read_to_string(&vault_path).map_err(|e| format!("Failed to read vault: {}", e))?;
-    let mut vault_data: VaultData = serde_json::from_str(&content).map_err(|e| format!("Failed to parse vault: {}", e))?;
+    let content =
+        std::fs::read_to_string(&vault_path).map_err(|e| format!("Failed to read vault: {}", e))?;
+    let mut vault_data: VaultData =
+        serde_json::from_str(&content).map_err(|e| format!("Failed to parse vault: {}", e))?;
 
-    let index = vault_data.folders.iter().position(|f| f.id == folder_id).ok_or("Folder not found")?;
+    let index = vault_data
+        .folders
+        .iter()
+        .position(|f| f.id == folder_id)
+        .ok_or("Folder not found")?;
 
     vault_data.folders[index] = Folder {
         id: folder_id.clone(),
@@ -753,7 +744,8 @@ fn update_folder(folder_id: String, name: String, icon: String, color: String) -
         color,
     };
 
-    let data = serde_json::to_string(&vault_data).map_err(|e| format!("Failed to serialize: {}", e))?;
+    let data =
+        serde_json::to_string(&vault_data).map_err(|e| format!("Failed to serialize: {}", e))?;
     std::fs::write(&vault_path, data).map_err(|e| format!("Failed to write vault: {}", e))?;
 
     Ok(vault_data.folders[index].clone())
@@ -772,12 +764,15 @@ fn delete_folder(folder_id: String) -> Result<(), String> {
         return Err("Vault not found".to_string());
     }
 
-    let content = std::fs::read_to_string(&vault_path).map_err(|e| format!("Failed to read vault: {}", e))?;
-    let mut vault_data: VaultData = serde_json::from_str(&content).map_err(|e| format!("Failed to parse vault: {}", e))?;
+    let content =
+        std::fs::read_to_string(&vault_path).map_err(|e| format!("Failed to read vault: {}", e))?;
+    let mut vault_data: VaultData =
+        serde_json::from_str(&content).map_err(|e| format!("Failed to parse vault: {}", e))?;
 
     vault_data.folders.retain(|f| f.id != folder_id);
 
-    let data = serde_json::to_string(&vault_data).map_err(|e| format!("Failed to serialize: {}", e))?;
+    let data =
+        serde_json::to_string(&vault_data).map_err(|e| format!("Failed to serialize: {}", e))?;
     std::fs::write(&vault_path, data).map_err(|e| format!("Failed to write vault: {}", e))?;
 
     Ok(())
@@ -799,25 +794,26 @@ async fn sync_upload_vault(
         return Err("No local vault found to sync".to_string());
     }
 
-    let content = std::fs::read_to_string(&vault_path).map_err(|e| {
-        format!("Failed to read local vault file: {}", e)
-    })?;
+    let content = std::fs::read_to_string(&vault_path)
+        .map_err(|e| format!("Failed to read local vault file: {}", e))?;
 
-    let vault_file: VaultFile = serde_json::from_str(&content).map_err(|e| {
-        format!("Failed to parse vault structure: {}", e)
-    })?;
+    let vault_file: VaultFile = serde_json::from_str(&content)
+        .map_err(|e| format!("Failed to parse vault structure: {}", e))?;
 
     let salt_bytes = security::decode_hex_or_base64(&vault_file.salt, "salt")?;
-    let key = security::derive_key_from_password(&master_password, &salt_bytes).map_err(|e| {
-        format!("Failed to derive key: {}", e)
-    })?;
+    let key = security::derive_key_from_password(&master_password, &salt_bytes)
+        .map_err(|e| format!("Failed to derive key: {}", e))?;
 
     let nonce_bytes = security::decode_hex_or_base64(&vault_file.nonce, "nonce")?;
     let ciphertext_bytes = security::decode_hex_or_base64(&vault_file.ciphertext, "ciphertext")?;
 
-    let decrypted = security::decrypt_aes_gcm(&key, &nonce_bytes, &ciphertext_bytes).map_err(|e| {
-        format!("Failed to decrypt vault: {}. Please verify your master password.", e)
-    })?;
+    let decrypted =
+        security::decrypt_aes_gcm(&key, &nonce_bytes, &ciphertext_bytes).map_err(|e| {
+            format!(
+                "Failed to decrypt vault: {}. Please verify your master password.",
+                e
+            )
+        })?;
 
     let _data: String = String::from_utf8_lossy(&decrypted).into();
 
@@ -825,44 +821,68 @@ async fn sync_upload_vault(
 }
 
 #[tauri::command]
-async fn sync_download_vault(master_password: String, config: SyncConfig) -> Result<String, String> {
+async fn sync_download_vault(
+    master_password: String,
+    config: SyncConfig,
+) -> Result<String, String> {
     println!("Downloading vault from Railway: {}", config.vault_id);
 
     let blob = railway::download_vault(master_password.clone(), &config).await?;
 
-    let vault_file: VaultFile = serde_json::from_str(&blob).map_err(|e| {
-        format!("Failed to parse downloaded vault structure: {}", e)
-    })?;
+    let vault_file: VaultFile = serde_json::from_str(&blob)
+        .map_err(|e| format!("Failed to parse downloaded vault structure: {}", e))?;
 
     let salt_bytes = security::decode_hex_or_base64(&vault_file.salt, "salt")?;
-    let key = security::derive_key_from_password(&master_password, &salt_bytes).map_err(|e| {
-        format!("Failed to derive key: {}", e)
-    })?;
+    let key = security::derive_key_from_password(&master_password, &salt_bytes)
+        .map_err(|e| format!("Failed to derive key: {}", e))?;
 
     let nonce_bytes = security::decode_hex_or_base64(&vault_file.nonce, "nonce")?;
     let ciphertext_bytes = security::decode_hex_or_base64(&vault_file.ciphertext, "ciphertext")?;
 
-    let decrypted = security::decrypt_aes_gcm(&key, &nonce_bytes, &ciphertext_bytes).map_err(|e| {
-        format!("Failed to decrypt downloaded vault: {}. Please verify your master password.", e)
-    })?;
+    let decrypted =
+        security::decrypt_aes_gcm(&key, &nonce_bytes, &ciphertext_bytes).map_err(|e| {
+            format!(
+                "Failed to decrypt downloaded vault: {}. Please verify your master password.",
+                e
+            )
+        })?;
 
     let data: String = String::from_utf8_lossy(&decrypted).into();
-    let vault_data: VaultData = serde_json::from_str(&data).map_err(|e| {
-        format!("Failed to parse decrypted vault: {}", e)
-    })?;
+    let vault_data: VaultData = serde_json::from_str(&data)
+        .map_err(|e| format!("Failed to parse decrypted vault: {}", e))?;
 
-    Ok(serde_json::to_string(&vault_data).map_err(|e| format!("Failed to serialize vault: {}", e))? )
+    serde_json::to_string(&vault_data).map_err(|e| format!("Failed to serialize vault: {}", e))
 }
 
 #[tauri::command]
-async fn register_vault(master_password: String, config: SyncConfig) -> Result<SyncResponse, String> {
+async fn register_vault(
+    master_password: String,
+    config: SyncConfig,
+) -> Result<SyncResponse, String> {
     railway::register_vault(master_password, &config).await
 }
 
 #[tauri::command]
-#[allow(dead_code)]
-async fn auth_official_cloud(username: String, password: String) -> Result<String, String> {
-    railway::auth_user(&username, &password).await
+async fn auth_official_cloud(
+    username: String,
+    password: String,
+    railway_url: Option<String>,
+) -> Result<railway::AuthResponseData, String> {
+    railway::auth_user(&username, &password, railway_url.as_deref()).await
+}
+
+#[tauri::command]
+async fn register_official_cloud(
+    username: String,
+    password: String,
+    railway_url: Option<String>,
+) -> Result<railway::AuthResponseData, String> {
+    railway::register_user(&username, &password, railway_url.as_deref()).await
+}
+
+#[tauri::command]
+async fn check_cloud_health(railway_url: Option<String>) -> Result<bool, String> {
+    railway::check_health(railway_url.as_deref()).await
 }
 
 #[tauri::command]
@@ -879,19 +899,17 @@ fn set_railway_sync_config(
 ) -> Result<(), String> {
     println!("Setting Railway sync configuration...");
 
-    if railway_url.is_empty() {
-        return Err("Railway URL cannot be empty".to_string());
-    }
-    if vault_id.is_empty() {
-        return Err("Vault ID cannot be empty".to_string());
-    }
-    if token.is_empty() {
-        return Err("Token cannot be empty".to_string());
-    }
+    let url = if railway_url.trim().is_empty() {
+        railway::DEFAULT_OFFICIAL_URL.to_string()
+    } else {
+        railway_url.trim().to_string()
+    };
 
-    let mut config = state.lock().map_err(|_| "Failed to access Railway configuration".to_string())?;
+    let mut config = state
+        .lock()
+        .map_err(|_| "Failed to access Railway configuration".to_string())?;
     *config = SyncConfig {
-        railway_url,
+        railway_url: url,
         vault_id,
         token,
     };
@@ -901,8 +919,11 @@ fn set_railway_sync_config(
 }
 
 #[tauri::command]
-fn get_railway_sync_config(state: tauri::State<'_, Mutex<SyncConfig>>) -> Result<SyncConfig, String> {
-    state.lock()
+fn get_railway_sync_config(
+    state: tauri::State<'_, Mutex<SyncConfig>>,
+) -> Result<SyncConfig, String> {
+    state
+        .lock()
         .map(|config| config.clone())
         .map_err(|_| "Failed to access Railway configuration".to_string())
 }
@@ -935,33 +956,32 @@ fn change_master_password(
         .unwrap_or_else(|| "./vault.json".to_string());
 
     if !std::path::Path::new(&vault_path).exists() {
-        return Err("No existing vault found. Create a vault first with your master password.".to_string());
+        return Err(
+            "No existing vault found. Create a vault first with your master password.".to_string(),
+        );
     }
 
-    let content = std::fs::read_to_string(&vault_path).map_err(|e| {
-        format!("Failed to read encrypted vault file: {}", e)
-    })?;
+    let content = std::fs::read_to_string(&vault_path)
+        .map_err(|e| format!("Failed to read encrypted vault file: {}", e))?;
 
-    let old_vault_file: VaultFile = serde_json::from_str(&content).map_err(|e| {
-        format!("Failed to parse encrypted vault structure: {}", e)
-    })?;
+    let old_vault_file: VaultFile = serde_json::from_str(&content)
+        .map_err(|e| format!("Failed to parse encrypted vault structure: {}", e))?;
 
     let old_salt_bytes = security::decode_hex_or_base64(&old_vault_file.salt, "salt")?;
-    let old_key = security::derive_key_from_password(&current_password, &old_salt_bytes).map_err(|e| {
-        format!("Failed to derive key with current password: {}", e)
-    })?;
+    let old_key = security::derive_key_from_password(&current_password, &old_salt_bytes)
+        .map_err(|e| format!("Failed to derive key with current password: {}", e))?;
 
     let old_nonce_bytes = security::decode_hex_or_base64(&old_vault_file.nonce, "nonce")?;
-    let old_ciphertext_bytes = security::decode_hex_or_base64(&old_vault_file.ciphertext, "ciphertext")?;
+    let old_ciphertext_bytes =
+        security::decode_hex_or_base64(&old_vault_file.ciphertext, "ciphertext")?;
 
     let decrypted = security::decrypt_aes_gcm(&old_key, &old_nonce_bytes, &old_ciphertext_bytes).map_err(|e| {
         format!("Failed to decrypt vault with current password: {}. Please verify your current master password is correct.", e)
     })?;
 
     let old_data: String = String::from_utf8_lossy(&decrypted).into();
-    let old_vault_data: VaultData = serde_json::from_str(&old_data).map_err(|e| {
-        format!("Failed to parse decrypted vault data: {}", e)
-    })?;
+    let old_vault_data: VaultData = serde_json::from_str(&old_data)
+        .map_err(|e| format!("Failed to parse decrypted vault data: {}", e))?;
 
     println!("Successfully decrypted vault with current password");
 
@@ -972,16 +992,17 @@ fn change_master_password(
         history: old_vault_data.history,
     };
 
-    let new_salt = security::generate_salt().map_err(|e| format!("Failed to generate salt: {}", e))?;
-    let new_key = security::derive_key_from_password(&new_password, &new_salt).map_err(|e| {
-        format!("Failed to derive key with new password: {}", e)
-    })?;
-    let new_nonce_bytes = security::generate_nonce().map_err(|e| format!("Failed to generate nonce: {}", e))?;
+    let new_salt =
+        security::generate_salt().map_err(|e| format!("Failed to generate salt: {}", e))?;
+    let new_key = security::derive_key_from_password(&new_password, &new_salt)
+        .map_err(|e| format!("Failed to derive key with new password: {}", e))?;
+    let new_nonce_bytes =
+        security::generate_nonce().map_err(|e| format!("Failed to generate nonce: {}", e))?;
     let new_data = serde_json::to_string(&new_vault_data)
         .map_err(|e| format!("Failed to serialize updated vault: {}", e))?;
-    let new_ciphertext = security::encrypt_aes_gcm(&new_key, &new_nonce_bytes, &new_data.into_bytes()).map_err(|e| {
-        format!("Failed to re-encrypt vault with new password: {}", e)
-    })?;
+    let new_ciphertext =
+        security::encrypt_aes_gcm(&new_key, &new_nonce_bytes, &new_data.into_bytes())
+            .map_err(|e| format!("Failed to re-encrypt vault with new password: {}", e))?;
 
     let payload = serde_json::json!({
         "salt": base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &new_salt),
@@ -990,9 +1011,13 @@ fn change_master_password(
         "version": "1"
     });
 
-    let vault_dir = std::path::Path::new(&vault_path).parent().unwrap_or(std::path::Path::new("."));
-    std::fs::create_dir_all(&vault_dir).map_err(|e| format!("Failed to create vault directory: {}", e))?;
-    std::fs::write(&vault_path, payload.to_string()).map_err(|e| format!("Failed to save re-encrypted vault: {}", e))?;
+    let vault_dir = std::path::Path::new(&vault_path)
+        .parent()
+        .unwrap_or(std::path::Path::new("."));
+    std::fs::create_dir_all(vault_dir)
+        .map_err(|e| format!("Failed to create vault directory: {}", e))?;
+    std::fs::write(&vault_path, payload.to_string())
+        .map_err(|e| format!("Failed to save re-encrypted vault: {}", e))?;
 
     println!("Master password changed successfully - vault re-encrypted with new password");
     Ok(())
@@ -1061,10 +1086,19 @@ fn validate_image_grid(image_data: &str, cell_values: &[String]) -> Result<(), S
         return Err("Invalid image data".to_string());
     }
     if cell_values.len() != 25
-        || cell_values.iter().any(|value| !valid_image_grid_fragment(value))
-        || cell_values.iter().collect::<std::collections::HashSet<_>>().len() != 25
+        || cell_values
+            .iter()
+            .any(|value| !valid_image_grid_fragment(value))
+        || cell_values
+            .iter()
+            .collect::<std::collections::HashSet<_>>()
+            .len()
+            != 25
     {
-        return Err("Image grid cells must be valid 2-character legacy or mixed 4-character fragments".to_string());
+        return Err(
+            "Image grid cells must be valid 2-character legacy or mixed 4-character fragments"
+                .to_string(),
+        );
     }
     Ok(())
 }
@@ -1080,7 +1114,10 @@ fn validate_new_image_grid(image_data: &str, cell_values: &[String]) -> Result<(
                 .bytes()
                 .any(|byte| b"!@#$%^&*()-_=+[]{}".contains(&byte))
     }) {
-        return Err("Every new grid fragment must contain uppercase, lowercase, a number, and a symbol".to_string());
+        return Err(
+            "Every new grid fragment must contain uppercase, lowercase, a number, and a symbol"
+                .to_string(),
+        );
     }
     Ok(())
 }
@@ -1093,23 +1130,23 @@ fn valid_image_grid_fragment(value: &str) -> bool {
     if bytes.len() != 4 {
         return false;
     }
-    if bytes.iter().all(u8::is_ascii_alphanumeric)
-        && !bytes.iter().any(u8::is_ascii_lowercase)
-    {
+    if bytes.iter().all(u8::is_ascii_alphanumeric) && !bytes.iter().any(u8::is_ascii_lowercase) {
         return true;
     }
 
     let has_uppercase = bytes.iter().any(u8::is_ascii_uppercase);
     let has_lowercase = bytes.iter().any(u8::is_ascii_lowercase);
     let has_digit = bytes.iter().any(u8::is_ascii_digit);
-    let has_symbol = bytes.iter().any(|byte| b"!@#$%^&*()-_=+[]{}".contains(byte));
+    let has_symbol = bytes
+        .iter()
+        .any(|byte| b"!@#$%^&*()-_=+[]{}".contains(byte));
     has_uppercase
         && has_lowercase
         && has_digit
         && has_symbol
-        && bytes.iter().all(|byte| {
-            byte.is_ascii_alphanumeric() || b"!@#$%^&*()-_=+[]{}".contains(byte)
-        })
+        && bytes
+            .iter()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"!@#$%^&*()-_=+[]{}".contains(byte))
 }
 
 fn save_image_grid_metadata(image_data: &str, cell_values: &[String]) -> Result<(), String> {
@@ -1191,8 +1228,8 @@ fn change_vault_to_image_grid(
     let vault_data: VaultData = serde_json::from_slice(&plaintext)
         .map_err(|error| format!("Failed to parse existing vault data: {}", error))?;
 
-    let new_salt = security::generate_salt()
-        .map_err(|error| format!("Failed to generate salt: {}", error))?;
+    let new_salt =
+        security::generate_salt().map_err(|error| format!("Failed to generate salt: {}", error))?;
     let new_key = security::derive_key_from_password(&new_password, &new_salt)?;
     let new_nonce = security::generate_nonce()
         .map_err(|error| format!("Failed to generate nonce: {}", error))?;
@@ -1285,8 +1322,8 @@ fn change_vault_to_password(
     let vault_data: VaultData = serde_json::from_slice(&plaintext)
         .map_err(|error| format!("Failed to parse existing vault data: {}", error))?;
 
-    let new_salt = security::generate_salt()
-        .map_err(|error| format!("Failed to generate salt: {}", error))?;
+    let new_salt =
+        security::generate_salt().map_err(|error| format!("Failed to generate salt: {}", error))?;
     let new_key = security::derive_key_from_password(&new_password, &new_salt)?;
     let new_nonce = security::generate_nonce()
         .map_err(|error| format!("Failed to generate nonce: {}", error))?;
@@ -1333,7 +1370,7 @@ fn change_vault_to_password(
 fn set_grid_auth(pattern: Vec<u8>, _master_password: Option<String>) -> Result<(), String> {
     println!("Setting up image authentication...");
 
-    if pattern.len() < 4 || pattern.len() % 2 != 0 {
+    if pattern.len() < 4 || !pattern.len().is_multiple_of(2) {
         return Err("Image pattern must have at least 2 coordinate pairs".to_string());
     }
 
@@ -1355,7 +1392,8 @@ fn set_grid_auth(pattern: Vec<u8>, _master_password: Option<String>) -> Result<(
         .map(|h| format!("{}/.password_manager/grid_auth.json", h))
         .unwrap_or_else(|| "./grid_auth.json".to_string());
 
-    let grid_auth_dir = std::path::Path::new(&grid_auth_path).parent()
+    let grid_auth_dir = std::path::Path::new(&grid_auth_path)
+        .parent()
         .unwrap_or(std::path::Path::new("."));
     std::fs::create_dir_all(grid_auth_dir)
         .map_err(|e| format!("Failed to create grid auth directory: {}", e))?;
@@ -1389,27 +1427,30 @@ fn unlock_vault_grid(
     let grid_auth: serde_json::Value = serde_json::from_str(&content)
         .map_err(|e| format!("Failed to parse grid auth data: {}", e))?;
 
-    let master_password = if grid_auth.get("type").and_then(serde_json::Value::as_str) == Some("image_grid") {
-        let cell_values: Vec<String> = serde_json::from_value(
-            grid_auth["cell_values"].clone(),
-        )
-        .map_err(|error| format!("Failed to parse image grid: {}", error))?;
-        if cell_values.len() != 25
-            || cell_values
-                .iter()
-                .any(|value| !valid_image_grid_fragment(value))
-            || cell_values.iter().collect::<std::collections::HashSet<_>>().len() != 25
-        {
-            return Err("Stored image grid is invalid".to_string());
-        }
-        grid_password_from_cells(&pattern, &cell_values)?
-    } else {
-        // Legacy image auth stores exact coordinate bytes. Verify approximate clicks,
-        // but derive with the original bytes so tolerated click drift cannot change the key.
-        let stored: Vec<u8> = serde_json::from_value(grid_auth["pattern"].clone())
-            .map_err(|error| format!("Failed to parse stored pattern: {}", error))?;
-        legacy_image_password(&pattern, &stored)?
-    };
+    let master_password =
+        if grid_auth.get("type").and_then(serde_json::Value::as_str) == Some("image_grid") {
+            let cell_values: Vec<String> = serde_json::from_value(grid_auth["cell_values"].clone())
+                .map_err(|error| format!("Failed to parse image grid: {}", error))?;
+            if cell_values.len() != 25
+                || cell_values
+                    .iter()
+                    .any(|value| !valid_image_grid_fragment(value))
+                || cell_values
+                    .iter()
+                    .collect::<std::collections::HashSet<_>>()
+                    .len()
+                    != 25
+            {
+                return Err("Stored image grid is invalid".to_string());
+            }
+            grid_password_from_cells(&pattern, &cell_values)?
+        } else {
+            // Legacy image auth stores exact coordinate bytes. Verify approximate clicks,
+            // but derive with the original bytes so tolerated click drift cannot change the key.
+            let stored: Vec<u8> = serde_json::from_value(grid_auth["pattern"].clone())
+                .map_err(|error| format!("Failed to parse stored pattern: {}", error))?;
+            legacy_image_password(&pattern, &stored)?
+        };
 
     println!("Image authentication verified successfully");
 
@@ -1445,11 +1486,11 @@ fn change_auth_method(
 
     let has_grid_auth = std::path::Path::new(&grid_auth_path).exists();
 
-    let content = std::fs::read_to_string(&vault_path)
-        .map_err(|e| format!("Failed to read vault: {}", e))?;
+    let content =
+        std::fs::read_to_string(&vault_path).map_err(|e| format!("Failed to read vault: {}", e))?;
 
-    let vault_file: VaultFile = serde_json::from_str(&content)
-        .map_err(|e| format!("Failed to parse vault: {}", e))?;
+    let vault_file: VaultFile =
+        serde_json::from_str(&content).map_err(|e| format!("Failed to parse vault: {}", e))?;
 
     let salt_bytes = security::decode_hex_or_base64(&vault_file.salt, "salt")?;
     let key = security::derive_key_from_password(&current_password, &salt_bytes)
@@ -1470,10 +1511,8 @@ fn change_auth_method(
         set_grid_auth(pattern, None)?;
     }
 
-    if new_auth_type == "password" {
-        if has_grid_auth {
-            std::fs::remove_file(&grid_auth_path).ok();
-        }
+    if new_auth_type == "password" && has_grid_auth {
+        std::fs::remove_file(&grid_auth_path).ok();
     }
 
     println!("Authentication method changed successfully");
@@ -1507,7 +1546,8 @@ fn import_vault(path: String) -> Result<(), String> {
     }
 
     let content = std::fs::read_to_string(&path).map_err(|e| format!("Failed to read: {}", e))?;
-    let _vault_data: VaultData = serde_json::from_str(&content).map_err(|e| format!("Failed to parse: {}", e))?;
+    let _vault_data: VaultData =
+        serde_json::from_str(&content).map_err(|e| format!("Failed to parse: {}", e))?;
 
     let dest_path = std::env::var("HOME")
         .ok()

@@ -1,6 +1,7 @@
 # ✅ Guia Visual amb Fletxes - Implementació Final
 
 ## 🎯 Objectiu
+
 Crear una guia visual que aparegui **sobre la interfície existent** amb fletxes que apunten als botons reals per guiar l'usuari pas a pas en crear el seu primer accés.
 
 ## 📱 Implementació
@@ -36,6 +37,7 @@ He creat un nou diàleg d'overlay a `src/ui/overlay_guide.py` que:
 ### Detecció del Botó "Afegir accés":
 
 El guide busca automàticament el botó "Afegir accés" amb aquesta prioritat:
+
 1. Busca botons amb text "Afegir" o "Afegir accés"
 2. Si no troba, busca botons amb "Add" o "Accés"
 3. Si encara no troba, pren el primer botó disponible
@@ -95,10 +97,11 @@ El guide busca automàticament el botó "Afegir accés" amb aquesta prioritat:
 ## 📂 Arxius Modificats
 
 ### 1. `src/ui/overlay_guide.py` (NOU)
+
 ```python
 class OverlayGuideDialog(QDialog):
     """Overlay guide que es mostra sobre la UI existent."""
-    
+
     - setModal(False): No modal per veure la UI alhora
     - _init_ui(): Crea l'overlay amb fons semi-transparent
     - _find_afegir_button(): Troba el botó real "Afegir accés"
@@ -107,6 +110,7 @@ class OverlayGuideDialog(QDialog):
 ```
 
 ### 2. `src/ui/main_window.py`
+
 ```python
 # Import nou
 from src.ui.overlay_guide import OverlayGuideDialog
@@ -129,11 +133,13 @@ def _initialize_new_vault(self):
 ## 🎨 Disseny Visual
 
 ### Colors:
+
 - **Blau (#2563eb)**: Elements principals, fletxes, botons actius
 - **Gris clar (#f1f5f9)**: Botons secundaris
 - **Blanc amb transparència (rgba)**: Fons de l'overlay
 
 ### Efectes:
+
 - **Ombra**: Per destacar l'overlay del fons
 - **Blur suau**: Per difuminar el fons
 - **Borda gruixuda**: Per delimitar clarament l'overlay
@@ -142,6 +148,7 @@ def _initialize_new_vault(self):
 ## ✅ Resultat Final
 
 L'usuari veu:
+
 1. ✅ Una guia **sobre la interfície** (no un diàleg separat)
 2. ✅ **Fletxes visuals** que apunten als elements reals
 3. ✅ Instruccions clares en **català**
@@ -169,6 +176,7 @@ python3 main.py
 ## 🔍 Depuració
 
 Si la guia no apareix:
+
 1. Verifica que no hi hagi cap fitxer `~/.password_manager/vault.json`
 2. Assegura't que PyQt6 està instal·lat: `pip3 install PyQt6`
 3. Comprova que no hi hagi errors de sintaxi: `python3 -c "import src.ui.overlay_guide"`

@@ -11,8 +11,6 @@ from PyQt6.QtWidgets import (
     QHBoxLayout,
     QPushButton,
     QDialog,
-    QTableWidget,
-    QTableWidgetItem,
     QMessageBox,
     QInputDialog,
     QLineEdit,
@@ -21,24 +19,22 @@ from PyQt6.QtWidgets import (
     QListWidgetItem,
     QSplitter,
     QFrame,
-    QScrollArea,
-    QSizePolicy,
     QToolButton,
     QMenu,
     QSpinBox,
     QColorDialog,
+    QComboBox,
 )
 
 from src.password_manager import PasswordManager
 from src.remote_vault import RemoteVaultStore
-from src.ui.dialogs import AddEditDialog, GeneratePasswordDialog, LoginDialog, CloudLoginDialog
+from src.ui.dialogs import AddEditDialog, LoginDialog, CloudLoginDialog
 from src.ui.image_auth_dialog import ImageAuthSetupDialog, ImageAuthLoginDialog
 from src.ui.tutorial_dialog import StepByStepGuideDialog
 from src.ui.overlay_guide import OverlayGuideDialog
 from src.storage import (
     save_vault,
     load_vault,
-    export_vault,
     VAULT_FILENAME,
     SIDEBAR_SETTINGS_FILENAME,
     LOCKOUT_STATE_FILENAME,
@@ -130,7 +126,7 @@ QLabel#empty_state { color: #68706c; font-size: 13px; padding: 32px; }
 
 class MainWindow(QMainWindow):
     login_requested = pyqtSignal(str)  # Emits master password when login is requested
-    
+
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Caixa forta")
@@ -201,12 +197,14 @@ class MainWindow(QMainWindow):
 
         remote_menu = self.menuBar().addMenu("Remot")
         remote_menu.addAction(QAction("Puja la caixa forta", self, triggered=self._sync_upload))
-        remote_menu.addAction(QAction("Descarrega la caixa forta", self, triggered=self._sync_download))
+        remote_menu.addAction(
+            QAction("Descarrega la caixa forta", self, triggered=self._sync_download)
+        )
 
     def _change_auth_method(self):
         """Allow user to change authentication method."""
         from src.storage import image_auth_is_set
-        
+
         auth_dlg = QDialog(self)
         auth_dlg.setWindowTitle("Canviar mètode d'autenticació")
         auth_layout = QVBoxLayout(auth_dlg)
@@ -237,7 +235,7 @@ class MainWindow(QMainWindow):
     def _switch_to_password_auth(self):
         """Switch to password-based authentication."""
         from src.storage import delete_image_auth
-        
+
         delete_image_auth()
         self.status.setText("Mètode d'autenticació canviat a contrasenya")
         self.status.setStyleSheet("color: #16803c; font-weight: 600;")
@@ -245,7 +243,7 @@ class MainWindow(QMainWindow):
     def _remove_image_auth(self):
         """Remove image-based authentication."""
         from src.storage import delete_image_auth
-        
+
         delete_image_auth()
         self.status.setText("Autenticació amb imatge eliminada")
         self.status.setStyleSheet("color: #16803c; font-weight: 600;")
@@ -265,12 +263,16 @@ class MainWindow(QMainWindow):
         if self._initialized:
             # If we're already authenticated, just show login to re-auth
             self.status.setText("Sessió inactiva. Entra de nou.")
-        
+
         else:
             self.status.setText("Entrada la contrasenya mestra per començar.")
-        
+
         # Check if we should show cloud login
-        if self.remote_store.configured and self.remote_store._status.url == "https://password-manager-cloud-production.up.railway.app":
+        if (
+            self.remote_store.configured
+            and self.remote_store._status.url
+            == "https://password-manager-cloud-production.up.railway.app"
+        ):
             # Show cloud authentication dialog
             cloud_dialog = CloudLoginDialog(self.remote_store, self)
             if cloud_dialog.exec() == QDialog.DialogCode.Accepted:
@@ -278,15 +280,16 @@ class MainWindow(QMainWindow):
                 creds = cloud_dialog.get_credentials()
                 password = creds["password"]
                 username = creds["username"]
-                
+
                 # Authenticate user
                 self.remote_store.authenticate_user(username, password)
-                
+
                 # Load vault
                 self._load_vault(password)
         elif self._initialized:
             # Local vault - show biometric login prompt
             from src.storage import image_auth_is_set
+
             if image_auth_is_set():
                 # Image auth is configured, show image login dialog
                 login_prompt = ImageAuthLoginDialog(self)
@@ -297,7 +300,11 @@ class MainWindow(QMainWindow):
                 dlg = LoginDialog(self, remote=self.remote_store.configured)
                 if dlg.exec() == QDialog.DialogCode.Accepted:
                     self._load_vault(dlg.password_field.text())
-        elif not self._initialized and not self.remote_store.configured and not os.path.exists(VAULT_FILENAME):
+        elif (
+            not self._initialized
+            and not self.remote_store.configured
+            and not os.path.exists(VAULT_FILENAME)
+        ):
             self._initialize_new_vault()
 
     def _load_vault(self, master_password=None):
@@ -307,7 +314,10 @@ class MainWindow(QMainWindow):
         try:
             if self.remote_store.configured:
                 # Check if using official cloud
-                if self.remote_store._status.url == "https://password-manager-cloud-production.up.railway.app":
+                if (
+                    self.remote_store._status.url
+                    == "https://password-manager-cloud-production.up.railway.app"
+                ):
                     # Authenticate user first to verify credentials
                     client = self._client()
                     try:
@@ -318,7 +328,7 @@ class MainWindow(QMainWindow):
                         self.status.setText("Error d'autenticació")
                         self.status.setStyleSheet("color: #dc2626; font-weight: 600;")
                         return False
-                
+
                 # Auto-download from remote server
                 entries, version = self.remote_store.load(master_password)
                 CONFIG["railway_version"] = version
@@ -329,27 +339,32 @@ class MainWindow(QMainWindow):
             self._master_password = master_password
             self._initialized = True
             self.refresh_cards()
-            status_msg = "Caixa forta remota - Accés correcte" if self.remote_store.configured else "Caixa forta - Accés correcte"
+            status_msg = (
+                "Caixa forta remota - Accés correcte"
+                if self.remote_store.configured
+                else "Caixa forta - Accés correcte"
+            )
             self.status.setText(status_msg)
-            
+
             # Check for sync indicators
             if self.remote_store.configured and entries:
                 self.status.setStyleSheet("color: #16803c; font-weight: 600;")
-            
+
             return True
         except Exception as error:
             self._show_remote_error("No s'ha pogut carregar la caixa forta", error)
             self.status.setText("Error de càrrega")
             self.status.setStyleSheet("color: #dc2626; font-weight: 600;")
             return False
-    
+
     def _client(self):
         """Create a Railway client instance."""
         from src.railway_client import RailwayVaultClient
+
         return RailwayVaultClient(
             self.remote_store._status.url,
             self.remote_store._status.vault_id,
-            self.remote_store._status.token or ""
+            self.remote_store._status.token or "",
         )
 
     def _initialize_new_vault(self):
@@ -425,31 +440,31 @@ class MainWindow(QMainWindow):
         # Show image auth setup wizard first
         wizard = ImageAuthSetupDialog(self)
         result = wizard.exec()
-        
+
         if result != QDialog.DialogCode.Accepted:
             return
-        
+
         # Now create an empty vault with a default password for image auth
         # The actual authentication will use the grid pattern
         self._master_password = "grid_auth"
         self._initialized = True
-        
+
         if self.remote_store.has_server:
             self.remote_store.save([], self._master_password)
             save_config(CONFIG)
         else:
             save_vault([], self._master_password)
-            
+
         self.status.setText("Caixa forta creada amb autenticació amb imatge!")
         self.status.setStyleSheet("color: #16803c; font-weight: 600;")
-        
+
         # Show first-time guide with overlay arrows
         try:
             self._show_first_time_guide()
         except Exception as e:
             # If guide fails to show, at least show a message
             self.status.setText(f"Guia no disponible: {str(e)}")
-        
+
         self._showed_first_time_guide = True
 
     def _initialize_password_vault(self):
@@ -510,30 +525,31 @@ class MainWindow(QMainWindow):
         if dlg.exec() == QDialog.DialogCode.Accepted:
             self._initialized = True
             self.status.setText("Caixa forta creada!")
-            
+
             # Show first-time guide with overlay arrows
             try:
                 self._show_first_time_guide()
             except Exception as e:
                 # If guide fails to show, at least show a message
                 self.status.setText(f"Guia no disponible: {str(e)}")
-            
+
             self._showed_first_time_guide = True
 
     def _prompt_biometric_setup(self):
         """Prompt user to set up image-based biometric authentication."""
         try:
             from src.storage import image_auth_is_set
+
             if not image_auth_is_set():
                 # Show wizard to set up image auth
-                wizard = ImageSetupWizardDialog(self)
+                wizard = ImageAuthSetupDialog(self)
                 wizard.exec()
         except Exception as e:
             print(f"Failed to prompt biometric setup: {e}")
 
     def _init_login_state(self):
         """Check if vault exists and show login dialog."""
-        from src.storage import VAULT_FILENAME, load_vault
+        from src.storage import VAULT_FILENAME
 
         if self.remote_store.configured or os.path.exists(VAULT_FILENAME):
             self.show_login_dialog()
@@ -547,7 +563,12 @@ class MainWindow(QMainWindow):
         button.setProperty("class", "nav_tab")
         button.setText(label)
         try:
-            pix = QPixmap(str(icon_path)).scaled(28, 28, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+            pix = QPixmap(str(icon_path)).scaled(
+                28,
+                28,
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
             button.setIcon(QIcon(pix))
             button.setIconSize(pix.size())
         except Exception:
@@ -590,11 +611,13 @@ class MainWindow(QMainWindow):
         settings = []
         for index in range(self.sidebar.count()):
             item = self.sidebar.item(index)
-            settings.append({
-                "name": item.text(),
-                "icon": item.data(Qt.ItemDataRole.UserRole),
-                "color": item.data(Qt.ItemDataRole.UserRole + 1),
-            })
+            settings.append(
+                {
+                    "name": item.text(),
+                    "icon": item.data(Qt.ItemDataRole.UserRole),
+                    "color": item.data(Qt.ItemDataRole.UserRole + 1),
+                }
+            )
         save_sidebar_settings(settings)
 
     def _create_colored_icon(self, icon_path, color_str):
@@ -609,8 +632,15 @@ class MainWindow(QMainWindow):
             painter.setPen(Qt.GlobalColor.transparent)
             painter.drawRoundedRect(0, 0, pix_size, pix_size, 10, 10)
         try:
-            icon_pix = QPixmap(str(icon_path)).scaled(20, 20, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
-            painter.drawPixmap((pix_size - icon_pix.width()) // 2, (pix_size - icon_pix.height()) // 2, icon_pix)
+            icon_pix = QPixmap(str(icon_path)).scaled(
+                20,
+                20,
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+            painter.drawPixmap(
+                (pix_size - icon_pix.width()) // 2, (pix_size - icon_pix.height()) // 2, icon_pix
+            )
         except Exception:
             pass
         painter.end()
@@ -621,9 +651,19 @@ class MainWindow(QMainWindow):
         if not item:
             return
         menu = QMenu(self)
-        menu.addAction(QAction("Reanomena", menu, triggered=lambda: self._rename_sidebar_item(item)))
-        menu.addAction(QAction("Canvia la icona", menu, triggered=lambda: self._change_sidebar_icon(item)))
-        menu.addAction(QAction("Canvia el color de la icona", menu, triggered=lambda: self._change_sidebar_icon_color(item)))
+        menu.addAction(
+            QAction("Reanomena", menu, triggered=lambda: self._rename_sidebar_item(item))
+        )
+        menu.addAction(
+            QAction("Canvia la icona", menu, triggered=lambda: self._change_sidebar_icon(item))
+        )
+        menu.addAction(
+            QAction(
+                "Canvia el color de la icona",
+                menu,
+                triggered=lambda: self._change_sidebar_icon_color(item),
+            )
+        )
         menu.exec(self.sidebar.mapToGlobal(pos))
 
     def _rename_sidebar_item(self, item: QListWidgetItem):
@@ -634,10 +674,12 @@ class MainWindow(QMainWindow):
 
     def _change_sidebar_icon(self, item: QListWidgetItem):
         icons_path = Path(__file__).resolve().parent / "icons"
-        files = [p for p in icons_path.iterdir() if p.suffix.lower() in ('.svg', '.png')]
+        files = [p for p in icons_path.iterdir() if p.suffix.lower() in (".svg", ".png")]
         menu = QMenu(self)
         for f in files:
-            act = QAction(f.name, menu, triggered=lambda checked, p=f: self._apply_sidebar_icon(item, p))
+            act = QAction(
+                f.name, menu, triggered=lambda checked, p=f: self._apply_sidebar_icon(item, p)
+            )
             act.setIcon(QIcon(str(f)))
             menu.addAction(act)
         menu.exec(QCursor.pos())
@@ -652,7 +694,9 @@ class MainWindow(QMainWindow):
     def _change_sidebar_icon_color(self, item: QListWidgetItem):
         color = QColorDialog.getColor()
         if color.isValid():
-            icon_path = item.data(Qt.ItemDataRole.UserRole) or str(Path(__file__).resolve().parent / "icons" / "vault.svg")
+            icon_path = item.data(Qt.ItemDataRole.UserRole) or str(
+                Path(__file__).resolve().parent / "icons" / "vault.svg"
+            )
             pix = self._create_colored_icon(Path(icon_path), color.name())
             item.setIcon(QIcon(pix))
             item.setData(Qt.ItemDataRole.UserRole + 1, color.name())
@@ -673,7 +717,7 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout(dlg)
 
         layout.addWidget(QLabel("Tèrmins de seguretat"))
-        
+
         self.clip_spin = QSpinBox()
         self.clip_spin.setRange(1, 3600)
         self.clip_spin.setValue(CONFIG.get("clipboard_clear_seconds", 30))
@@ -688,40 +732,43 @@ class MainWindow(QMainWindow):
 
         # Cloud provider selection
         cloud_layout = QVBoxLayout()
-        
+
         cloud_label = QLabel("Proveïdor de núvol:")
         cloud_label.setStyleSheet("font-weight: 600; font-size: 13px; margin-top: 12px;")
         cloud_layout.addWidget(cloud_label)
-        
-        cloud_combo = QComboBox()
-        cloud_combo.addItems(["Núvol oficial (recomanat)", "Personalitzat (domini propi)"])
-        cloud_combo.setCurrentIndex(0)
+
+        self.cloud_combo = QComboBox()
+        self.cloud_combo.addItems(["Núvol oficial (recomanat)", "Personalitzat (domini propi)"])
+        self.cloud_combo.setCurrentIndex(0)
         tooltip = QLabel(
             "Núvol oficial: https://password-manager-cloud-production.up.railway.app\n"
             "Personalitzat: Introduu el teu propi domini Railway"
         )
         tooltip.setAlignment(Qt.AlignmentFlag.AlignRight)
-        tooltip.setStyleSheet("color: #68706c; font-size: 11px; padding-left: 8px; background: #f8fafc; padding: 8px; border-radius: 4px;")
+        tooltip.setStyleSheet(
+            "color: #68706c; font-size: 11px; padding-left: 8px; background: #f8fafc; padding: 8px; border-radius: 4px;"
+        )
         cloud_layout.addWidget(tooltip)
-        
+
         # Use signal to update URL when selection changes
-        cloud_combo.currentIndexChanged.connect(self._on_cloud_provider_changed)
-        cloud_layout.addWidget(cloud_combo)
-        
+        self.cloud_combo.currentIndexChanged.connect(self._on_cloud_provider_changed)
+        cloud_layout.addWidget(self.cloud_combo)
+
         layout.addLayout(cloud_layout)
-        
+
         # Show URL field only for custom cloud
         self.railway_url_edit = QLineEdit(CONFIG.get("railway_url", ""))
         self.railway_url_edit.setPlaceholderText("https://your-custom-project.up.railway.app")
-        self.railway_url_edit.setEnabled(cloud_combo.currentIndex() == 1)
-        
+        self.railway_url_edit.setEnabled(self.cloud_combo.currentIndex() == 1)
+
         # Show tooltip for custom URL field
         tooltip = QLabel(
-            "Introdueix el teu domini Railway:\n"
-            "https://your-project-id.up.railway.app"
+            "Introdueix el teu domini Railway:\nhttps://your-project-id.up.railway.app"
         )
         tooltip.setAlignment(Qt.AlignmentFlag.AlignRight)
-        tooltip.setStyleSheet("color: #68706c; font-size: 11px; padding-left: 8px; background: #f8fafc; padding: 8px; border-radius: 4px;")
+        tooltip.setStyleSheet(
+            "color: #68706c; font-size: 11px; padding-left: 8px; background: #f8fafc; padding: 8px; border-radius: 4px;"
+        )
         layout.addWidget(tooltip)
         layout.addWidget(self.railway_url_edit)
 
@@ -754,6 +801,7 @@ class MainWindow(QMainWindow):
 
         auth_current_label = QLabel("Mètode actual: ")
         from src.storage import image_auth_is_set
+
         if image_auth_is_set():
             auth_current_label.setText("Mètode actual: Autenticació amb imatge")
         else:
@@ -816,7 +864,7 @@ class MainWindow(QMainWindow):
             "• Totes les configuracions personalitzades\n\n\n"
             "Si continues, no podrés recuperar les dades perdudes.",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No
+            QMessageBox.StandardButton.No,
         )
 
         if confirm == QMessageBox.StandardButton.Yes:
@@ -842,10 +890,9 @@ class MainWindow(QMainWindow):
                     QMessageBox.information(
                         self,
                         "Dades eliminades",
-                        "Totes les dades s'han eliminat.\n\n"
-                        "La caixa forta ha estat reiniciada."
+                        "Totes les dades s'han eliminat.\n\nLa caixa forta ha estat reiniciada.",
                     )
-                    
+
                     # Reset to defaults (globals already declared at top)
                     CONFIG.clear()
                     CONFIG.update(DEFAULT_CONFIG)
@@ -891,10 +938,16 @@ class MainWindow(QMainWindow):
 
     def _sync_upload(self):
         if not self.remote_store.configured:
-            QMessageBox.information(self, "Remot no configurat", "Configura l'URL, l'identificador i el testimoni Railway.")
+            QMessageBox.information(
+                self,
+                "Remot no configurat",
+                "Configura l'URL, l'identificador i el testimoni Railway.",
+            )
             return
         if not self._master_password:
-            QMessageBox.warning(self, "Caixa forta bloquejada", "Desbloqueja la caixa forta abans de sincronitzar.")
+            QMessageBox.warning(
+                self, "Caixa forta bloquejada", "Desbloqueja la caixa forta abans de sincronitzar."
+            )
             return
         try:
             self.remote_store.save(self.manager.get_entries(), self._master_password)
@@ -905,10 +958,16 @@ class MainWindow(QMainWindow):
 
     def _sync_download(self):
         if not self.remote_store.configured:
-            QMessageBox.information(self, "Remot no configurat", "Configura l'URL, l'identificador i el testimoni Railway.")
+            QMessageBox.information(
+                self,
+                "Remot no configurat",
+                "Configura l'URL, l'identificador i el testimoni Railway.",
+            )
             return
         if not self._master_password:
-            QMessageBox.warning(self, "Caixa forta bloquejada", "Desbloqueja la caixa forta abans de sincronitzar.")
+            QMessageBox.warning(
+                self, "Caixa forta bloquejada", "Desbloqueja la caixa forta abans de sincronitzar."
+            )
             return
         try:
             entries, version = self.remote_store.load(self._master_password)
@@ -932,19 +991,19 @@ class MainWindow(QMainWindow):
             self.railway_url_edit.setEnabled(True)
             self.railway_vault_id_edit.setEnabled(True)
             self.railway_token_edit.setEnabled(True)
-    
+
     def save_settings(self, dlg):
         """Save settings and handle cloud provider selection."""
-        global CONFIG  # noqa: F826
-        
+        global CONFIG, SESSION_TIMEOUT_SECONDS, CLIPBOARD_CLEAR_SECONDS
+
         new_config = {
             "clipboard_clear_seconds": self.clip_spin.value(),
             "auto_lock_seconds": self.lock_spin.value(),
             "show_tutorial": CONFIG.get("show_tutorial", True),
         }
-        
+
         # Handle cloud provider selection
-        if cloud_combo.currentIndex() == 0:
+        if self.cloud_combo.currentIndex() == 0:
             # Official cloud
             new_config["railway_url"] = "https://password-manager-cloud-production.up.railway.app"
             new_config["railway_vault_id"] = ""
@@ -955,20 +1014,20 @@ class MainWindow(QMainWindow):
             new_config["railway_url"] = custom_url if custom_url else ""
             new_config["railway_vault_id"] = self.railway_vault_id_edit.text().strip() or ""
             new_config["railway_token"] = self.railway_token_edit.text().strip() or ""
-        
+
         # Update with version if available
         if CONFIG.get("railway_version") is not None:
             new_config["railway_version"] = CONFIG["railway_version"]
-        
+
         save_config(new_config)
-        
+
         # Refresh the main window's constants
         CONFIG.update(new_config)
         self.remote_store = RemoteVaultStore(CONFIG)
         SESSION_TIMEOUT_SECONDS = CONFIG.get("auto_lock_seconds", 300)
         CLIPBOARD_CLEAR_SECONDS = CONFIG.get("clipboard_clear_seconds", 30)
         self._show_sync_status()
-        
+
         if dlg.windowTitle() == "Configuració":
             dlg.accept()
 
@@ -994,7 +1053,9 @@ class MainWindow(QMainWindow):
 
             site_icon = QLabel()
             site_icon.setObjectName("site_icon")
-            site_icon.setPixmap(QIcon(str(Path(__file__).resolve().parent / "icons" / "globe.svg")).pixmap(22, 22))
+            site_icon.setPixmap(
+                QIcon(str(Path(__file__).resolve().parent / "icons" / "globe.svg")).pixmap(22, 22)
+            )
             layout.addWidget(site_icon)
 
             left = QVBoxLayout()
@@ -1012,11 +1073,15 @@ class MainWindow(QMainWindow):
             right.setSpacing(2)
             btn_open = QToolButton()
             btn_open.setObjectName("card_action")
-            btn_open.setIcon(QIcon(str(Path(__file__).resolve().parent / "icons" / "external-link.svg")))
+            btn_open.setIcon(
+                QIcon(str(Path(__file__).resolve().parent / "icons" / "external-link.svg"))
+            )
             btn_open.setToolTip("Obre el lloc web")
             btn_open.setFixedSize(40, 40)
             btn_open.setIconSize(btn_open.size())
-            btn_open.setStyleSheet("QToolButton { background: #fbfdff; border: 1px solid #e6eef5; border-radius: 8px; } QToolButton:hover { background: #f1f5f9; }")
+            btn_open.setStyleSheet(
+                "QToolButton { background: #fbfdff; border: 1px solid #e6eef5; border-radius: 8px; } QToolButton:hover { background: #f1f5f9; }"
+            )
             btn_open.setCursor(Qt.CursorShape.PointingHandCursor)
 
             # Sanitize site URL to prevent XSS
@@ -1029,7 +1094,9 @@ class MainWindow(QMainWindow):
             btn_copy.setToolTip("Copia la contrasenya")
             btn_copy.setFixedSize(40, 40)
             btn_copy.setIconSize(btn_copy.size())
-            btn_copy.setStyleSheet("QToolButton { background: #fbfdff; border: 1px solid #e6eef5; border-radius: 8px; } QToolButton:hover { background: #f1f5f9; }")
+            btn_copy.setStyleSheet(
+                "QToolButton { background: #fbfdff; border: 1px solid #e6eef5; border-radius: 8px; } QToolButton:hover { background: #f1f5f9; }"
+            )
             btn_copy.setCursor(Qt.CursorShape.PointingHandCursor)
 
             btn_copy.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
@@ -1038,8 +1105,20 @@ class MainWindow(QMainWindow):
             def _show_copy_menu(self, b: QToolButton):
                 """Show copy menu with secure labels (password shown as 🔒)."""
                 m = QMenu(self)
-                m.addAction(QAction("Copiar l'usuari", m, triggered=lambda: self.copy_to_clipboard(e.username, "Usuari copiat")))
-                m.addAction(QAction("🔒 Copiar contrasenya", m, triggered=lambda: self.copy_to_clipboard(e.password, "Contrasenya copiada")))
+                m.addAction(
+                    QAction(
+                        "Copiar l'usuari",
+                        m,
+                        triggered=lambda: self.copy_to_clipboard(e.username, "Usuari copiat"),
+                    )
+                )
+                m.addAction(
+                    QAction(
+                        "🔒 Copiar contrasenya",
+                        m,
+                        triggered=lambda: self.copy_to_clipboard(e.password, "Contrasenya copiada"),
+                    )
+                )
                 m.exec(b.mapToGlobal(b.rect().bottomLeft()))
 
             btn_copy.clicked.connect(_show_copy_menu)
@@ -1052,7 +1131,9 @@ class MainWindow(QMainWindow):
             btn_more.setToolTip("Més accions")
             btn_more.setFixedSize(40, 40)
             btn_more.setIconSize(btn_more.size())
-            btn_more.setStyleSheet("QToolButton { background: #fbfdff; border: 1px solid #e6eef5; border-radius: 8px; } QToolButton:hover { background: #f1f5f9; }")
+            btn_more.setStyleSheet(
+                "QToolButton { background: #fbfdff; border: 1px solid #e6eef5; border-radius: 8px; } QToolButton:hover { background: #f1f5f9; }"
+            )
             btn_more.setCursor(Qt.CursorShape.PointingHandCursor)
             btn_more.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
             btn_more.setMenu(self._create_entry_menu(e.id))
@@ -1121,11 +1202,25 @@ class MainWindow(QMainWindow):
 
     def _create_entry_menu(self, entry_id: str):
         menu = QMenu(self)
-        menu.addAction(QAction("Emplenament automàtic", menu, triggered=lambda: self.status.setText("Emplenament automàtic preparat")))
-        menu.addAction(QAction("Preferit", menu, triggered=lambda: self.status.setText("Accés marcat com a preferit")))
+        menu.addAction(
+            QAction(
+                "Emplenament automàtic",
+                menu,
+                triggered=lambda: self.status.setText("Emplenament automàtic preparat"),
+            )
+        )
+        menu.addAction(
+            QAction(
+                "Preferit",
+                menu,
+                triggered=lambda: self.status.setText("Accés marcat com a preferit"),
+            )
+        )
         menu.addAction(QAction("Edita", menu, triggered=lambda: self.on_edit_by_id(entry_id)))
         menu.addAction(QAction("Clona", menu, triggered=lambda: self.on_clone_by_id(entry_id)))
-        menu.addAction(QAction("Arxiva", menu, triggered=lambda: self.status.setText("Accés arxivat")))
+        menu.addAction(
+            QAction("Arxiva", menu, triggered=lambda: self.status.setText("Accés arxivat"))
+        )
         menu.addAction(QAction("Suprimeix", menu, triggered=lambda: self.on_delete_by_id(entry_id)))
         return menu
 
@@ -1192,20 +1287,22 @@ class MainWindow(QMainWindow):
                 data["site"],
                 data["username"].strip(),
                 data["password"],
-                data["notes"][:500]  # Limit notes length to prevent abuse
+                data["notes"][:500],  # Limit notes length to prevent abuse
             )
 
             self._on_last_activity()
             self.save_vault_with_master_password()
             self.refresh_cards()
-            self.status.setText("Accés afegit - Síncronitzat" if self.remote_store.configured else "Accés afegit")
+            self.status.setText(
+                "Accés afegit - Síncronitzat" if self.remote_store.configured else "Accés afegit"
+            )
 
     def save_vault_with_master_password(self):
         """Save vault with master password prompt."""
         if not self._master_password:
             self.show_login_dialog()
             return
-        
+
         # Validate version before upload to prevent stale version conflicts
         if self.remote_store.has_server and self.remote_store._status.version is not None:
             # Check if version is reasonable (not too old)
@@ -1213,7 +1310,7 @@ class MainWindow(QMainWindow):
                 self.status.setText("Warning: Version stale, try deleting and recreating vault")
                 self.status.setStyleSheet("color: #f59e0b; font-weight: 600;")
                 return
-        
+
         try:
             if self.remote_store.has_server:
                 self.remote_store.save(self.manager.get_entries(), self._master_password)
@@ -1271,17 +1368,22 @@ class MainWindow(QMainWindow):
         self._on_last_activity()
 
         confirm = QMessageBox.question(
-            self, "Confirmació",
+            self,
+            "Confirmació",
             "Vols eliminar aquest accés?\n\nAquesta acció no es pot desfazer.",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No
+            QMessageBox.StandardButton.No,
         )
 
         if confirm == QMessageBox.StandardButton.Yes:
             self.manager.delete_entry(entry_id)
             self.save_vault_with_master_password()
             self.refresh_cards()
-            self.status.setText("Accés eliminat - Síncronitzat" if self.remote_store.configured else "Accés eliminat")
+            self.status.setText(
+                "Accés eliminat - Síncronitzat"
+                if self.remote_store.configured
+                else "Accés eliminat"
+            )
 
     def on_search(self, text: str):
         self._on_last_activity()

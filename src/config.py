@@ -1,11 +1,10 @@
-"""Configuration management for the Password Manager application.
-"""
+"""Configuration management for the Password Manager application."""
+
 import os
-import re
 from threading import Lock
 from pathlib import Path
 import json
-from typing import Optional, Callable
+from typing import Optional
 
 _DEFAULT_CONFIG = {
     "clipboard_clear_seconds": 30,
@@ -37,7 +36,7 @@ def _load_config_file() -> dict:
     with _config_lock:
         if _config_cache is not None:
             return _config_cache
-        
+
         config_path = _get_config_path()
         if config_path.exists():
             try:
@@ -54,7 +53,7 @@ def _load_config_file() -> dict:
 
 def load_config() -> dict:
     """Load configuration from file, falling back to defaults.
-    
+
     Returns:
         Configuration dictionary with defaults merged in
     """
@@ -63,7 +62,7 @@ def load_config() -> dict:
 
 def save_config(config: dict) -> None:
     """Save configuration to file with secure permissions.
-    
+
     Args:
         config: Configuration dictionary to save
     """
@@ -75,24 +74,24 @@ def save_config(config: dict) -> None:
 
 def get_railway_url() -> str:
     """Get the configured Railway API URL.
-    
+
     Returns:
         The Railway API URL, or default official cloud URL if not configured
     """
     config = load_config()
     provider = config.get("cloud_provider", "official")
-    
+
     # If using official cloud, return the official URL
     if provider == "official":
         return "https://password-manager-cloud-production.up.railway.app"
-    
+
     # Otherwise use configured URL
     url = config.get("railway_url", "")
-    
+
     # Auto-generate URL from project_id if only project_id is set
     if not url and config.get("railway_project_id"):
         return generate_railway_url(config["railway_project_id"])
-    
+
     return url or "https://password-manager-cloud-production.up.railway.app"
 
 
@@ -123,22 +122,20 @@ def is_railway_configured() -> bool:
     """
     config = load_config()
     provider = config.get("cloud_provider", "official")
-    
+
     if provider == "official":
         # Official cloud is always configured
         return True
-    
+
     # For custom cloud, check all required fields
     return bool(
-        config.get("railway_url") and
-        config.get("railway_vault_id") and
-        config.get("railway_token")
+        config.get("railway_url") and config.get("railway_vault_id") and config.get("railway_token")
     )
 
 
 def save_cloud_provider(provider: str) -> None:
     """Save the cloud provider configuration.
-    
+
     Args:
         provider: "official" or "custom"
     """
@@ -149,18 +146,19 @@ def save_cloud_provider(provider: str) -> None:
 
 def _parse_railway_domain(url: str) -> Optional[str]:
     """Extract project ID from Railway domain.
-    
+
     Extracts the project ID from URLs like:
     - https://password-manager-cloud-abc123.up.railway.app
-    
+
     Args:
         url: The Railway URL
-        
+
     Returns:
         Project ID string or None if URL is invalid
     """
     try:
         from urllib.parse import urlparse
+
         parsed = urlparse(url)
         hostname = parsed.hostname or ""
         if not hostname.endswith(".up.railway.app"):
@@ -168,7 +166,7 @@ def _parse_railway_domain(url: str) -> Optional[str]:
         # Extract project ID: password-manager-cloud-XXXXX
         base = hostname.replace(".up.railway.app", "")
         if base.startswith("password-manager-cloud-"):
-            return base[len("password-manager-cloud-"):]
+            return base[len("password-manager-cloud-") :]
         return None
     except Exception:
         return None
@@ -176,20 +174,19 @@ def _parse_railway_domain(url: str) -> Optional[str]:
 
 def generate_railway_url(project_id: str) -> str:
     """Generate Railway URL from project ID.
-    
+
     Railway generates domains like: password-manager-cloud-abc123.up.railway.app
-    
+
     Args:
         project_id: Railway project ID (typically UUID)
-    
+
     Returns:
         Generated Railway URL
     """
     if not project_id:
         return ""
-    
-    return f"https://password-manager-cloud-{project_id[:8]}.up.railway.app"
 
+    return f"https://password-manager-cloud-{project_id[:8]}.up.railway.app"
 
 
 def _write_secure_json(path: Path, data: dict) -> None:

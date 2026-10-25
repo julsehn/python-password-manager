@@ -91,11 +91,12 @@ def derive_key_from_grid_pattern(pattern_cells: list[int], salt_hex: str) -> Tup
         Tuple of (derived_32_byte_key, salt_bytes) for use with encrypt/decrypt
     """
     salt = bytes.fromhex(salt_hex)
-    
+
     # Convert cell indices to a deterministic password-like string
     from src.storage import generate_grid_password
+
     password_string = generate_grid_password(pattern_cells)
-    
+
     key, _ = derive_key(password_string, salt=salt)
 
     return key, salt

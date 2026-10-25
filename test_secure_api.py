@@ -1,141 +1,71 @@
 #!/usr/bin/env python3
 """Test script for secure API server."""
 
-import sys
-import time
-import threading
-from pathlib import Path
+import ssl
+from types import SimpleNamespace
+from typing import cast
+from unittest.mock import Mock
 
-# Add src to path
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+import pytest
 
-from src.server_config import (
-    HOST, PORT, SERVER_CERT_PATH, SERVER_KEY_PATH,
-    JWT_SECRET, HMAC_SECRET
-)
-from src.server import SecureVaultServer
-from src.auth import generate_jwt_token, verify_jwt_token, sign_request, verify_request_signature
-from src.models import PasswordEntry
-
-def test_auth_module():
-    """Test authentication module."""
-    print("Testing auth module...")
-    
-    # Generate test token
-    token = generate_jwt_token("test_user", vault_unlocked=True)
-    print(f"✓ Generated JWT token: {token[:50]}...")
-    
-    # Verify token
-    payload = verify_jwt_token(token)
-    assert payload is not None, "Token verification failed"
-    assert payload["user_id"] == "test_user", "User ID mismatch"
-    assert payload["vault_unlocked"] == True, "Vault unlocked flag mismatch"
-    print("✓ JWT token verification passed")
-    
-    # Test expired token
-    expired_token = generate_jwt_token("test_user", vault_unlocked=False)
-    expired_payload = verify_jwt_token(expired_token)
-    assert expired_payload is None, "Expired token should be rejected"
-    print("✓ Expired token rejection passed")
-    
-    # Test HMAC signing
-    sig, ts = sign_request({"data": "test"})
-    assert sig and ts, "Signature generation failed"
-    print("✓ HMAC signature generation passed")
-    
-    # Test HMAC verification
-    assert verify_request_signature(sig, ts, {"data": "test"}), "HMAC verification failed"
-    print("✓ HMAC signature verification passed")
-    
-    print("All auth tests passed!\n")
+from src import auth as auth_module
+from src import server as server_module
 
 
-def test_server():
-    """Test secure server."""
-    print("Testing secure server...")
-    
-    # Create test vault
-    test_entries = [
-        PasswordEntry(site="Test Site", username="testuser", password="testpass123", notes="Test")
-    ]
-    
-    # Save test vault
-    from src.storage import save_vault
-    save_vault(test_entries, "test_master_password")
-    print("✓ Test vault created")
-    
-    # Create and start server
-    server = SecureVaultServer("test_master_password")
-    assert server.start(), "Failed to start server"
-    
-    # Wait briefly for server to be ready
-    import time
-    time.sleep(0.5)
-    
-    assert server.is_running(), "Server not running"
-    print("✓ Server started")
-    
-    # Stop server
-    server.stop()
-    print("✓ Server stopped")
-    
-    print("All server tests passed!\n")
+def test_auth_module_uses_isolated_secrets(tmp_path, monkeypatch):
+    jwt_secret = tmp_path / "jwt_secret.bin"
+    hmac_secret = tmp_path / "hmac_secret.bin"
+    jwt_secret.write_bytes(b"j" * 32)
+    hmac_secret.write_bytes(b"h" * 32)
+    monkeypatch.setattr(auth_module, "JWT_SECRET", jwt_secret)
+    monkeypatch.setattr(auth_module, "HMAC_SECRET", hmac_secret)
+
+    token = auth_module.generate_jwt_token("test_user", vault_unlocked=True)
+    payload = auth_module.verify_jwt_token(token)
+    signature, timestamp = auth_module.sign_request({"data": "test"})
+
+    assert payload is not None
+    assert payload["user_id"] == "test_user"
+    assert payload["vault_unlocked"] is True
+    assert auth_module.verify_request_signature(signature, timestamp, {"data": "test"})
 
 
-def test_certificates():
-    """Test certificate generation."""
-    print("Testing certificate generation...")
-    
-    # Check if certificates exist
-    if SERVER_CERT_PATH.exists():
-        print(f"✓ Server certificate exists: {SERVER_CERT_PATH}")
-    else:
-        print("⚠ Server certificate not found (will be generated on first run)")
-    
-    if SERVER_KEY_PATH.exists():
-        print(f"✓ Server key exists: {SERVER_KEY_PATH}")
-    else:
-        print("⚠ Server key not found (will be generated on first run)")
-    
-    # Generate if needed
-    if not SERVER_CERT_PATH.exists() or not SERVER_KEY_PATH.exists():
-        import subprocess
-        print("Generating certificates...")
-        subprocess.run([
-            "openssl", "req", "-x509", "-newkey", "rsa:4096",
-            "-keyout", str(SERVER_KEY_PATH),
-            "-out", str(SERVER_CERT_PATH),
-            "-days", "365",
-            "-nodes",
-            "-subj", "/CN=localhost/O=Caixa Forta/C=US"
-        ], check=True)
-        print("✓ Certificates generated")
-    
-    print("Certificate tests passed!\n")
+def test_auth_rejects_locked_vault_token(tmp_path, monkeypatch):
+    jwt_secret = tmp_path / "jwt_secret.bin"
+    jwt_secret.write_bytes(b"j" * 32)
+    monkeypatch.setattr(auth_module, "JWT_SECRET", jwt_secret)
+
+    token = auth_module.generate_jwt_token("test_user", vault_unlocked=False)
+
+    assert auth_module.verify_jwt_token(token) is None
 
 
-def main():
-    """Run all tests."""
-    print("=" * 60)
-    print("Caixa Forta Secure API Tests")
-    print("=" * 60)
-    print()
-    
+def test_server_lifecycle_uses_ephemeral_port(monkeypatch):
+    monkeypatch.setattr(server_module, "PORT", 0)
+    monkeypatch.setattr(server_module, "ensure_certificates_exist", lambda: None)
+    monkeypatch.setattr(
+        server_module.SecureVaultServer,
+        "_create_ssl_context",
+        Mock(return_value=ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)),
+    )
+    api_server = server_module.SecureVaultServer("test-only-password")
+
     try:
-        test_certificates()
-        test_auth_module()
-        test_server()
-        
-        print("=" * 60)
-        print("✅ All tests passed!")
-        print("=" * 60)
-        return 0
-    except Exception as e:
-        print(f"\n❌ Test failed: {e}")
-        import traceback
-        traceback.print_exc()
-        return 1
+        assert api_server.start()
+        assert api_server.is_running()
+    finally:
+        api_server.stop()
+
+
+def test_client_certificate_check_uses_tls_peer():
+    connection = SimpleNamespace(getpeercert=lambda: {"subject": ()})
+    handler = cast(
+        server_module.SecureAPIHandler,
+        SimpleNamespace(connection=connection),
+    )
+
+    assert server_module.SecureAPIHandler._verify_client_certificate(handler)
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    raise SystemExit(pytest.main([__file__]))

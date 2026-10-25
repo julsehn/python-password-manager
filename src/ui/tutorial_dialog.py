@@ -1,21 +1,13 @@
 """Tutorial dialog for first-time users with arrow navigation."""
+
 from PyQt6.QtWidgets import (
     QDialog,
     QVBoxLayout,
     QHBoxLayout,
     QLabel,
     QPushButton,
-    QMessageBox,
-    QFrame,
-    QScrollArea,
-    QWidget,
-    QSpacerItem,
-    QSizePolicy,
-    QStyle,
-    QApplication,
 )
-from PyQt6.QtCore import Qt, QTimer
-from PyQt6.QtGui import QFont
+from PyQt6.QtCore import Qt
 
 
 class FirstTimeGuideDialog(QDialog):
@@ -37,38 +29,38 @@ class FirstTimeGuideDialog(QDialog):
                 "title": "🎉 Benvingut!",
                 "message": "La teva caixa forta s'ha creat amb èxit!\n\nAra cal afegir el teu primer accés (lloc web, usuari i contrasenya).",
                 "hint": "Fes clic a «Següent» per continuar",
-                "icon": "🎉"
+                "icon": "🎉",
             },
             {
                 "title": "🌐 Lloc web",
                 "message": "Introdueix el lloc web on utilitzes aquesta contrasenya.\n\n📝 Exemples:\n• google.com\n• instagram.com\n• example.com",
                 "hint": "Fes clic a «Següent» quan tinguis el lloc web",
-                "icon": "🌐"
+                "icon": "🌐",
             },
             {
                 "title": "👤 Nom d'usuari",
                 "message": "Introdueix el nom d'usuari o l'adreça de correu que utilitzes en aquest lloc web.\n\n📝 Exemples:\n• joan.perez\n• user@example.com",
                 "hint": "Fes clic a «Següent» quan tinguis el nom d'usuari",
-                "icon": "👤"
+                "icon": "👤",
             },
             {
                 "title": "🔒 Contrasenya",
                 "message": "Introdueix la contrasenya per a aquest accés.\n\n💡 La contrasenya ha de tenir com a mínim 8 caràcters.",
                 "hint": "Fes clic a «Següent» quan tinguis la contrasenya",
-                "icon": "🔒"
+                "icon": "🔒",
             },
             {
                 "title": "✨ Generar contrasenya",
                 "message": "Vols generar una contrasenya segura automàticament?\n\n🔑 Inclourà lletres, xifres i símbols per a màxima seguretat.",
                 "hint": "Fes clic a «Següent» per continuar",
-                "icon": "✨"
+                "icon": "✨",
             },
             {
                 "title": "✅ Accés afegit!",
                 "message": "El teu primer accés s'ha afegit amb èxit!\n\n🎊 Continua afegint més accessos o revisa els que ja tens.",
                 "hint": "Fes clic a «Finalitzar» per tancar la guia",
-                "icon": "✅"
-            }
+                "icon": "✅",
+            },
         ]
 
         self._init_ui()
@@ -184,15 +176,15 @@ class FirstTimeGuideDialog(QDialog):
 
         if self.current_step == len(self.steps) - 1:
             self.btn_next.setText("Finalitzar")
-            self.btn_next.clicked.connect(self.accept)
         else:
             self.btn_next.setText("Següent →")
-            self.btn_next.clicked.connect(self._next_step)
 
     def _next_step(self):
         if self.current_step < len(self.steps) - 1:
             self.current_step += 1
             self._update_step()
+        else:
+            self.accept()
 
     def _prev_step(self):
         if self.current_step > 0:
@@ -247,7 +239,9 @@ class StepByStepGuideDialog(QDialog):
         # Current step description
         self.step_description = QLabel()
         self.step_description.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.step_description.setStyleSheet("font-size: 18px; font-weight: 600; color: #2563eb; margin: 10px 0;")
+        self.step_description.setStyleSheet(
+            "font-size: 18px; font-weight: 600; color: #2563eb; margin: 10px 0;"
+        )
         layout.addWidget(self.step_description)
 
         # Instructions
@@ -309,13 +303,13 @@ class StepByStepGuideDialog(QDialog):
             "👤 Omplir usuari →",
             "🔒 Omplir contrasenya →",
             "✨ Confirmar →",
-            "✅ Finalitzar"
+            "✅ Finalitzar",
         ]
 
         current_idx = min(self.current_step, len(steps) - 1)
         completed = steps[:current_idx]
         current = steps[current_idx]
-        remaining = steps[current_idx + 1:]
+        remaining = steps[current_idx + 1 :]
 
         if not completed and not remaining:
             flow = current
@@ -337,7 +331,7 @@ class StepByStepGuideDialog(QDialog):
             2: "Pass 3 de 6: Nom d'usuari",
             3: "Pass 4 de 6: Contrasenya",
             4: "Pass 5 de 6: Confirmar",
-            5: "Pass 6 de 6: Finalitzar"
+            5: "Pass 6 de 6: Finalitzar",
         }
 
         step_descriptions = {
@@ -346,7 +340,7 @@ class StepByStepGuideDialog(QDialog):
             2: "Introdueix el nom d'usuari (ex: joan.perez). Ves al següent pas amb la fletxa.",
             3: "Introdueix la contrasenya (mínim 8 caràcters). Ves al següent pas amb la fletxa.",
             4: "Revisa les dades i confirma. Ves al final amb la fletxa.",
-            5: "L'accés s'ha creat! Ves enrere per revisar o finalitza."
+            5: "L'accés s'ha creat! Ves enrere per revisar o finalitza.",
         }
 
         self.step_description.setText(step_titles[self.current_step])
@@ -368,15 +362,15 @@ class StepByStepGuideDialog(QDialog):
 
         if self.current_step == len(step_titles) - 1:
             self.btn_next.setText("Finalitzar")
-            self.btn_next.clicked.connect(self.accept)
         else:
             self.btn_next.setText("Següent ▶")
-            self.btn_next.clicked.connect(self._next_step)
 
     def _next_step(self):
-        if self.current_step < len(step_titles) - 1:
+        if self.current_step < self.total_steps - 1:
             self.current_step += 1
             self._update_step()
+        else:
+            self.accept()
 
     def _prev_step(self):
         if self.current_step > 0:

@@ -1,7 +1,18 @@
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from collections.abc import Mapping
+from typing import TypedDict
 import uuid
-from typing import Dict, Any
+
+
+class PasswordEntryData(TypedDict):
+    id: str
+    site: str
+    username: str
+    password: str
+    notes: str
+    created_at: str
+    updated_at: str
 
 
 @dataclass
@@ -14,7 +25,7 @@ class PasswordEntry:
     created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     updated_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> PasswordEntryData:
         return {
             "id": self.id,
             "site": self.site,
@@ -26,15 +37,15 @@ class PasswordEntry:
         }
 
     @staticmethod
-    def from_dict(d: Dict[str, Any]) -> "PasswordEntry":
+    def from_dict(data: Mapping[str, object]) -> "PasswordEntry":
         e = PasswordEntry()
-        e.id = d.get("id", e.id)
-        e.site = str(d.get("site", "")) if d.get("site") else ""
-        e.username = str(d.get("username", "")) if d.get("username") else ""
-        e.password = str(d.get("password", "")) if d.get("password") else ""
-        e.notes = str(d.get("notes", "")) if d.get("notes") else ""
-        e.created_at = str(d.get("created_at", e.created_at)) if d.get("created_at") else e.created_at
-        e.updated_at = str(d.get("updated_at", e.updated_at)) if d.get("updated_at") else e.updated_at
+        e.id = str(data.get("id") or e.id)
+        e.site = str(data.get("site") or "")
+        e.username = str(data.get("username") or "")
+        e.password = str(data.get("password") or "")
+        e.notes = str(data.get("notes") or "")
+        e.created_at = str(data.get("created_at") or e.created_at)
+        e.updated_at = str(data.get("updated_at") or e.updated_at)
         return e
 
     def clear_password(self) -> None:

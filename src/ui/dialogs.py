@@ -1,11 +1,7 @@
 import os
-import json
-import base64
-from typing import Optional
 
 from src.ui.qt_compat import (
     QDialog,
-    QFormLayout,
     QLineEdit,
     QDialogButtonBox,
     QCheckBox,
@@ -13,14 +9,14 @@ from src.ui.qt_compat import (
     QHBoxLayout,
     QLabel,
     QPushButton,
-    QFileDialog,
     Qt,
-    QPixmap,
-    QPainter,
-    QColor,
-    QCursor,
     QMessageBox,
     QWidget,
+    QApplication,
+    QComboBox,
+    QFont,
+    QGridLayout,
+    QSpinBox,
 )
 
 from src.storage import (
@@ -28,13 +24,9 @@ from src.storage import (
     VAULT_FILENAME,
     load_image_auth,
     save_image_auth,
-    verify_image_auth_pattern,
-    delete_image_auth,
-    image_auth_is_set,
     GRID_COLUMNS,
     GRID_ROWS,
     GRID_CELL_CHARS,
-    coords_to_grid_cell,
     generate_grid_password,
 )
 
@@ -54,7 +46,6 @@ class LoginDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("Entrar a la caixa forta")
         self.setModal(True)
-        self.remote = remote
 
         layout = QVBoxLayout()
         layout.setSpacing(16)
@@ -68,9 +59,7 @@ class LoginDialog(QDialog):
         layout.addWidget(title)
 
         # Subtitle
-        subtitle = QLabel(
-            "Entrada la contrasenya mestra per desbloquejar les teves contrasenyes."
-        )
+        subtitle = QLabel("Entrada la contrasenya mestra per desbloquejar les teves contrasenyes.")
         subtitle.setAlignment(Qt.AlignmentFlag.AlignCenter)
         subtitle.setStyleSheet("color: #68706c; font-size: 13px;")
         layout.addWidget(subtitle)
@@ -93,7 +82,9 @@ class LoginDialog(QDialog):
         layout.addWidget(self.error_label)
 
         # Buttons
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
         buttons.button(QDialogButtonBox.StandardButton.Ok).setText("Entrar")
         buttons.button(QDialogButtonBox.StandardButton.Cancel).setText("Cancel·la")
         buttons.accepted.connect(self._on_accept)
@@ -104,7 +95,6 @@ class LoginDialog(QDialog):
         try:
             if os.path.exists(VAULT_FILENAME):
                 # We can check lockout state
-                from src.storage import is_vault_locked, load_vault
 
                 # Try a quick check: if we can read the file (even though it's encrypted)
                 # This tells us a vault exists
@@ -144,7 +134,6 @@ class LoginDialog(QDialog):
 
         # Validate the password against the selected vault backend.
         try:
-            from src.storage import VaultLockedError
             load_vault(password, VAULT_FILENAME)
         except Exception as e:
             self.error_label.setText(str(e))
@@ -155,23 +144,23 @@ class LoginDialog(QDialog):
 
 class CloudLoginDialog(QDialog):
     """Login/Register dialog for cloud authentication.
-    
+
     Handles:
       - User registration (new account)
       - User login with verification
       - Password confirmation for security
     """
-    
+
     def __init__(self, remote_store: RemoteVaultStore, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Autenticació - Núvol Oficial")
         self.setModal(True)
         self.remote_store = remote_store
         self.is_registering = False
-        
+
         layout = QVBoxLayout()
         layout.setSpacing(16)
-        
+
         # Title and subtitle
         title = QLabel("Autenticació al núvol")
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -179,47 +168,49 @@ class CloudLoginDialog(QDialog):
         font.setWeight(750)
         title.setFont(font)
         layout.addWidget(title)
-        
+
         subtitle = QLabel(
             "Llegeix la nostra Política de Privacitat abans de continuar:\n"
             "🔒 Les teves contrasenyes estan encriptades. El servidor només emmagatzema "
             "la versió encriptada. Ningú pot accedir als teus dades sense la contrasenya mestra."
         )
         subtitle.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        subtitle.setStyleSheet("color: #68706c; font-size: 12px; background: #f0f9ff; padding: 12px; border-radius: 8px; margin-top: 8px;")
+        subtitle.setStyleSheet(
+            "color: #68706c; font-size: 12px; background: #f0f9ff; padding: 12px; border-radius: 8px; margin-top: 8px;"
+        )
         layout.addWidget(subtitle)
-        
+
         # Provider selection
         provider_label = QLabel("Proveïdor de núvol:")
         provider_label.setStyleSheet("font-weight: 600; font-size: 13px;")
         layout.addWidget(provider_label)
-        
+
         self.provider_combo = QComboBox()
         self.provider_combo.addItems(["Núvol oficial (recomanat)", "Personalitzat"])
         self.provider_combo.setCurrentIndex(0)
         layout.addWidget(self.provider_combo)
-        
+
         # Username
         username_label = QLabel("Usuari:")
         username_label.setStyleSheet("font-weight: 600;")
         layout.addWidget(username_label)
-        
+
         self.username_field = QLineEdit()
         self.username_field.setPlaceholderText("E. g., joan.perez")
         self.username_field.setMinimumHeight(40)
         layout.addWidget(self.username_field)
-        
+
         # Password
         password_label = QLabel("Contrasenya mestra:")
         password_label.setStyleSheet("font-weight: 600;")
         layout.addWidget(password_label)
-        
+
         self.password_field = QLineEdit()
         self.password_field.setPlaceholderText("Mínim 16 caràcters")
         self.password_field.setEchoMode(QLineEdit.EchoMode.Password)
         self.password_field.setMinimumHeight(40)
         layout.addWidget(self.password_field)
-        
+
         # Confirm password
         self.confirm_password_field = QLineEdit()
         self.confirm_password_field.setPlaceholderText("Repeteix la contrasenya")
@@ -227,18 +218,18 @@ class CloudLoginDialog(QDialog):
         self.confirm_password_field.setMinimumHeight(40)
         self.confirm_password_field.setVisible(False)
         layout.addWidget(self.confirm_password_field)
-        
+
         # Error label
         self.error_label = QLabel("")
         self.error_label.setStyleSheet("color: #dc2626; font-size: 13px; margin-top: 4px;")
         self.error_label.setVisible(False)
         layout.addWidget(self.error_label)
-        
+
         # Privacy policy checkbox
         self.privacy_accepted = QCheckBox("He llegit i accepto la Política de Privacitat")
         self.privacy_accepted.stateChanged.connect(self._on_privacy_check)
         layout.addWidget(self.privacy_accepted)
-        
+
         # Privacy policy link
         privacy_link = QLabel("📄 Veure política de privacitat completa")
         privacy_link.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -247,69 +238,77 @@ class CloudLoginDialog(QDialog):
         privacy_link.setTextInteractionFlags(Qt.TextInteractionFlag.TextBrowserInteraction)
         privacy_link.clicked.connect(lambda: self.open_external_file("/PRIVACY_POLICY.md"))
         layout.addWidget(privacy_link)
-        
+
         # Buttons
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
         buttons.button(QDialogButtonBox.StandardButton.Ok).setText("Continuar")
         buttons.button(QDialogButtonBox.StandardButton.Cancel).setText("Cancel·la")
         buttons.accepted.connect(self._on_accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
-        
+
         self.setLayout(layout)
-    
+
     def open_external_file(self, path: str):
         """Open external markdown file (for privacy policy)."""
         import webbrowser
+
         try:
             # Try to open in same app or default viewer
             if path.startswith("/"):
                 path = path.replace("/", "")
             webbrowser.open(f"file://{path}")
-        except:
-            QMessageBox.information(self, "Política de Privacitat", 
+        except (OSError, webbrowser.Error):
+            QMessageBox.information(
+                self,
+                "Política de Privacitat",
                 "Vegeu l'arxiu PRIVACY_POLICY.md al repositori GitHub\n\n"
-                "https://github.com/julsehn/Password-Manager-Cloud")
-    
+                "https://github.com/julsehn/Password-Manager-Cloud",
+            )
+
     def _on_privacy_check(self, state: int) -> None:
         if state == Qt.CheckState.Checked:
             self.confirm_password_field.setVisible(True)
         else:
             self.confirm_password_field.setVisible(False)
-    
+
     def _on_accept(self) -> None:
         username = self.username_field.text().strip()
         password = self.password_field.text()
         confirm_password = self.confirm_password_field.text()
-        
+
         # Validate inputs
         if not username:
             self.error_label.setText("L'usuari és obligatori.")
             self.username_field.setFocus()
             return
-        
+
         if len(username) < 3:
             self.error_label.setText("L'usuari ha de tenir almenys 3 caràcters.")
             self.username_field.setFocus()
             return
-        
+
         if len(password) < 16:
-            self.error_label.setText("La contrasenya mestra ha de tenir almenys 16 caràcters per seguretat.")
+            self.error_label.setText(
+                "La contrasenya mestra ha de tenir almenys 16 caràcters per seguretat."
+            )
             self.password_field.setFocus()
             return
-        
+
         if not self.privacy_accepted.isChecked():
             self.error_label.setText("Has d'acceptar la Política de Privacitat per continuar.")
             return
-        
+
         if password != confirm_password:
             self.error_label.setText("Les contrasenyes no coincideixen.")
             self.confirm_password_field.setFocus()
             return
-        
+
         # Store password for later use
         self._auth_password = password
-        
+
         # Proceed with authentication
         if self.provider_combo.currentIndex() == 0:
             # Official cloud - auto-authenticate
@@ -317,38 +316,23 @@ class CloudLoginDialog(QDialog):
         else:
             # Custom cloud - manual auth needed
             self.accept()
-    
+
     def _authenticate_official_cloud(self, username: str):
         """Authenticate with official cloud service."""
-        import sys
-        
+
         try:
             # Auto-create vault with encrypted data
-            encrypted_blob = self._get_default_encrypted_blob()
-            
-            # Register vault on cloud
-            response = self.remote_store.authenticate_user(username, self._auth_password)
-            
+            self.remote_store.authenticate_user(username, self._auth_password)
+
             # Create vault
             self.remote_store.save([], self._auth_password)
-            
-            self.config["auth_user"] = username
-            save_config(self.config)
-            
+
             self.accept()
-            
+
         except Exception as e:
             self.error_label.setText(f"Error d'autenticació: {str(e)}")
             return
-    
-    def _get_default_encrypted_blob(self) -> str:
-        """Generate default encrypted vault blob."""
-        from src.encryption import serialize_vault
-        from src.models import PasswordEntry
-        
-        empty_vault = [PasswordEntry()]
-        return serialize_vault(empty_vault, self._auth_password)
-    
+
     def get_credentials(self) -> dict:
         """Return authenticated credentials."""
         return {
@@ -465,27 +449,24 @@ class GridSetupWizardDialog(QDialog):
     def _on_finish_setup(self):
         """Save the grid-based authentication pattern."""
         if len(self.pattern_cells) < 3:
-            QMessageBox.warning(
-                self,
-                "Error",
-                "Selecciona almenys 3 caselles per al teu patró."
-            )
+            QMessageBox.warning(self, "Error", "Selecciona almenys 3 caselles per al teu patró.")
             return
 
         # Store as grid cell indices (not image)
         import os
+
         salt = os.urandom(32)
         save_image_auth(
             image_b64="grid_auth",
             hotspots=[{"cell": cell} for cell in self.pattern_cells],
-            salt=salt
+            salt=salt,
         )
 
         QMessageBox.information(
             self,
             "Autenticació configurada!",
             "El teu patró s'ha guardat.\n\n"
-            "La pròxima vegada, fes clic en les mateixes caselles per desbloquejar la caixa forta."
+            "La pròxima vegada, fes clic en les mateixes caselles per desbloquejar la caixa forta.",
         )
 
         self.accept()
@@ -512,11 +493,7 @@ class BiometricLoginDialog(QDialog):
         self.auth_data = load_image_auth()
 
         if not self.auth_data:
-            QMessageBox.warning(
-                self,
-                "Error",
-                "No hi ha cap plantilla d'autenticació configurada."
-            )
+            QMessageBox.warning(self, "Error", "No hi ha cap plantilla d'autenticació configurada.")
             self.reject()
             return
 
@@ -598,9 +575,7 @@ class BiometricLoginDialog(QDialog):
         """Verify the user's grid pattern against the stored template."""
         if not self.current_strokes:
             QMessageBox.warning(
-                self,
-                "Error",
-                "Selecciona les caselles del teu patró abans de verificar."
+                self, "Error", "Selecciona les caselles del teu patró abans de verificar."
             )
             return
 
@@ -608,11 +583,7 @@ class BiometricLoginDialog(QDialog):
         salt_hex = self.auth_data.get("salt")
 
         if not stored_hotspots or not salt_hex:
-            QMessageBox.warning(
-                self,
-                "Error",
-                "No hi ha dades d'autenticació configurades."
-            )
+            QMessageBox.warning(self, "Error", "No hi ha dades d'autenticació configurades.")
             return
 
         # Convert stored hotspots (grid cells) to indices
@@ -624,7 +595,7 @@ class BiometricLoginDialog(QDialog):
                 self,
                 "Patró incorrect",
                 "El patró que has seleccionat no coincideix amb el patró d'autentificació original.\n\n"
-                "Si continua fallant, contacta amb el suport tècnic."
+                "Si continua fallant, contacta amb el suport tècnic.",
             )
             return
 
@@ -636,16 +607,13 @@ class BiometricLoginDialog(QDialog):
             QMessageBox.information(
                 self,
                 "Accés correct!",
-                "El patró d'autentificació és correct.\n\n"
-                "Benvingut a la teva caixa forta."
+                "El patró d'autentificació és correct.\n\nBenvingut a la teva caixa forta.",
             )
             self.accept()
 
         except Exception as e:
             QMessageBox.warning(
-                self,
-                "Patró incorrect",
-                f"No es pot desbloquejar la caixa forta.\n\n" + str(e)
+                self, "Patró incorrect", "No es pot desbloquejar la caixa forta.\n\n" + str(e)
             )
 
 
@@ -667,33 +635,33 @@ class FirstTimeGuideDialog(QDialog):
             {
                 "title": "Benvingut!",
                 "message": "La teva caixa forta s'ha creat!\n\nAra cal afegir el teu primer accés (site, usuari i contrasenya).",
-                "hint": "Fes clic a «Següent» per continuar"
+                "hint": "Fes clic a «Següent» per continuar",
             },
             {
                 "title": "Informació del lloc web",
                 "message": "Introdueix el lloc web on utilitzes aquesta contrasenya.\n\nExemples:\n• google.com\n• instagram.com\n• example.com",
-                "hint": "Fes clic a «Següent» quan tinguis el lloc web"
+                "hint": "Fes clic a «Següent» quan tinguis el lloc web",
             },
             {
                 "title": "Nom d'usuari",
                 "message": "Introdueix el nom d'usuari o l'adreça de correu que utilitzes en aquest lloc web.\n\nExemples:\n• joan.perez\n• user@example.com",
-                "hint": "Fes clic a «Següent» quan tinguis el nom d'usuari"
+                "hint": "Fes clic a «Següent» quan tinguis el nom d'usuari",
             },
             {
                 "title": "Contrasenya",
                 "message": "Introdueix la contrasenya per a aquest accés.\n\nLa contrasenya ha de tenir com a mínim 8 caràcters.",
-                "hint": "Fes clic a «Següent» quan tinguis la contrasenya"
+                "hint": "Fes clic a «Següent» quan tinguis la contrasenya",
             },
             {
                 "title": "Generar contrasenya segura",
                 "message": "Vols generar una contrasenya segura?\n\nLes contrasenyes generades inclouen lletra, xifres i símbols.",
-                "hint": "Fes clic a «Següent» per continuar"
+                "hint": "Fes clic a «Següent» per continuar",
             },
             {
                 "title": "Accés afegit!",
                 "message": "El teu primer accés s'ha afegit amb èxit!\n\nContinua afegint més accessos o revisa els que ja tens.",
-                "hint": "Fes clic a «Finalitzar» per tancar la guia"
-            }
+                "hint": "Fes clic a «Finalitzar» per tancar la guia",
+            },
         ]
 
         layout = QVBoxLayout(self)
@@ -826,7 +794,9 @@ class BiometricLoginPrompt(QDialog):
         layout.addWidget(self.error_label)
 
         # Buttons
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
         buttons.button(QDialogButtonBox.StandardButton.Ok).setText("Entrar")
         buttons.button(QDialogButtonBox.StandardButton.Cancel).setText("Cancel·la")
         buttons.accepted.connect(self._on_accept)
@@ -909,7 +879,9 @@ class AddEditDialog(QDialog):
             self.pass_field.setText(entry.get("password", ""))
 
         # Buttons
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
@@ -967,7 +939,9 @@ class GeneratePasswordDialog(QDialog):
         self.btn_copy.clicked.connect(self._on_copy)
         btn_row.addWidget(self.btn_copy)
 
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         btn_row.addWidget(buttons.button(QDialogButtonBox.StandardButton.Ok))
@@ -983,7 +957,7 @@ class GeneratePasswordDialog(QDialog):
 
         length = self.length_spin.value()
         alphabet = string.ascii_letters + string.digits + "!@#$%^&*()"
-        password = ''.join(secrets.choice(alphabet) for _ in range(length))
+        password = "".join(secrets.choice(alphabet) for _ in range(length))
 
         self.generated_label.setText(password)
 

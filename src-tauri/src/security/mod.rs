@@ -1,8 +1,11 @@
-use aes_gcm::{aead::{Aead, KeyInit, Payload}, Aes256Gcm, Nonce};
-use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
-use rand::{rngs::OsRng, Rng, RngCore};
-use rand::seq::SliceRandom;
+use aes_gcm::{
+    aead::{Aead, KeyInit, Payload},
+    Aes256Gcm, Nonce,
+};
 use argon2::{Algorithm, Argon2, Params, Version};
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
+use rand::seq::SliceRandom;
+use rand::{rngs::OsRng, Rng, RngCore};
 use serde::{Deserialize, Serialize};
 
 const ASSOCIATED_DATA: &[u8] = b"";
@@ -36,7 +39,7 @@ pub fn validate_secure_message(message: &SecureMessage) -> Result<(), String> {
         "lock_vault",
         "fetch_credentials",
         "save_credentials",
-        "get_vault_info"
+        "get_vault_info",
     ];
 
     if !allowed_actions.contains(&message.action.as_str()) {
@@ -78,7 +81,8 @@ pub fn derive_key_from_password(password: &str, salt: &[u8]) -> Result<Vec<u8>, 
     let params = Params::new(19 * 1024, 2, 1, Some(key.len()))
         .map_err(|e| format!("Invalid Argon2id parameters: {}", e))?;
     let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
-    argon2.hash_password_into(password.as_bytes(), salt, &mut key)
+    argon2
+        .hash_password_into(password.as_bytes(), salt, &mut key)
         .map_err(|e| format!("Failed to derive key with Argon2id: {}", e))?;
 
     Ok(key.to_vec())
@@ -89,28 +93,33 @@ pub fn derive_key_with_argon2(password: &str, salt: &[u8]) -> Result<Vec<u8>, St
 }
 
 pub fn encrypt_aes_gcm(key: &[u8], nonce: &[u8], plaintext: &[u8]) -> Result<Vec<u8>, String> {
-    let cipher = Aes256Gcm::new_from_slice(key).map_err(|e| {
-        format!("Failed to initialize cipher: {}", e)
-    })?;
+    let cipher = Aes256Gcm::new_from_slice(key)
+        .map_err(|e| format!("Failed to initialize cipher: {}", e))?;
 
-    cipher.encrypt(
-        Nonce::from_slice(nonce),
-        Payload { msg: plaintext, aad: ASSOCIATED_DATA },
-    ).map_err(|e| format!("Encryption failed: {}", e))
+    cipher
+        .encrypt(
+            Nonce::from_slice(nonce),
+            Payload {
+                msg: plaintext,
+                aad: ASSOCIATED_DATA,
+            },
+        )
+        .map_err(|e| format!("Encryption failed: {}", e))
 }
 
 pub fn decrypt_aes_gcm(key: &[u8], nonce: &[u8], ciphertext: &[u8]) -> Result<Vec<u8>, String> {
-    let cipher = Aes256Gcm::new_from_slice(key).map_err(|e| {
-        format!("Failed to initialize cipher: {}", e)
-    })?;
+    let cipher = Aes256Gcm::new_from_slice(key)
+        .map_err(|e| format!("Failed to initialize cipher: {}", e))?;
 
-    cipher.decrypt(
-        Nonce::from_slice(nonce),
-        Payload { msg: ciphertext, aad: ASSOCIATED_DATA },
-    ).map_err(|e| {
-        format!("Decryption failed - invalid password: {}", e)
-    })
-
+    cipher
+        .decrypt(
+            Nonce::from_slice(nonce),
+            Payload {
+                msg: ciphertext,
+                aad: ASSOCIATED_DATA,
+            },
+        )
+        .map_err(|e| format!("Decryption failed - invalid password: {}", e))
 }
 
 pub fn generate_password(
@@ -123,11 +132,21 @@ pub fn generate_password(
     let charset: Vec<char> = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()_+-=[]{}|;':,./<>?".chars().collect();
 
     let mut charset_vec: Vec<char> = Vec::new();
-    if uppercase { charset_vec.extend(charset.iter().filter(|c| c.is_uppercase())); }
-    if lowercase { charset_vec.extend(charset.iter().filter(|c| c.is_lowercase())); }
-    if numbers { charset_vec.extend(charset.iter().filter(|c| c.is_ascii_digit())); }
-    if symbols { charset_vec.extend(charset.iter().filter(|c| !c.is_alphanumeric())); }
-    if charset_vec.is_empty() { charset_vec = charset; }
+    if uppercase {
+        charset_vec.extend(charset.iter().filter(|c| c.is_uppercase()));
+    }
+    if lowercase {
+        charset_vec.extend(charset.iter().filter(|c| c.is_lowercase()));
+    }
+    if numbers {
+        charset_vec.extend(charset.iter().filter(|c| c.is_ascii_digit()));
+    }
+    if symbols {
+        charset_vec.extend(charset.iter().filter(|c| !c.is_alphanumeric()));
+    }
+    if charset_vec.is_empty() {
+        charset_vec = charset;
+    }
 
     let mut password = String::new();
     for _ in 0..length as usize {
@@ -149,32 +168,31 @@ pub fn generate_passphrase(
 ) -> String {
     let words: Vec<&str> = match language.as_str() {
         "ca" | "catalan" | "catal" => vec![
-            "nubol", "ri", "llum", "bosc", "mar", "lluna", "vent", "foc", "cami", "estrella"
+            "nubol", "ri", "llum", "bosc", "mar", "lluna", "vent", "foc", "cami", "estrella",
         ],
         "es" | "spanish" | "espanol" => vec![
-            "nube", "rio", "luz", "bosque", "mar", "luna", "viento", "fuego", "camino", "estrella"
+            "nube", "rio", "luz", "bosque", "mar", "luna", "viento", "fuego", "camino", "estrella",
         ],
         "en" | "english" | "angle" => vec![
-            "cloud", "river", "light", "forest", "moon", "wind", "fire", "path", "star", "meadow"
+            "cloud", "river", "light", "forest", "moon", "wind", "fire", "path", "star", "meadow",
         ],
         "fr" | "french" | "frances" => vec![
-            "nuage", "riviere", "lumiere", "foret", "lune", "vent", "feu", "chemin", "etoile", "prairie"
+            "nuage", "riviere", "lumiere", "foret", "lune", "vent", "feu", "chemin", "etoile",
+            "prairie",
         ],
         _ => vec![
-            "cloud", "river", "light", "forest", "moon", "wind", "fire", "path", "star", "meadow"
-        ]
+            "cloud", "river", "light", "forest", "moon", "wind", "fire", "path", "star", "meadow",
+        ],
     };
 
     let filtered_words: Vec<&str> = if remove_accents {
-        words.iter()
-            .filter(|w| {
-                let normalized = w.to_string().chars().collect::<String>();
-                normalized.chars().all(|c| c.is_ascii())
-            })
+        words
+            .iter()
+            .filter(|word| word.is_ascii())
             .copied()
             .collect()
     } else {
-        words.iter().copied().collect()
+        words.to_vec()
     };
 
     let mut passphrase = Vec::new();
@@ -232,14 +250,28 @@ pub fn generate_username(
 pub fn validate_password_strength(password: &str) -> PasswordStrength {
     let mut score = 0;
 
-    if password.len() >= 12 { score += 1; }
-    if password.len() >= 16 { score += 1; }
-    if password.len() >= 20 { score += 1; }
+    if password.len() >= 12 {
+        score += 1;
+    }
+    if password.len() >= 16 {
+        score += 1;
+    }
+    if password.len() >= 20 {
+        score += 1;
+    }
 
-    if password.chars().any(|c| c.is_uppercase()) { score += 1; }
-    if password.chars().any(|c| c.is_lowercase()) { score += 1; }
-    if password.chars().any(|c| c.is_ascii_digit()) { score += 1; }
-    if password.chars().any(|c| !c.is_alphanumeric()) { score += 1; }
+    if password.chars().any(|c| c.is_uppercase()) {
+        score += 1;
+    }
+    if password.chars().any(|c| c.is_lowercase()) {
+        score += 1;
+    }
+    if password.chars().any(|c| c.is_ascii_digit()) {
+        score += 1;
+    }
+    if password.chars().any(|c| !c.is_alphanumeric()) {
+        score += 1;
+    }
 
     match score {
         0..=2 => PasswordStrength::Weak,

@@ -6,7 +6,10 @@
   "scripts": {
     "dev": "node node_modules/.bin/vite --configLoader runner",
     "build": "node node_modules/.bin/vite build --configLoader runner",
+    "format:check": "prettier --check \"src-web/**/*.{js,css,html}\" \"browser-extension/**/*.{js,css,html,json}\" index.html package.json vite.config.js eslint.config.js",
+    "lint": "eslint .",
     "preview": "node node_modules/.bin/vite preview --configLoader runner",
+    "test": "node --test src-web/*.test.js",
     "tauri": "PATH=\"$HOME/.cargo/bin:$HOME/.rustup/toolchains/stable-aarch64-apple-darwin/bin:$PATH\" tauri"
   },
   "dependencies": {
@@ -14,7 +17,11 @@
     "lucide": "^0.468.0"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "@tauri-apps/cli": "^2.8.0",
+    "eslint": "^10.13.0",
+    "globals": "^17.13.0",
+    "prettier": "^3.9.10",
     "vite": "^7.1.0"
   }
 }

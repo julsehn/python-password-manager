@@ -1,8 +1,6 @@
-from pathlib import Path
 import os
 import json
 import base64
-import hashlib
 import math
 import time
 from typing import List, Optional
@@ -13,13 +11,13 @@ from src.models import PasswordEntry
 from threading import Lock
 
 # Default vault path (not committed)
-VAULT_FILENAME = os.path.expanduser("~/.password_manager/vault.json")
-SIDEBAR_SETTINGS_FILENAME = os.path.expanduser("~/.password_manager/sidebar.json")
-LOCKOUT_STATE_FILENAME = os.path.expanduser("~/.password_manager/lockout_state.json")
-CONFIG_FILENAME = os.path.expanduser("~/.password_manager/config.json")
+VAULT_FILENAME: str = os.path.expanduser("~/.password_manager/vault.json")
+SIDEBAR_SETTINGS_FILENAME: str = os.path.expanduser("~/.password_manager/sidebar.json")
+LOCKOUT_STATE_FILENAME: str = os.path.expanduser("~/.password_manager/lockout_state.json")
+CONFIG_FILENAME: str = os.path.expanduser("~/.password_manager/config.json")
 
 # Default configuration
-DEFAULT_CONFIG = {
+DEFAULT_CONFIG: dict[str, object] = {
     "clipboard_clear_seconds": 30,
     "auto_lock_seconds": 300,
     "show_tutorial": True,
@@ -30,14 +28,14 @@ DEFAULT_CONFIG = {
 }
 
 # Brute-force protection: max attempts before lockout
-MAX_LOGIN_ATTEMPTS = 10
-LOCKOUT_DURATION_SECONDS = 300  # 5 minutes
+MAX_LOGIN_ATTEMPTS: int = 10
+LOCKOUT_DURATION_SECONDS: int = 300  # 5 minutes
 
 # Image authentication paths
-IMAGE_AUTH_FILE = os.path.expanduser("~/.password_manager/image_auth.json")
+IMAGE_AUTH_FILE: str = os.path.expanduser("~/.password_manager/image_auth.json")
 
 # Image authentication defaults
-DEFAULT_IMAGE_AUTH = {
+DEFAULT_IMAGE_AUTH: dict[str, object] = {
     "enabled": False,
     "image_b64": None,  # Base64-encoded image (PNG)
     "original_size": None,  # [width, height] in pixels
@@ -47,18 +45,18 @@ DEFAULT_IMAGE_AUTH = {
 
 # Grid-based pattern authentication configuration
 # Grid cells are used to discretize clicks into grid indices
-GRID_COLUMNS = 5
-GRID_ROWS = 5
+GRID_COLUMNS: int = 5
+GRID_ROWS: int = 5
 # Expanded character set with lowercase letters and special characters
-GRID_CELL_CHARS = "0123456789abcdefghijkmnopqrstuvwxyz!@#$%^&*+="
+GRID_CELL_CHARS: str = "0123456789abcdefghijkmnopqrstuvwxyz!@#$%^&*+="
 
 
 class VaultLockedError(Exception):
     """Raised when master password is locked due to too many failed attempts."""
 
 
-_config: Optional[dict] = None
-_config_lock = Lock()
+_config: Optional[dict[str, object]] = None
+_config_lock: Lock = Lock()
 
 
 def _load_config_file() -> dict:
@@ -67,7 +65,7 @@ def _load_config_file() -> dict:
     with _config_lock:
         if _config is not None:
             return _config
-        
+
         if os.path.exists(CONFIG_FILENAME):
             try:
                 with open(CONFIG_FILENAME, "r", encoding="utf-8") as f:
@@ -140,7 +138,7 @@ def _record_failed_attempt(vault_path: str) -> None:
     # If we've exceeded max attempts, start lockout
     if state["failed_attempts"] >= MAX_LOGIN_ATTEMPTS:
         state["lockout_start"] = now
-    
+
     state_data[vault_path] = state
     _save_lockout_state(state_data)
 
@@ -227,12 +225,16 @@ def serialize_vault(entries: List[PasswordEntry], master_password: str) -> str:
     return json.dumps(payload, separators=(",", ":"))
 
 
-def save_vault(entries: List[PasswordEntry], master_password: str, path: str = VAULT_FILENAME) -> None:
+def save_vault(
+    entries: List[PasswordEntry], master_password: str, path: str = VAULT_FILENAME
+) -> None:
     """Serialize entries to JSON, encrypt with key derived from master_password, and save to path."""
     _write_private_json(path, json.loads(serialize_vault(entries, master_password)))
 
 
-def deserialize_vault(blob: str, master_password: str, lockout_key: str = VAULT_FILENAME) -> List[PasswordEntry]:
+def deserialize_vault(
+    blob: str, master_password: str, lockout_key: str = VAULT_FILENAME
+) -> List[PasswordEntry]:
     """Decrypt an encrypted vault envelope received from local or remote storage."""
     if len(master_password) < 16:
         raise ValueError("La contrasenya mestra ha de tenir com a mínim 16 caràcters")
@@ -254,7 +256,14 @@ def deserialize_vault(blob: str, master_password: str, lockout_key: str = VAULT_
         if not isinstance(entries, list) or len(entries) > 10_000:
             raise ValueError("Contingut de caixa forta invàlid")
         result = [PasswordEntry.from_dict(d) for d in entries if isinstance(d, dict)]
-    except (KeyError, TypeError, ValueError, InvalidTag, binascii.Error, json.JSONDecodeError) as error:
+    except (
+        KeyError,
+        TypeError,
+        ValueError,
+        InvalidTag,
+        binascii.Error,
+        json.JSONDecodeError,
+    ) as error:
         _record_failed_attempt(lockout_key)
         raise ValueError("No s'ha pogut desxifrar la caixa forta") from error
 
@@ -302,6 +311,7 @@ def export_vault(path: str = VAULT_FILENAME, dest_dir: str | None = None) -> Opt
 # Image Authentication (Biometric) Layer
 # ========================================
 
+
 def save_image_auth(image_b64: str, hotspots: list[dict], salt: bytes | None = None) -> None:
     """Save the image-based authentication template.
 
@@ -316,6 +326,7 @@ def save_image_auth(image_b64: str, hotspots: list[dict], salt: bytes | None = N
     """
     if salt is None:
         import os
+
         salt = os.urandom(32)
 
     auth_data = {
@@ -409,14 +420,14 @@ def derive_key_from_image_auth(hotspots: list[dict], salt_hex: str) -> bytes:
 
 def coords_to_grid_cell(x_pct: float, y_pct: float) -> int:
     """Convert percentage coordinates to grid cell index.
-    
+
     Grid is divided into GRID_COLUMNS x GRID_ROWS cells.
     Each cell index maps to a character via GRID_CELL_CHARS.
-    
+
     Args:
         x_pct: X coordinate as percentage (0-1 range)
         y_pct: Y coordinate as percentage (0-1 range)
-    
+
     Returns:
         Grid cell index (0 to GRID_COLUMNS*GRID_ROWS-1)
     """
@@ -432,10 +443,10 @@ def grid_cell_to_char(cell_index: int) -> str:
 
 def generate_grid_password(pattern_cells: list[int]) -> str:
     """Generate a password string from grid cell indices.
-    
+
     Args:
         pattern_cells: List of grid cell indices
-    
+
     Returns:
         Password string composed of characters representing grid cells
     """
@@ -452,7 +463,9 @@ def _validate_point(value: float) -> bool:
     )
 
 
-def verify_image_auth_pattern(strokes: list[dict], stored_hotspots: list[dict], salt_hex: str) -> bool:
+def verify_image_auth_pattern(
+    strokes: list[dict], stored_hotspots: list[dict], salt_hex: str
+) -> bool:
     """Verify that the user's drawn pattern matches the stored template.
 
     This is a tolerance-based comparison — human drawing isn't pixel-perfect.
@@ -483,19 +496,19 @@ def verify_image_auth_pattern(strokes: list[dict], stored_hotspots: list[dict], 
     for stored in stored_hotspots:
         if not isinstance(stored, dict):
             return False
-        if not _validate_point(stored.get('x_pct')) or not _validate_point(stored.get('y_pct')):
+        if not _validate_point(stored.get("x_pct")) or not _validate_point(stored.get("y_pct")):
             return False
 
     for stroke in strokes:
         if not isinstance(stroke, dict):
             return False
-        if not _validate_point(stroke.get('x_pct')) or not _validate_point(stroke.get('y_pct')):
+        if not _validate_point(stroke.get("x_pct")) or not _validate_point(stroke.get("y_pct")):
             return False
 
     tolerance_pct = 15.0  # 15% tolerance on 0-100 scale
     for stored, stroke in zip(stored_hotspots, strokes):
-        dx = stroke['x_pct'] - stored['x_pct']
-        dy = stroke['y_pct'] - stored['y_pct']
+        dx = stroke["x_pct"] - stored["x_pct"]
+        dy = stroke["y_pct"] - stored["y_pct"]
         if math.hypot(dx, dy) > tolerance_pct:
             return False
     return True
@@ -503,13 +516,13 @@ def verify_image_auth_pattern(strokes: list[dict], stored_hotspots: list[dict], 
 
 def export_grid_html(path: str = "~/.password_manager/grid_layout.html") -> Optional[str]:
     """Export the grid layout as an HTML file for archiving.
-    
+
     Creates a simple HTML table showing the grid character layout.
     This is useful for backing up or sharing the grid setup.
-    
+
     Args:
         path: Output file path (default: ~/.password_manager/grid_layout.html)
-    
+
     Returns:
         Path to exported HTML file, or None on failure.
     """
@@ -557,17 +570,13 @@ def export_image_auth() -> Optional[str]:
     if not auth_data:
         return None
 
-    import shutil
     from datetime import datetime
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     backup_path = os.path.expanduser(f"~/.password_manager/image_auth_{timestamp}.json")
 
     try:
-        _write_private_json(backup_path, {
-            "enabled": True,
-            **auth_data
-        })
+        _write_private_json(backup_path, {"enabled": True, **auth_data})
         return backup_path
     except Exception:
         return None

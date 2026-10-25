@@ -48,7 +48,9 @@ class PasswordManager:
             return ""
         return text.strip()[:max_length]
 
-    def add_entry(self, site: str, username: str, password: str, notes: str = "") -> Optional[PasswordEntry]:
+    def add_entry(
+        self, site: str, username: str, password: str, notes: str = ""
+    ) -> Optional[PasswordEntry]:
         """Add a new entry with input validation."""
         # Validate password length (minimum 8 characters for stored passwords)
         if len(password) < 8:
@@ -59,12 +61,7 @@ class PasswordManager:
         username = self._sanitize_text(username, 256)
         notes = self._sanitize_text(notes, max_length=1000)
 
-        entry = PasswordEntry(
-            site=site,
-            username=username,
-            password=password,
-            notes=notes
-        )
+        entry = PasswordEntry(site=site, username=username, password=password, notes=notes)
         self.entries.append(entry)
         return entry
 

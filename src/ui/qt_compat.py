@@ -2,8 +2,10 @@
 
 Expose commonly used Qt classes/names so UI code can import from here.
 """
+
 try:
     from PyQt6 import QtWidgets, QtCore, QtGui
+
     Qt = QtCore.Qt
 
     # Widgets
@@ -25,7 +27,8 @@ try:
     QFormLayout = QtWidgets.QFormLayout
     QCheckBox = QtWidgets.QCheckBox
     QSpinBox = QtWidgets.QSpinBox
-    QLabel = QtWidgets.QLabel
+    QComboBox = QtWidgets.QComboBox
+    QGridLayout = QtWidgets.QGridLayout
     QTimer = QtCore.QTimer
     QListWidget = QtWidgets.QListWidget
     QListWidgetItem = QtWidgets.QListWidgetItem
@@ -38,6 +41,7 @@ try:
     QAction = QtGui.QAction
     QIcon = QtGui.QIcon
     QPixmap = QtGui.QPixmap
+    QFont = QtGui.QFont
     QColorDialog = QtWidgets.QColorDialog
     QFileDialog = QtWidgets.QFileDialog
     QPainter = QtGui.QPainter
@@ -47,6 +51,7 @@ try:
 except Exception:
     # Fallback to PySide6
     from PySide6 import QtWidgets, QtCore, QtGui
+
     Qt = QtCore.Qt
 
     QMainWindow = QtWidgets.QMainWindow
@@ -67,7 +72,8 @@ except Exception:
     QFormLayout = QtWidgets.QFormLayout
     QCheckBox = QtWidgets.QCheckBox
     QSpinBox = QtWidgets.QSpinBox
-    QLabel = QtWidgets.QLabel
+    QComboBox = QtWidgets.QComboBox
+    QGridLayout = QtWidgets.QGridLayout
     QTimer = QtCore.QTimer
     QListWidget = QtWidgets.QListWidget
     QListWidgetItem = QtWidgets.QListWidgetItem
@@ -80,6 +86,7 @@ except Exception:
     QAction = QtGui.QAction
     QIcon = QtGui.QIcon
     QPixmap = QtGui.QPixmap
+    QFont = QtGui.QFont
     QColorDialog = QtWidgets.QColorDialog
     QFileDialog = QtWidgets.QFileDialog
     QPainter = QtGui.QPainter
@@ -123,4 +130,7 @@ __all__ = [
     "QFormLayout",
     "QCheckBox",
     "QSpinBox",
+    "QComboBox",
+    "QGridLayout",
+    "QFont",
 ]

@@ -10,22 +10,23 @@ Supports both:
 import sys
 import os
 import json
+import hashlib
 import struct
 import logging
 import secrets
-import select
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, NoReturn, Optional
 
 # Extension permission management
 EXTENSION_REGISTRY = "extensions.json"
 
+
 def load_extension_registry():
     """Load extension permission registry."""
-    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), EXTENSION_REGISTRY)
+    path: str = os.path.join(os.path.dirname(os.path.abspath(__file__)), EXTENSION_REGISTRY)
     try:
         with open(path, "r") as f:
             return json.load(f)
@@ -34,18 +35,18 @@ def load_extension_registry():
     except json.JSONDecodeError:
         return {"extensions": {}, "next_check": None}
 
-def save_extension_registry(registry):
+
+def save_extension_registry(registry) -> None:
     """Save extension permission registry."""
-    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), EXTENSION_REGISTRY)
+    path: str = os.path.join(os.path.dirname(os.path.abspath(__file__)), EXTENSION_REGISTRY)
     try:
         with open(path, "w") as f:
             json.dump(registry, f, indent=2)
     except OSError as e:
         logger.error(f"Failed to save extension registry: {e}")
 
-import hashlib
 
-def compute_extension_hash(file_path):
+def compute_extension_hash(file_path) -> None | str:
     """Compute SHA-256 hash of a file."""
     hasher = hashlib.sha256()
     try:
@@ -56,40 +57,42 @@ def compute_extension_hash(file_path):
         return None
     return hasher.hexdigest()
 
-def verify_extension_identity(extension_id, extension_hash):
+
+def verify_extension_identity(extension_id, extension_hash) -> bool:
     """Verify extension identity by file hash."""
     registry = load_extension_registry()
-    
+
     if extension_id in registry.get("extensions", {}):
         entry = registry["extensions"][extension_id]
         stored_hash = entry.get("hash")
         if stored_hash and stored_hash == extension_hash:
             return True
-    
+
     return False
 
-def check_extension_permission(extension_id, action, extension_hash=None):
+
+def check_extension_permission(extension_id, action, extension_hash=None) -> bool:
     """Check if extension has permission for action."""
     registry = load_extension_registry()
-    
+
     # Check registry for approval
     if extension_id in registry.get("extensions", {}):
         entry = registry["extensions"][extension_id]
-        
+
         # If approved, verify hash
         if entry.get("approved"):
             stored_hash = entry.get("hash")
             if stored_hash and extension_hash and stored_hash != extension_hash:
                 logger.warning(f"Extension hash mismatch for {extension_id}")
                 return False
-            
+
             return True
-        
+
         # Not approved, record hash for future approval
         if extension_hash and not entry.get("hash"):
             entry["hash"] = extension_hash
             save_extension_registry(registry)
-    
+
     # Unknown extension - record for approval
     logger.info(f"Unknown extension detected: {extension_id}")
     registry["extensions"][extension_id] = {
@@ -97,50 +100,52 @@ def check_extension_permission(extension_id, action, extension_hash=None):
         "permissions": ["get_vault_info"],
         "approved": False,
         "hash": extension_hash,
-        "last_active": time.strftime("%Y-%m-%dT%H:%M:%SZ")
+        "last_active": time.strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
     save_extension_registry(registry)
     return False
 
-def update_extension_activity(extension_id):
+
+def update_extension_activity(extension_id) -> None:
     """Update last activity timestamp for extension."""
     registry = load_extension_registry()
     if extension_id in registry.get("extensions", {}):
         registry["extensions"][extension_id]["last_active"] = time.strftime("%Y-%m-%dT%H:%M:%SZ")
         save_extension_registry(registry)
 
+
 # Security constants
 MAX_MESSAGE_SIZE = 1024 * 1024  # 1 MB limit
 MAX_READ_BUFFER = 65536  # 64KB buffer for Firefox port mode
-VAULT_DIR = os.path.expanduser("~/.password_manager")
-VAULT_PATH = os.path.join(VAULT_DIR, "vault.json")
+VAULT_DIR: str = os.path.expanduser("~/.password_manager")
+VAULT_PATH: str = os.path.join(VAULT_DIR, "vault.json")
 APP_API_BASE = "http://127.0.0.1:8080/api/v1"
 APP_TOKEN: Optional[str] = None
 
-DEBUG_MODE = "--debug" in sys.argv or "-d" in sys.argv
+DEBUG_MODE: bool = "--debug" in sys.argv or "-d" in sys.argv
 
 # Configure logging to stderr (visible in browser console)
 if DEBUG_MODE:
     logging.basicConfig(
         level=logging.DEBUG,
-        format='%(asctime)s [%(levelname)s] %(name)s: %(message)s',
-        stream=sys.stderr
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        stream=sys.stderr,
     )
 else:
     logging.basicConfig(
         level=logging.INFO,
-        format='%(asctime)s [%(levelname)s] %(name)s: %(message)s',
-        stream=sys.stderr
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        stream=sys.stderr,
     )
-logger = logging.getLogger("caixa_forta_native")
+logger: logging.Logger = logging.getLogger("caixa_forta_native")
 
 
 def write_native(data: bytes) -> None:
     """Write all native-messaging bytes to stdout without text buffering."""
     offset = 0
-    stdout_fd = sys.stdout.fileno()
+    stdout_fd: int | Any = sys.stdout.fileno()
     while offset < len(data):
-        written = os.write(stdout_fd, data[offset:])
+        written: int = os.write(stdout_fd, data[offset:])
         if written <= 0:
             raise OSError("Native messaging stdout closed")
         offset += written
@@ -154,7 +159,7 @@ def read_message_native() -> Optional[Dict[str, Any]]:
     try:
         raw_length = bytearray()
         while len(raw_length) < 4:
-            chunk = os.read(sys.stdin.fileno(), 4 - len(raw_length))
+            chunk: bytes = os.read(sys.stdin.fileno(), 4 - len(raw_length))
             if not chunk:
                 if raw_length:
                     logger.warning(
@@ -166,16 +171,14 @@ def read_message_native() -> Optional[Dict[str, Any]]:
                 return None
             raw_length.extend(chunk)
 
-        message_length = struct.unpack('@I', raw_length)[0]
+        message_length: int = struct.unpack("@I", raw_length)[0]
         if message_length > MAX_MESSAGE_SIZE:
             logger.error(f"Message size {message_length} exceeds limit {MAX_MESSAGE_SIZE}")
             return None
 
         message_data = bytearray()
         while len(message_data) < message_length:
-            chunk = os.read(
-                sys.stdin.fileno(), message_length - len(message_data)
-            )
+            chunk: bytes = os.read(sys.stdin.fileno(), message_length - len(message_data))
             if not chunk:
                 logger.warning(
                     "Incomplete message payload received: expected %s bytes, got %s",
@@ -195,7 +198,7 @@ def read_message_native() -> Optional[Dict[str, Any]]:
 
         # Safe JSON deserialization with strict validation
         try:
-            message = json.loads(bytes(message_data).decode('utf-8'))
+            message = json.loads(bytes(message_data).decode("utf-8"))
             if not isinstance(message, dict):
                 logger.error("Message must be a JSON object")
                 return None
@@ -221,47 +224,47 @@ def read_message_firefox() -> Optional[Dict[str, Any]]:
         # Read available data non-blocking
         if sys.stdin.isatty():
             # For terminal input, read line by line
-            line = sys.stdin.readline().strip()
+            line: str | Any = sys.stdin.readline().strip()
             if not line:
                 return None
         else:
             # For pipe/port input, read until we have complete JSON
-            data = b""
+            data: bytes = b""
             while True:
-                chunk = sys.stdin.buffer.read(MAX_READ_BUFFER)
+                chunk: bytes | Any = sys.stdin.buffer.read(MAX_READ_BUFFER)
                 if not chunk:
                     break
                 data += chunk
 
                 # Try to parse complete JSON
                 try:
-                    message = json.loads(data.decode('utf-8'))
+                    message = json.loads(data.decode("utf-8"))
                     if isinstance(message, dict):
                         return message
                     # If it's not a complete JSON object, keep reading
                     # Check if we have a complete JSON structure
-                    if data.strip().endswith('}'):
+                    if data.strip().endswith(b"}"):
                         # Try to find the complete object
                         depth = 0
                         in_string = False
                         escape_next = False
-                        for i, char in enumerate(data.decode('utf-8')):
+                        for i, char in enumerate(data.decode("utf-8")):
                             if escape_next:
                                 escape_next = False
                                 continue
-                            if char == '\\' and in_string:
+                            if char == "\\" and in_string:
                                 escape_next = True
                                 continue
                             if char == '"':
                                 in_string = not in_string
                             elif not in_string:
-                                if char == '{':
+                                if char == "{":
                                     depth += 1
-                                elif char == '}':
+                                elif char == "}":
                                     depth -= 1
                                     if depth == 0:
                                         # Found complete object
-                                        message = json.loads(data[:i+1].decode('utf-8'))
+                                        message = json.loads(data[: i + 1].decode("utf-8"))
                                         if isinstance(message, dict):
                                             return message
                                         break
@@ -298,14 +301,14 @@ def read_message_firefox_debug() -> Optional[Dict[str, Any]]:
         # Read available data non-blocking
         if sys.stdin.isatty():
             # For terminal input, read line by line
-            line = sys.stdin.readline().strip()
+            line: str | Any = sys.stdin.readline().strip()
             if not line:
                 return None
         else:
             # For pipe/port input, read until we have complete JSON
-            data = b""
+            data: bytes = b""
             while True:
-                chunk = sys.stdin.buffer.read(MAX_READ_BUFFER)
+                chunk: bytes | Any = sys.stdin.buffer.read(MAX_READ_BUFFER)
                 if not chunk:
                     break
                 data += chunk
@@ -316,33 +319,33 @@ def read_message_firefox_debug() -> Optional[Dict[str, Any]]:
 
                 # Try to parse complete JSON
                 try:
-                    message = json.loads(data.decode('utf-8'))
+                    message = json.loads(data.decode("utf-8"))
                     if isinstance(message, dict):
                         return message
                     # If it's not a complete JSON object, keep reading
                     # Check if we have a complete JSON structure
-                    if data.strip().endswith('}'):
+                    if data.strip().endswith(b"}"):
                         # Try to find the complete object
                         depth = 0
                         in_string = False
                         escape_next = False
-                        for i, char in enumerate(data.decode('utf-8')):
+                        for i, char in enumerate(data.decode("utf-8")):
                             if escape_next:
                                 escape_next = False
                                 continue
-                            if char == '\\' and in_string:
+                            if char == "\\" and in_string:
                                 escape_next = True
                                 continue
                             if char == '"':
                                 in_string = not in_string
                             elif not in_string:
-                                if char == '{':
+                                if char == "{":
                                     depth += 1
-                                elif char == '}':
+                                elif char == "}":
                                     depth -= 1
                                     if depth == 0:
                                         # Found complete object
-                                        message = json.loads(data[:i+1].decode('utf-8'))
+                                        message = json.loads(data[: i + 1].decode("utf-8"))
                                         if isinstance(message, dict):
                                             return message
                                         break
@@ -376,20 +379,22 @@ def send_message(message: Dict[str, Any]) -> None:
     Ensures proper flushing without corrupting the buffer.
     """
     try:
-        encoded = json.dumps(message, separators=(',', ':'), ensure_ascii=False).encode('utf-8')
-        length = len(encoded)
+        encoded: bytes = json.dumps(message, separators=(",", ":"), ensure_ascii=False).encode(
+            "utf-8"
+        )
+        length: int = len(encoded)
 
         # Write a native-endian 4-byte length header.
-        write_native(struct.pack('@I', length) + encoded)
+        write_native(struct.pack("@I", length) + encoded)
 
     except Exception as e:
         logger.error(f"Error sending message: {e}")
         # Send error response even if we can't flush
         try:
             error_msg = {"success": False, "error": f"Host send error: {str(e)}"}
-            encoded = json.dumps(error_msg, separators=(',', ':')).encode('utf-8')
-            write_native(struct.pack('@I', len(encoded)) + encoded)
-        except:
+            encoded: bytes = json.dumps(error_msg, separators=(",", ":")).encode("utf-8")
+            write_native(struct.pack("@I", len(encoded)) + encoded)
+        except OSError:
             pass
 
 
@@ -399,8 +404,8 @@ def generate_password(options: Dict[str, Any]) -> Dict[str, Any]:
         length = options.get("length", 16)
         if length < 8 or length > 128:
             length = 16
-        
-        chars = ""
+
+        chars: str = ""
         if options.get("uppercase", True):
             chars += "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
         if options.get("lowercase", True):
@@ -409,17 +414,13 @@ def generate_password(options: Dict[str, Any]) -> Dict[str, Any]:
             chars += "0123456789"
         if options.get("symbols", True):
             chars += "!@#$%^&*()_+-=[]{}|;:,.<>?"
-        
+
         if not chars:
             chars = "abcdefghijklmnopqrstuvwxyz0123456789"
-        
-        password = ''.join(secrets.choice(chars) for _ in range(length))
-        
-        return {
-            "success": True,
-            "password": password,
-            "length": length
-        }
+
+        password: str = "".join(secrets.choice(chars) for _ in range(length))
+
+        return {"success": True, "password": password, "length": length}
     except Exception as e:
         logger.error(f"Password generation error: {e}")
         return {"success": False, "error": str(e)}
@@ -433,11 +434,11 @@ def app_request(
     timeout: int = 5,
 ) -> Dict[str, Any]:
     """Call the desktop app's loopback API and return its JSON response."""
-    url = f"{APP_API_BASE}{endpoint}"
+    url: str = f"{APP_API_BASE}{endpoint}"
     if query:
-        url = f"{url}?{urllib.parse.urlencode(query)}"
+        url: str = f"{url}?{urllib.parse.urlencode(query)}"
     body = None
-    headers = {"Accept": "application/json", "Origin": "http://127.0.0.1:8080"}
+    headers: Dict[str, str] = {"Accept": "application/json", "Origin": "http://127.0.0.1:8080"}
     if payload is not None:
         body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
         headers["Content-Type"] = "application/json"
@@ -452,7 +453,7 @@ def app_request(
         try:
             details = json.loads(error.read().decode("utf-8"))
         except (json.JSONDecodeError, UnicodeDecodeError):
-            details = {"error": f"Desktop app returned HTTP {error.code}"}
+            details: Dict[str, str] = {"error": f"Desktop app returned HTTP {error.code}"}
         return {"success": False, **details}
     except (urllib.error.URLError, TimeoutError, OSError) as error:
         return {"success": False, "error": f"Desktop app unavailable: {error}"}
@@ -460,7 +461,7 @@ def app_request(
 
 def get_vault_info() -> Dict[str, Any]:
     """Read the live vault state from the desktop app."""
-    response = app_request("GET", "/vault-info")
+    response: Dict[str, Any] = app_request("GET", "/vault-info")
     response["entryCount"] = response.get("entry_count", 0)
     response["exists"] = os.path.exists(VAULT_PATH)
     response["source"] = "native"
@@ -472,20 +473,18 @@ def ensure_app_token() -> bool:
     global APP_TOKEN
     if APP_TOKEN:
         return True
-    handshake = app_request("GET", "/handshake")
-    shared_secret = handshake.get("shared_secret")
+    handshake: Dict[str, Any] = app_request("GET", "/handshake")
+    shared_secret: Any | None = handshake.get("shared_secret")
     if not shared_secret:
         return False
-    authenticated = app_request(
-        "POST", "/auth", {"shared_secret": shared_secret}
-    )
+    authenticated: Dict[str, Any] = app_request("POST", "/auth", {"shared_secret": shared_secret})
     if authenticated.get("success") and authenticated.get("token"):
         APP_TOKEN = authenticated["token"]
         return True
     return False
 
 
-def main():
+def main() -> None:
     """Main message loop - handles all native messaging actions."""
     global APP_TOKEN
     logger.info("Caixa Forta Native Messaging Host started")
@@ -496,11 +495,12 @@ def main():
         sys.exit(1)
 
     # Set up signal handlers for graceful shutdown
-    def signal_handler(signum, frame):
+    def signal_handler(signum, frame) -> NoReturn:
         logger.info(f"Received signal {signum}, shutting down gracefully")
         sys.exit(0)
 
     import signal
+
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
 
@@ -508,7 +508,7 @@ def main():
 
     while True:
         try:
-            message = read_message_native()
+            message: Dict[str, Any] | None = read_message_native()
 
             if message is None:
                 # EOF or a rejected message must not leave an orphaned host loop.
@@ -516,7 +516,7 @@ def main():
 
             action = message.get("action", "")
             extension_id = message.get("extension_id", "unknown")
-            extension_hash = message.get("extension_hash")
+            extension_hash: Any | None = message.get("extension_hash")
             logger.info(f"Received action: {action} from extension: {extension_id}")
 
             # Check extension permissions
@@ -534,9 +534,7 @@ def main():
                 if action == "getVaultInfo":
                     response = get_vault_info()
                 elif action == "generatePassword":
-                    response = app_request(
-                        "POST", "/generate-password", message.get("options", {})
-                    )
+                    response = app_request("POST", "/generate-password", message.get("options", {}))
                     if not response.get("success"):
                         response = generate_password(message.get("options", {}))
                 elif action == "ping":
@@ -565,7 +563,9 @@ def main():
                     )
                     response["site"] = message.get("site", "")
                     # If auth failed, try to refresh token
-                    if not response.get("success") and "Authentication required" in response.get("error", ""):
+                    if not response.get("success") and "Authentication required" in response.get(
+                        "error", ""
+                    ):
                         logger.info("Token expired, refreshing...")
                         if ensure_app_token():
                             # Retry with new token
@@ -587,7 +587,10 @@ def main():
                         timeout=10,
                     )
                     # If auth failed or timeout, try to refresh token and retry
-                    if not response.get("success") and ("Authentication required" in response.get("error", "") or "Desktop app unavailable" in response.get("error", "")):
+                    if not response.get("success") and (
+                        "Authentication required" in response.get("error", "")
+                        or "Desktop app unavailable" in response.get("error", "")
+                    ):
                         logger.info("Token expired or app unavailable, refreshing...")
                         if ensure_app_token():
                             # Retry with new token
@@ -598,16 +601,10 @@ def main():
                                 timeout=10,
                             )
                 else:
-                    response = {
-                        "success": False,
-                        "error": f"Unknown action: {action}"
-                    }
+                    response = {"success": False, "error": f"Unknown action: {action}"}
             except Exception as e:
                 logger.error(f"Error processing action {action}: {e}")
-                response = {
-                    "success": False,
-                    "error": f"Processing error: {str(e)}"
-                }
+                response = {"success": False, "error": f"Processing error: {str(e)}"}
 
             logger.info(f"Sending response: {response.get('success', False)}")
 
@@ -620,7 +617,7 @@ def main():
             logger.error(f"Critical host error: {e}")
             try:
                 send_message({"success": False, "error": f"Host error: {str(e)}"})
-            except:
+            except OSError:
                 pass
             # Don't exit on error, continue processing
 

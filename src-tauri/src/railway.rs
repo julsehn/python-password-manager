@@ -1,6 +1,8 @@
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 
+pub const DEFAULT_OFFICIAL_URL: &str = "https://password-manager-cloud-production.up.railway.app";
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SyncConfig {
     pub railway_url: String,
@@ -14,6 +16,22 @@ pub struct SyncResponse {
     pub message: String,
     pub timestamp: u64,
     pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AuthResponseData {
+    pub user_id: i64,
+    pub username: String,
+    pub email: Option<String>,
+    pub access_token: String,
+    pub vault_id: String,
+    pub token_type: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct UserAuthRequest {
+    username: String,
+    password: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -37,26 +55,105 @@ struct VaultResponse {
     updated_at: String,
 }
 
+fn resolve_url(url: &str) -> String {
+    let trimmed = url.trim().trim_end_matches('/');
+    if trimmed.is_empty() {
+        DEFAULT_OFFICIAL_URL.to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+pub async fn auth_user(
+    username: &str,
+    password: &str,
+    custom_url: Option<&str>,
+) -> Result<AuthResponseData, String> {
+    let base_url = resolve_url(custom_url.unwrap_or(DEFAULT_OFFICIAL_URL));
+    let endpoint = format!("{}/v1/auth/login", base_url);
+
+    let client = Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .map_err(|e| format!("Error en crear client HTTP: {}", e))?;
+
+    let response = client
+        .post(&endpoint)
+        .json(&UserAuthRequest {
+            username: username.to_string(),
+            password: password.to_string(),
+        })
+        .header("Content-Type", "application/json")
+        .send()
+        .await
+        .map_err(|e| format!("Error de connexió amb Railway ({}): {}", base_url, e))?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        return Err(format!("Error d'autenticació ({}): {}", status, body));
+    }
+
+    let auth_data: AuthResponseData = response
+        .json()
+        .await
+        .map_err(|e| format!("Error en descodificar resposta de Railway: {}", e))?;
+
+    Ok(auth_data)
+}
+
+pub async fn register_user(
+    username: &str,
+    password: &str,
+    custom_url: Option<&str>,
+) -> Result<AuthResponseData, String> {
+    let base_url = resolve_url(custom_url.unwrap_or(DEFAULT_OFFICIAL_URL));
+    let endpoint = format!("{}/v1/auth/register", base_url);
+
+    let client = Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .map_err(|e| format!("Error en crear client HTTP: {}", e))?;
+
+    let response = client
+        .post(&endpoint)
+        .json(&UserAuthRequest {
+            username: username.to_string(),
+            password: password.to_string(),
+        })
+        .header("Content-Type", "application/json")
+        .send()
+        .await
+        .map_err(|e| format!("Error de connexió amb Railway ({}): {}", base_url, e))?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        return Err(format!("Error en el registre ({}): {}", status, body));
+    }
+
+    let auth_data: AuthResponseData = response
+        .json()
+        .await
+        .map_err(|e| format!("Error en descodificar resposta de Railway: {}", e))?;
+
+    Ok(auth_data)
+}
+
 pub async fn upload_vault(
     _master_password: String,
     config: &SyncConfig,
 ) -> Result<SyncResponse, String> {
-    println!("Uploading vault to Railway: {}", config.vault_id);
+    let base_url = resolve_url(&config.railway_url);
 
-    if config.railway_url.is_empty() {
-        return Err("Railway URL is not configured".to_string());
-    }
-    if config.vault_id.is_empty() {
-        return Err("Vault ID is not configured".to_string());
-    }
     if config.token.is_empty() {
-        return Err("Railway token is not configured".to_string());
+        return Err("No s'ha configurat el token d'autenticació de Railway".to_string());
     }
 
     let client = Client::builder()
         .timeout(std::time::Duration::from_secs(30))
         .build()
-        .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
+        .map_err(|e| format!("Error en crear client HTTP: {}", e))?;
 
     let home = std::env::var("HOME").ok();
     let vault_path = home
@@ -65,42 +162,49 @@ pub async fn upload_vault(
         .unwrap_or_else(|| "./vault.json".to_string());
 
     if !std::path::Path::new(&vault_path).exists() {
-        return Err("Vault file not found. Create a vault first.".to_string());
+        return Err("No s'ha trobat l'arxiu local de la caixa forta.".to_string());
     }
 
     let content = std::fs::read_to_string(&vault_path)
-        .map_err(|e| format!("Failed to read vault file: {}", e))?;
-
-    let encrypted_blob = content.clone();
+        .map_err(|e| format!("Error en llegir la caixa forta: {}", e))?;
 
     let payload = VaultBlob {
-        blob: encrypted_blob,
+        blob: content,
         expected_version: None,
     };
 
+    let url = if config.vault_id.is_empty() {
+        format!("{}/v1/vault", base_url)
+    } else {
+        format!("{}/v1/vaults/{}", base_url, config.vault_id)
+    };
+
     let response = client
-        .put(format!("{}/v1/vaults/{}", config.railway_url, config.vault_id))
+        .put(&url)
         .json(&payload)
         .header("Authorization", format!("Bearer {}", config.token))
         .header("Content-Type", "application/json")
         .send()
         .await
-        .map_err(|e| format!("Failed to send request: {}", e))?;
+        .map_err(|e| format!("Error en connectar amb Railway: {}", e))?;
 
     if !response.status().is_success() {
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
-        return Err(format!("Upload failed (status {}): {}", status, body));
+        return Err(format!("Error en pujar la caixa forta ({}) : {}", status, body));
     }
 
     let vault_response: VaultResponse = response
         .json()
         .await
-        .map_err(|e| format!("Failed to parse response: {}", e))?;
+        .map_err(|e| format!("Error en interpretar la resposta del servidor: {}", e))?;
 
     Ok(SyncResponse {
         success: true,
-        message: format!("Vault uploaded successfully (version {})", vault_response.version),
+        message: format!(
+            "Caixa forta sincronitzada correctament amb Railway (versió {})",
+            vault_response.version
+        ),
         timestamp: chrono::Utc::now().timestamp() as u64,
         error: None,
     })
@@ -110,40 +214,40 @@ pub async fn download_vault(
     _master_password: String,
     config: &SyncConfig,
 ) -> Result<String, String> {
-    println!("Downloading vault from Railway: {}", config.vault_id);
+    let base_url = resolve_url(&config.railway_url);
 
-    if config.railway_url.is_empty() {
-        return Err("Railway URL is not configured".to_string());
-    }
-    if config.vault_id.is_empty() {
-        return Err("Vault ID is not configured".to_string());
-    }
     if config.token.is_empty() {
-        return Err("Railway token is not configured".to_string());
+        return Err("No s'ha configurat el token d'autenticació de Railway".to_string());
     }
 
     let client = Client::builder()
         .timeout(std::time::Duration::from_secs(30))
         .build()
-        .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
+        .map_err(|e| format!("Error en crear client HTTP: {}", e))?;
+
+    let url = if config.vault_id.is_empty() {
+        format!("{}/v1/vault", base_url)
+    } else {
+        format!("{}/v1/vaults/{}", base_url, config.vault_id)
+    };
 
     let response = client
-        .get(format!("{}/v1/vaults/{}", config.railway_url, config.vault_id))
+        .get(&url)
         .header("Authorization", format!("Bearer {}", config.token))
         .send()
         .await
-        .map_err(|e| format!("Failed to send request: {}", e))?;
+        .map_err(|e| format!("Error en connectar amb Railway: {}", e))?;
 
     if !response.status().is_success() {
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
-        return Err(format!("Download failed (status {}): {}", status, body));
+        return Err(format!("Error en descarregar la caixa forta ({}): {}", status, body));
     }
 
     let vault_response: VaultResponse = response
         .json()
         .await
-        .map_err(|e| format!("Failed to parse response: {}", e))?;
+        .map_err(|e| format!("Error en interpretar la resposta del servidor: {}", e))?;
 
     let home = std::env::var("HOME").ok();
     let vault_path = home
@@ -151,8 +255,12 @@ pub async fn download_vault(
         .map(|h| format!("{}/.password_manager/vault.json", h))
         .unwrap_or_else(|| "./vault.json".to_string());
 
+    if let Some(parent) = std::path::Path::new(&vault_path).parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+
     std::fs::write(&vault_path, vault_response.blob.clone())
-        .map_err(|e| format!("Failed to write vault file: {}", e))?;
+        .map_err(|e| format!("Error en desar la caixa forta localment: {}", e))?;
 
     Ok(vault_response.blob)
 }
@@ -161,22 +269,16 @@ pub async fn register_vault(
     _master_password: String,
     config: &SyncConfig,
 ) -> Result<SyncResponse, String> {
-    println!("Registering new vault on Railway: {}", config.vault_id);
+    let base_url = resolve_url(&config.railway_url);
 
-    if config.railway_url.is_empty() {
-        return Err("Railway URL is not configured".to_string());
-    }
     if config.vault_id.is_empty() {
-        return Err("Vault ID is not configured".to_string());
-    }
-    if config.token.is_empty() {
-        return Err("Railway token is not configured".to_string());
+        return Err("L'identificador de caixa forta no pot estar buit".to_string());
     }
 
     let client = Client::builder()
         .timeout(std::time::Duration::from_secs(30))
         .build()
-        .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
+        .map_err(|e| format!("Error en crear client HTTP: {}", e))?;
 
     let payload = VaultRegistration {
         vault_id: config.vault_id.clone(),
@@ -184,60 +286,60 @@ pub async fn register_vault(
         blob: String::new(),
     };
 
-    let response = client
-        .post(format!("{}/v1/vaults", config.railway_url))
+    let mut request = client
+        .post(format!("{}/v1/vaults", base_url))
         .json(&payload)
-        .header("Content-Type", "application/json")
+        .header("Content-Type", "application/json");
+
+    if !config.token.is_empty() {
+        request = request.header("Authorization", format!("Bearer {}", config.token));
+    }
+
+    let response = request
         .send()
         .await
-        .map_err(|e| format!("Failed to send request: {}", e))?;
+        .map_err(|e| format!("Error en connectar amb Railway: {}", e))?;
 
     if !response.status().is_success() {
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
-        return Err(format!("Registration failed (status {}): {}", status, body));
+        return Err(format!("Error en registrar caixa forta ({}): {}", status, body));
     }
 
     let vault_response: VaultResponse = response
         .json()
         .await
-        .map_err(|e| format!("Failed to parse response: {}", e))?;
+        .map_err(|e| format!("Error en interpretar la resposta: {}", e))?;
 
     Ok(SyncResponse {
         success: true,
-        message: format!("Vault registered successfully (version {})", vault_response.version),
+        message: format!(
+            "Caixa forta registrada correctament a Railway (versió {})",
+            vault_response.version
+        ),
         timestamp: chrono::Utc::now().timestamp() as u64,
         error: None,
     })
 }
 
-pub async fn delete_vault(
-    _master_password: String,
-    config: &SyncConfig,
-) -> Result<bool, String> {
-    println!("Deleting vault from Railway: {}", config.vault_id);
+pub async fn delete_vault(_master_password: String, config: &SyncConfig) -> Result<bool, String> {
+    let base_url = resolve_url(&config.railway_url);
 
-    if config.railway_url.is_empty() {
-        return Err("Railway URL is not configured".to_string());
-    }
     if config.vault_id.is_empty() {
-        return Err("Vault ID is not configured".to_string());
-    }
-    if config.token.is_empty() {
-        return Err("Railway token is not configured".to_string());
+        return Err("L'identificador de caixa forta no pot estar buit".to_string());
     }
 
     let client = Client::builder()
         .timeout(std::time::Duration::from_secs(30))
         .build()
-        .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
+        .map_err(|e| format!("Error en crear client HTTP: {}", e))?;
 
     let response = client
-        .delete(format!("{}/v1/vaults/{}", config.railway_url, config.vault_id))
+        .delete(format!("{}/v1/vaults/{}", base_url, config.vault_id))
         .header("Authorization", format!("Bearer {}", config.token))
         .send()
         .await
-        .map_err(|e| format!("Failed to send request: {}", e))?;
+        .map_err(|e| format!("Error en connectar amb Railway: {}", e))?;
 
     let status = response.status();
     match status {
@@ -245,103 +347,24 @@ pub async fn delete_vault(
         reqwest::StatusCode::NOT_FOUND => Ok(false),
         _ => {
             let body = response.text().await.unwrap_or_default();
-            Err(format!("Delete failed (status {}): {}", status, body))
+            Err(format!("Error en eliminar caixa forta ({}): {}", status, body))
         }
     }
 }
 
-pub async fn check_health(railway_url: &str) -> Result<bool, String> {
+pub async fn check_health(railway_url: Option<&str>) -> Result<bool, String> {
+    let base_url = resolve_url(railway_url.unwrap_or(DEFAULT_OFFICIAL_URL));
+
     let client = Client::builder()
         .timeout(std::time::Duration::from_secs(10))
         .build()
-        .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
+        .map_err(|e| format!("Error en crear client HTTP: {}", e))?;
 
     let response = client
-        .get(format!("{}/healthz", railway_url))
+        .get(format!("{}/healthz", base_url))
         .send()
         .await
-        .map_err(|e| format!("Failed to send request: {}", e))?;
+        .map_err(|e| format!("Error en connectar amb Railway ({}): {}", base_url, e))?;
 
     Ok(response.status().is_success())
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct UserAuthRequest {
-    username: String,
-    password: String,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct UserAuthResponse {
-    user_id: i64,
-    username: String,
-    email: Option<String>,
-    access_token: String,
-    token_type: String,
-}
-
-pub async fn auth_user(username: &str, password: &str) -> Result<String, String> {
-    let client = Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
-        .build()
-        .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
-
-    let url = "https://password-manager-cloud-production.up.railway.app/v1/auth/login";
-    
-    let response = client
-        .post(url)
-        .json(&UserAuthRequest {
-            username: username.to_string(),
-            password: password.to_string(),
-        })
-        .header("Content-Type", "application/json")
-        .send()
-        .await
-        .map_err(|e| format!("Failed to send request: {}", e))?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        return Err(format!("Authentication failed (status {}): {}", status, body));
-    }
-
-    let auth_response: UserAuthResponse = response
-        .json()
-        .await
-        .map_err(|e| format!("Failed to parse response: {}", e))?;
-
-    Ok(auth_response.access_token)
-}
-
-pub async fn register_user(username: &str, password: &str) -> Result<bool, String> {
-    let client = Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
-        .build()
-        .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
-
-    let url = "https://password-manager-cloud-production.up.railway.app/v1/auth/register";
-    
-    let response = client
-        .post(url)
-        .json(&UserAuthRequest {
-            username: username.to_string(),
-            password: password.to_string(),
-        })
-        .header("Content-Type", "application/json")
-        .send()
-        .await
-        .map_err(|e| format!("Failed to send request: {}", e))?;
-
-    match response.status() {
-        reqwest::StatusCode::CREATED | reqwest::StatusCode::OK => Ok(true),
-        reqwest::StatusCode::CONFLICT => {
-            println!("User {} already exists", username);
-            Ok(false)
-        }
-        _ => {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            Err(format!("Registration failed (status {}): {}", status, body))
-        }
-    }
 }

@@ -30,6 +30,12 @@ pub struct ServerState {
     pub app_handle: Mutex<Option<tauri::AppHandle>>,
 }
 
+impl Default for ServerState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ServerState {
     pub fn new() -> Self {
         let secret = load_or_generate_secret();
@@ -187,7 +193,10 @@ pub fn save_vault_data(master_password: &str, vault_data: &VaultData) -> Result<
                 #[cfg(unix)]
                 {
                     use std::os::unix::fs::PermissionsExt;
-                    let _ = std::fs::set_permissions(&vault_path, std::fs::Permissions::from_mode(0o600));
+                    let _ = std::fs::set_permissions(
+                        &vault_path,
+                        std::fs::Permissions::from_mode(0o600),
+                    );
                 }
                 return Ok(());
             }
@@ -200,7 +209,10 @@ pub fn save_vault_data(master_password: &str, vault_data: &VaultData) -> Result<
         }
     }
 
-    Err(format!("Failed to write vault after retries: {}", last_error))
+    Err(format!(
+        "Failed to write vault after retries: {}",
+        last_error
+    ))
 }
 
 pub fn decrypt_vault_from_disk(master_password: &str) -> Result<VaultData, String> {
@@ -214,8 +226,8 @@ pub fn decrypt_vault_from_disk(master_password: &str) -> Result<VaultData, Strin
         });
     }
 
-    let content = std::fs::read_to_string(&vault_path)
-        .map_err(|e| format!("Failed to read vault: {}", e))?;
+    let content =
+        std::fs::read_to_string(&vault_path).map_err(|e| format!("Failed to read vault: {}", e))?;
 
     let vault_file: serde_json::Value =
         serde_json::from_str(&content).map_err(|e| format!("Invalid vault JSON: {}", e))?;
@@ -511,8 +523,7 @@ fn route_request(
         let numbers = parsed["numbers"].as_bool().unwrap_or(true);
         let symbols = parsed["symbols"].as_bool().unwrap_or(true);
 
-        let password =
-            security::generate_password(length, uppercase, lowercase, numbers, symbols);
+        let password = security::generate_password(length, uppercase, lowercase, numbers, symbols);
         let res = serde_json::json!({
             "success": true,
             "password": password
@@ -583,8 +594,6 @@ fn route_request(
     if path == "/api/v1/credentials" && method == "POST" {
         // Acquire write semaphore to prevent concurrent file operations
         let _semaphore = state.write_semaphore.clone();
-
-
 
         let mut unlocked = state.unlocked_data.lock().unwrap();
         let vault = match &mut *unlocked {
@@ -662,7 +671,10 @@ fn route_request(
         // Notify desktop app UI if running
         if let Some(handle) = state.app_handle.lock().unwrap().as_ref() {
             use tauri::Emitter;
-            let _ = handle.emit("vault-updated", serde_json::json!({ "entry": &saved_entry }));
+            let _ = handle.emit(
+                "vault-updated",
+                serde_json::json!({ "entry": &saved_entry }),
+            );
         }
 
         let res = serde_json::json!({
@@ -804,8 +816,16 @@ mod tests {
     fn test_route_generate_password() {
         let state = Arc::new(ServerState::new());
         let headers = std::collections::HashMap::new();
-        let body_req = r#"{"length":20,"uppercase":true,"lowercase":true,"numbers":true,"symbols":true}"#;
-        let (status, body) = route_request("POST", "/api/v1/generate-password", "", &headers, body_req, &state);
+        let body_req =
+            r#"{"length":20,"uppercase":true,"lowercase":true,"numbers":true,"symbols":true}"#;
+        let (status, body) = route_request(
+            "POST",
+            "/api/v1/generate-password",
+            "",
+            &headers,
+            body_req,
+            &state,
+        );
         assert_eq!(status, 200);
         let parsed: serde_json::Value = serde_json::from_str(&body).unwrap();
         assert!(parsed["success"].as_bool().unwrap());

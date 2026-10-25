@@ -52,14 +52,14 @@ async function computeExtensionHash() {
     const text = await response.text();
     const encoder = new TextEncoder();
     const data = encoder.encode(text);
-    
+
     // Use Web Crypto API for SHA-256
     const hashBuffer = await crypto.subtle.digest("SHA-256", data);
     const hashArray = new Uint8Array(hashBuffer);
     const hashHex = Array.from(hashArray)
-      .map(b => b.toString(16).padStart(2, "0"))
+      .map((b) => b.toString(16).padStart(2, "0"))
       .join("");
-    
+
     return hashHex;
   } catch (e) {
     console.warn("Failed to compute extension hash:", e);
@@ -84,7 +84,12 @@ async function sendToNative(action, payload = {}) {
     cachedExtensionHash = await computeExtensionHash();
   }
 
-  const message = { action, extension_id: "caixa_forta_manager", extension_hash: cachedExtensionHash, ...payload };
+  const message = {
+    action,
+    extension_id: "caixa_forta_manager",
+    extension_hash: cachedExtensionHash,
+    ...payload,
+  };
   return new Promise((resolve, reject) => {
     pendingNativeRequests.push({ resolve, reject });
     try {

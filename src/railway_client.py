@@ -3,54 +3,62 @@
 This client provides a REST API wrapper for the Password Manager Cloud service.
 All encryption/decryption happens client-side before sending data to the server.
 """
+
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from collections.abc import Callable, Mapping
+from typing import Optional, ParamSpec, TypeVar
 import requests
 import secrets
 import uuid
 import time
 from functools import wraps
 from threading import Lock
-from collections import defaultdict
 
 # Retry configuration
 MAX_RETRIES = 3
 BASE_DELAY = 1  # seconds
+MAX_DELAY = 8  # seconds
+P = ParamSpec("P")
+R = TypeVar("R")
+JSONValue = str | int | float | bool | None | list["JSONValue"] | dict[str, "JSONValue"]
 
 
 class RateLimiter:
     """Simple rate limiter for API requests using token bucket algorithm."""
-    def __init__(self, max_requests: int = 100, per_period: int = 60):
+
+    def __init__(self, max_requests: int = 100, per_period: int = 60) -> None:
         self.max_requests = max_requests
         self.per_period = per_period
         self.requests: list[float] = []
         self.lock = Lock()
-    
+
     def acquire(self) -> bool:
         """Acquire permission to make a request.
-        
+
         Returns True if allowed, False if rate limited.
         """
         with self.lock:
             now = time.time()
             # Remove old requests outside the period
             self.requests = [t for t in self.requests if now - t < self.per_period]
-            
+
             if len(self.requests) < self.max_requests:
                 self.requests.append(now)
                 return True
             return False
-    
-    def __call__(self, func):
+
+    def __call__(self, func: Callable[P, R]) -> Callable[P, R]:
         """Decorator to rate limit a function."""
+
         @wraps(func)
-        def wrapper(*args, **kwargs):
+        def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
             while not self.acquire():
                 # Wait for next available slot
                 oldest = self.requests[0]
                 wait_time = self.per_period - (time.time() - oldest)
                 time.sleep(min(wait_time, 0.1))  # Check frequently, not in long sleep
             return func(*args, **kwargs)
+
         return wrapper
 
 
@@ -75,6 +83,7 @@ class RemoteVault:
         version: Version number for optimistic locking
         updated_at: ISO timestamp of last update
     """
+
     vault_id: str
     blob: str
     version: int
@@ -88,7 +97,13 @@ class RailwayVaultClient:
     The vault_id and token are used for authentication and vault identification.
     """
 
-    def __init__(self, base_url: str, vault_id: str, token: str, timeout: int = 15):
+    def __init__(
+        self,
+        base_url: str,
+        vault_id: str,
+        token: str,
+        timeout: int = 15,
+    ) -> None:
         """Initialize the client.
 
         Args:
@@ -109,9 +124,9 @@ class RailwayVaultClient:
         self,
         method: str,
         path: str,
-        payload: Optional[Dict[str, Any]] = None,
-        headers: Optional[Dict[str, str]] = None,
-    ) -> Dict[str, Any]:
+        payload: Mapping[str, JSONValue] | None = None,
+        headers: Mapping[str, str] | None = None,
+    ) -> dict[str, object]:
         """Make an HTTP request to the API with retry logic.
 
         Args:
@@ -127,8 +142,7 @@ class RailwayVaultClient:
             Exception: If the request fails
         """
         url = f"{self.base_url}{path}"
-        if headers is None:
-            headers = {}
+        headers = dict(headers or {})
         headers.setdefault("Accept", "application/json")
 
         # Add auth token for protected endpoints
@@ -136,68 +150,73 @@ class RailwayVaultClient:
             headers["Authorization"] = f"Bearer {self.token}"
 
         response_data = None
-        
+
         for attempt in range(1, MAX_RETRIES + 1):
             try:
                 response = requests.request(
                     method,
                     url,
-                    json=payload if payload else None,
+                    json=dict(payload) if payload else None,
                     headers=headers,
                     timeout=self.timeout,
                 )
                 response.raise_for_status()
-                
-                # Handle specific status codes
+
+                if response.status_code == 204:
+                    return {}
+
                 if response.status_code == 409:
                     response_json = response.json() if response.content else {}
-                    raise Exception(f"Vault conflict: {response_json.get('detail', 'Unknown error')}")
-                
-                if response.status_code == 204:
-                    response_data = {}
-                else:
-                    response_data = response.json()
-                
+                    raise Exception(
+                        f"Vault conflict: {response_json.get('detail', 'Unknown error')}"
+                    )
+
+                response_body = response.json()
+                if not isinstance(response_body, dict):
+                    raise ValueError("Invalid response from server")
+                response_data = {
+                    key: value for key, value in response_body.items() if isinstance(key, str)
+                }
+
                 # Validate response has expected fields
-                if "vault_id" not in response_data or "blob" not in response_data or "version" not in response_data:
+                if (
+                    "vault_id" not in response_data
+                    or "blob" not in response_data
+                    or "version" not in response_data
+                ):
                     raise Exception("Invalid response from server")
                 return response_data
-                
+
             except requests.RequestException as e:
                 if attempt < MAX_RETRIES:
                     delay = min(BASE_DELAY * (2 ** (attempt - 1)), MAX_DELAY)
                     time.sleep(delay)
                     print(f"Network retry {attempt}/{MAX_RETRIES} after {delay}s delay...")
                 else:
-                    # All retries exhausted - handle 404 specially
-                    if hasattr(e, 'response') and e.response is not None:
-                        if e.response.status_code == 404:
-                            raise Exception(f"Vault not found: {self.vault_id}")
-                        if e.response.status_code == 409:
-                            try:
-                                detail = e.response.json().get('detail', '')
-                                if "expected" in detail.lower():
-                                    expected = detail.split("expected ")[1].split(",")[0]
-                                    raise Exception(f"Version conflict: expected {expected}")
-                                raise Exception(f"Version conflict: {detail}")
-                            except Exception:
-                                raise
+                    self._raise_http_error(e)
                     raise e
-            
+
             except Exception as e:
-                if hasattr(e, 'response') and e.response is not None:
-                    if e.response.status_code == 404:
-                        raise Exception(f"Vault not found: {self.vault_id}")
-                    if e.response.status_code == 409:
-                        try:
-                            detail = e.response.json().get('detail', '')
-                            if "expected" in detail.lower():
-                                expected = detail.split("expected ")[1].split(",")[0]
-                                raise Exception(f"Version conflict: expected {expected}")
-                            raise Exception(f"Version conflict: {detail}")
-                        except Exception:
-                            raise
+                self._raise_http_error(e)
                 raise
+
+        raise RuntimeError("Request retry loop ended unexpectedly")
+
+    def _raise_http_error(self, error: Exception) -> None:
+        response = getattr(error, "response", None)
+        if not isinstance(response, requests.Response):
+            return
+        if response.status_code == 404:
+            raise ValueError(f"Vault not found: {self.vault_id}") from error
+        if response.status_code == 409:
+            response_body = response.json()
+            detail = response_body.get("detail", "") if isinstance(response_body, dict) else ""
+            if not isinstance(detail, str):
+                detail = str(detail)
+            if "expected " in detail.lower():
+                expected = detail.split("expected ", 1)[1].split(",", 1)[0]
+                raise ValueError(f"Version conflict: expected {expected}") from error
+            raise ValueError(f"Version conflict: {detail}") from error
 
     def register(self, blob: str = "") -> RemoteVault:
         """Register a new vault on the server.
@@ -214,21 +233,14 @@ class RailwayVaultClient:
         Raises:
             Exception: If vault already exists (409) or other error
         """
-        url = f"{self.base_url}/v1/vaults"
-        headers = {"Content-Type": "application/json"}
         payload = {
             "vault_id": self.vault_id,
             "token": self.token,
             "blob": blob,
         }
 
-        response = self._request("POST", url, payload=payload)
-        return RemoteVault(
-            vault_id=response["vault_id"],
-            blob=response["blob"],
-            version=response["version"],
-            updated_at=response["updated_at"],
-        )
+        response = self._request("POST", "/v1/vaults", payload=payload)
+        return self._to_remote_vault(response)
 
     def download(self) -> RemoteVault:
         """Download the current vault state from the server.
@@ -240,12 +252,7 @@ class RailwayVaultClient:
             Exception: If vault not found (404) or other error
         """
         response = self._request("GET", self._get_vault_path())
-        return RemoteVault(
-            vault_id=response["vault_id"],
-            blob=response["blob"],
-            version=response["version"],
-            updated_at=response["updated_at"],
-        )
+        return self._to_remote_vault(response)
 
     def upload(self, blob: str, expected_version: Optional[int] = None) -> RemoteVault:
         """Upload a new version of the vault blob.
@@ -264,23 +271,30 @@ class RailwayVaultClient:
             Exception: If version conflict or other error
         """
         url = self._get_vault_path()
-        headers = {
-            "Authorization": f"Bearer {self.token}",
-            "Content-Type": "application/json",
-        }
-        payload: Dict[str, Any] = {"blob": blob}
+        payload: dict[str, JSONValue] = {"blob": blob}
 
         # Only include expected_version if provided (version conflict check)
         if expected_version is not None:
             payload["expected_version"] = expected_version
 
         response = self._request("PUT", url, payload=payload)
-        return RemoteVault(
-            vault_id=response["vault_id"],
-            blob=response["blob"],
-            version=response["version"],
-            updated_at=response["updated_at"],
-        )
+        return self._to_remote_vault(response)
+
+    @staticmethod
+    def _to_remote_vault(response: Mapping[str, object]) -> RemoteVault:
+        vault_id = response.get("vault_id")
+        blob = response.get("blob")
+        version = response.get("version")
+        updated_at = response.get("updated_at")
+        if (
+            not isinstance(vault_id, str)
+            or not isinstance(blob, str)
+            or not isinstance(version, int)
+            or isinstance(version, bool)
+            or not isinstance(updated_at, str)
+        ):
+            raise ValueError("Invalid response from server")
+        return RemoteVault(vault_id, blob, version, updated_at)
 
     def delete(self) -> None:
         """Delete the vault from the server.
@@ -301,7 +315,7 @@ class RailwayVaultClient:
         self.vault_id = str(uuid.uuid4())
         self.token = secrets.token_urlsafe(32)
 
-    def register_user(self, username: str, password: str) -> dict:
+    def register_user(self, username: str, password: str) -> dict[str, object]:
         """Register a new user account on the server.
 
         Args:
@@ -314,17 +328,16 @@ class RailwayVaultClient:
         Raises:
             Exception: If registration fails
         """
-        url = f"{self.base_url}/v1/auth/register"
         payload = {
             "username": username,
             "password": password,
             "email": "",
         }
 
-        response = self._request("POST", url, payload=payload)
+        response = self._request("POST", "/v1/auth/register", payload=payload)
         return response
 
-    def login_user(self, username: str, password: str) -> dict:
+    def login_user(self, username: str, password: str) -> dict[str, object]:
         """Login with username and password.
 
         Args:
@@ -337,16 +350,15 @@ class RailwayVaultClient:
         Raises:
             Exception: If login fails (invalid credentials)
         """
-        url = f"{self.base_url}/v1/auth/login"
         payload = {
             "username": username,
             "password": password,
         }
 
-        response = self._request("POST", url, payload=payload)
+        response = self._request("POST", "/v1/auth/login", payload=payload)
         return response
 
-    def get_user_info(self) -> dict:
+    def get_user_info(self) -> dict[str, object]:
         """Get current authenticated user info.
 
         Returns:

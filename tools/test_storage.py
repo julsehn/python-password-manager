@@ -1,14 +1,20 @@
+from src import storage
 from src.password_manager import PasswordManager
-from src.storage import save_vault, load_vault, VAULT_FILENAME
 
-pm = PasswordManager()
-pm.add_entry("example.com", "alice", "s3cr3t", "compte de prova")
-master = "test_master_password"
 
-# Save
-save_vault(pm.get_entries(), master, VAULT_FILENAME)
-print("Guardat a:", VAULT_FILENAME)
+def test_vault_storage_round_trip(tmp_path, monkeypatch):
+    vault_path = tmp_path / "vault.json"
+    lockout_path = tmp_path / "lockout_state.json"
+    monkeypatch.setattr(storage, "LOCKOUT_STATE_FILENAME", str(lockout_path))
 
-# Load to verify
-entries = load_vault(master, VAULT_FILENAME)
-print("Loaded entries:", [e.to_dict() for e in entries])
+    manager = PasswordManager()
+    manager.add_entry("example.com", "alice", "test-entry-password", "smoke test")
+    storage.save_vault(manager.get_entries(), "test-master-password-123", str(vault_path))
+
+    loaded_entries = storage.load_vault("test-master-password-123", str(vault_path))
+
+    assert len(loaded_entries) == 1
+    assert loaded_entries[0].site == "https://example.com"
+    assert loaded_entries[0].username == "alice"
+    assert loaded_entries[0].password == "test-entry-password"
+    assert not lockout_path.exists()

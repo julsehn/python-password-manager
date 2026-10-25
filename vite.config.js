@@ -6,6 +6,6 @@ export default defineConfig({
     strictPort: true,
   },
   optimizeDeps: {
-    noDiscovery: true
-  }
+    noDiscovery: true,
+  },
 });

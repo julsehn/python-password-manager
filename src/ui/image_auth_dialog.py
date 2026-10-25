@@ -4,20 +4,17 @@ Users upload an image and click/draw on it to create their authentication patter
 The click coordinates become their password.
 """
 
-import os
-import json
 import base64
-from typing import Optional, List
+from typing import List
 
 from PyQt6.QtCore import Qt, QPointF, QRectF, pyqtSignal
-from PyQt6.QtGui import QPainter, QColor, QPen, QBrush, QPixmap, QMouseEvent
+from PyQt6.QtGui import QPainter, QColor, QPen, QPixmap
 from PyQt6.QtWidgets import (
     QDialog,
     QVBoxLayout,
     QHBoxLayout,
     QLabel,
     QPushButton,
-    QLineEdit,
     QFileDialog,
     QMessageBox,
     QWidget,
@@ -127,7 +124,9 @@ class ImageCanvas(QWidget):
             radius = 12
             painter.setPen(QPen(QColor("#3b82f6"), 2))
             painter.setBrush(QColor("#3b82f6"))
-            painter.drawEllipse(int(scaled_x - radius), int(scaled_y - radius), 2 * radius, 2 * radius)
+            painter.drawEllipse(
+                int(scaled_x - radius), int(scaled_y - radius), 2 * radius, 2 * radius
+            )
             painter.setPen(QColor("#ffffff"))
             painter.drawText(
                 QRectF(scaled_x - radius, scaled_y - radius, 2 * radius, 2 * radius),
@@ -155,10 +154,12 @@ class ImageCanvas(QWidget):
         image_y = pos.y() - offset_y
         if not (0 <= image_x <= scaled_pixmap.width() and 0 <= image_y <= scaled_pixmap.height()):
             return
-        self.click_points.append(QPointF(
-            image_x * 100 / scaled_pixmap.width(),
-            image_y * 100 / scaled_pixmap.height(),
-        ))
+        self.click_points.append(
+            QPointF(
+                image_x * 100 / scaled_pixmap.width(),
+                image_y * 100 / scaled_pixmap.height(),
+            )
+        )
         self._redraw()
         self.pointsChanged.emit()
 
@@ -251,10 +252,7 @@ class ImageAuthSetupDialog(QDialog):
     def _on_upload_image(self):
         """Open file dialog to upload an image."""
         file_path, _ = QFileDialog.getOpenFileName(
-            self,
-            "Puja imatge",
-            "",
-            "Images (*.jpg *.jpeg *.png *.gif)"
+            self, "Puja imatge", "", "Images (*.jpg *.jpeg *.png *.gif)"
         )
         if file_path:
             self.image_path = file_path
@@ -269,11 +267,7 @@ class ImageAuthSetupDialog(QDialog):
         points = self.canvas.get_points()
 
         if len(points) < 3:
-            QMessageBox.warning(
-                self,
-                "Error",
-                "Selecciona almenys 3 punts per al teu patró."
-            )
+            QMessageBox.warning(self, "Error", "Selecciona almenys 3 punts per al teu patró.")
             return
 
         if self.canvas.image_pixmap is None or not self.image_path:
@@ -282,6 +276,7 @@ class ImageAuthSetupDialog(QDialog):
 
         # Save pattern with image path and points
         import secrets
+
         salt = secrets.token_bytes(32)
         try:
             with open(self.image_path, "rb") as image_file:
@@ -292,18 +287,15 @@ class ImageAuthSetupDialog(QDialog):
 
         save_image_auth(
             image_b64=image_b64,
-            hotspots=[
-                {"x_pct": float(p.x()), "y_pct": float(p.y())}
-                for p in points
-            ],
-            salt=salt
+            hotspots=[{"x_pct": float(p.x()), "y_pct": float(p.y())} for p in points],
+            salt=salt,
         )
 
         QMessageBox.information(
             self,
             "Autenticació configurada!",
             "El teu patró s'ha guardat.\n\n"
-            "La pròxima vegada, fes clic en els mateixos punts per desbloquejar la caixa forta."
+            "La pròxima vegada, fes clic en els mateixos punts per desbloquejar la caixa forta.",
         )
         self.accept()
 
@@ -329,11 +321,7 @@ class ImageAuthLoginDialog(QDialog):
         self.auth_data = load_image_auth()
 
         if not self.auth_data:
-            QMessageBox.warning(
-                self,
-                "Error",
-                "No hi ha cap plantilla d'autenticació configurada."
-            )
+            QMessageBox.warning(self, "Error", "No hi ha cap plantilla d'autenticació configurada.")
             self.reject()
             return
 
@@ -410,9 +398,7 @@ class ImageAuthLoginDialog(QDialog):
 
         if not points:
             QMessageBox.warning(
-                self,
-                "Error",
-                "Selecciona els punts del teu patró abans de verificar."
+                self, "Error", "Selecciona els punts del teu patró abans de verificar."
             )
             return
 
@@ -420,11 +406,7 @@ class ImageAuthLoginDialog(QDialog):
         salt_b64 = self.auth_data.get("salt")
 
         if not stored_hotspots or not salt_b64:
-            QMessageBox.warning(
-                self,
-                "Error",
-                "No hi ha dades d'autenticació configurades."
-            )
+            QMessageBox.warning(self, "Error", "No hi ha dades d'autenticació configurades.")
             return
 
         # Convert base64-encoded salt to hex for verification
@@ -432,18 +414,11 @@ class ImageAuthLoginDialog(QDialog):
             salt_bytes = base64.b64decode(salt_b64)
             salt_hex = salt_bytes.hex()
         except Exception:
-            QMessageBox.warning(
-                self,
-                "Error",
-                "Error en la dades d'autentificació."
-            )
+            QMessageBox.warning(self, "Error", "Error en la dades d'autentificació.")
             return
 
         # Convert QPointF objects to dicts for verification
-        strokes = [
-            {"x_pct": float(p.x()), "y_pct": float(p.y())}
-            for p in points
-        ]
+        strokes = [{"x_pct": float(p.x()), "y_pct": float(p.y())} for p in points]
 
         # Verify pattern using storage's verification function
         if not verify_image_auth_pattern(strokes, stored_hotspots, salt_hex):
@@ -451,27 +426,25 @@ class ImageAuthLoginDialog(QDialog):
                 self,
                 "Patró incorrecte",
                 "El patró que has seleccionat no coincideix amb el patró d'autentificació original.\n\n"
-                "Si continua fallant, contacta amb el suport tècnic."
+                "Si continua fallant, contacta amb el suport tècnic.",
             )
             return
 
         # Generate the AES key from the pattern
         try:
             from src.encryption import generate_grid_password
+
             password_string = generate_grid_password(self.current_points)
             load_vault(password_string, VAULT_FILENAME)
 
             QMessageBox.information(
                 self,
                 "Accés correct!",
-                "El patró d'autentificació és correct.\n\n"
-                "Benvingut a la teva caixa forta."
+                "El patró d'autentificació és correct.\n\nBenvingut a la teva caixa forta.",
             )
             self.accept()
 
         except Exception as e:
             QMessageBox.warning(
-                self,
-                "Patró incorrecte",
-                f"No es pot desbloquejar la caixa forta.\n\n" + str(e)
+                self, "Patró incorrecte", "No es pot desbloquejar la caixa forta.\n\n" + str(e)
             )

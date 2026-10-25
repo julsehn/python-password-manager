@@ -19,29 +19,27 @@ import logging
 
 # Configure logging
 logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
 
 
 class SecureApp:
     """Application wrapper that manages secure server lifecycle."""
-    
+
     def __init__(self):
         self._server_thread = None
         self._master_password = None
-    
+
     def start_server(self, master_password: str):
         """Start the secure API server."""
         logger.info(f"Starting secure server on https://{HOST}:{PORT}")
-        
+
         self._server_thread = threading.Thread(
-            target=lambda: start_server(master_password),
-            daemon=True
+            target=lambda: start_server(master_password), daemon=True
         )
         self._server_thread.start()
-        
+
         # Wait for server to be ready
         max_attempts = 50
         for _ in range(max_attempts):
@@ -51,7 +49,7 @@ class SecureApp:
             time.sleep(0.5)
         else:
             logger.warning("Server may not be ready yet")
-    
+
     def stop_server(self):
         """Stop the secure API server."""
         logger.info("Stopping secure server...")
@@ -62,21 +60,21 @@ class SecureApp:
 def main():
     """Main entry point."""
     app = SecureApp()
-    
+
     # Create Qt application
     qt_app = QApplication(sys.argv)
     qt_app.setApplicationName("Caixa Forta")
     qt_app.setApplicationVersion("1.0.0")
-    
+
     # Create main window
     window = MainWindow()
-    
+
     # Connect to login signal to start server
     window.login_requested.connect(app.start_server)
-    
+
     # Show window
     window.show()
-    
+
     # Start event loop
     sys.exit(qt_app.exec())
 

@@ -12,10 +12,7 @@ import pytest
 
 
 HOST_SCRIPT = (
-    Path(__file__).resolve().parents[1]
-    / "browser-extension"
-    / "native"
-    / "caixa_forta_native.py"
+    Path(__file__).resolve().parents[1] / "browser-extension" / "native" / "caixa_forta_native.py"
 )
 TEST_EXTENSION_ID = "caixa_forta_manager"
 MESSAGE_TIMEOUT_SECONDS = 5

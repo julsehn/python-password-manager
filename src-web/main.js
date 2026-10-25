@@ -1,6 +1,11 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import {
+  normalizeImportedEntries,
+  normalizeImportedFolders,
+  parseCsv,
+} from "./importers.js";
+import {
   createIcons,
   Search,
   Plus,
@@ -147,7 +152,6 @@ const folderColors = [
 ];
 
 let autoLockTimer;
-let clipboardClearTimer;
 let paletteHideTimer;
 
 const savedSettings = (() => {
@@ -204,6 +208,9 @@ const state = {
   showCloudLogin: false,
   cloudLoading: false,
   cloudError: "",
+  cloudTab: "login",
+  cloudActionContext: "settings",
+  cloudShowAdvanced: false,
   formError: "",
   folderFormError: "",
   saving: false,
@@ -366,37 +373,6 @@ async function lockVault() {
   render();
 }
 
-// Lock screen check
-
-async function checkVaultLocked() {
-  try {
-    const info = await invoke("get_vault_info");
-    if (info.exists) {
-      try {
-        await invoke("unlock_vault", { masterPassword: "" });
-      } catch (error) {
-        return true;
-      }
-    }
-  } catch (error) {}
-  return false;
-}
-
-function cloudFormConfig() {
-  return {
-    provider: document.querySelector("#cloud-provider")?.value || "official",
-    railwayUrl: document.querySelector("#railway-url")?.value.trim() || "",
-    vaultId: document.querySelector("#railway-vault-id")?.value.trim() || "",
-    token: document.querySelector("#railway-token")?.value.trim() || "",
-    username: document.querySelector("#auth-username")?.value.trim() || "",
-    password: document.querySelector("#auth-password")?.value || "",
-    confirmPassword:
-      document.querySelector("#auth-confirm-password")?.value || "",
-    privacyAccepted:
-      document.querySelector("#privacy-accepted")?.checked || false,
-  };
-}
-
 async function initializeApp() {
   render();
   if (!isTauriRuntime()) return;
@@ -434,25 +410,170 @@ async function initializeApp() {
 
 function rustCloudConfig(config) {
   return {
-    provider: config.provider,
-    railway_url: config.railwayUrl,
-    vault_id: config.vaultId,
-    token: config.token,
+    railway_url: config.railwayUrl || "",
+    vault_id: config.vaultId || "",
+    token: config.token || "",
   };
 }
 
-async function saveCloudConfig(event) {
+async function cloudAuthSubmit(event) {
   event.preventDefault();
-  const config = cloudFormConfig();
-  state.cloudLoading = true;
   state.cloudError = "";
+
+  const username = document.querySelector("#auth-username")?.value.trim() || "";
+  const password = document.querySelector("#auth-password")?.value || "";
+  const customUrl = document.querySelector("#cloud-railway-url")?.value.trim() || "";
+  const customVaultId = document.querySelector("#cloud-vault-id")?.value.trim() || "";
+
+  if (!username) {
+    state.cloudError = "Introdueix el teu nom d'usuari de Railway.";
+    render();
+    return;
+  }
+  if (!password) {
+    state.cloudError = "Introdueix la contrasenya de Railway.";
+    render();
+    return;
+  }
+
+  const isRegister = state.cloudTab === "register";
+
+  if (isRegister) {
+    const confirmPassword = document.querySelector("#auth-confirm-password")?.value || "";
+    const privacyAccepted = document.querySelector("#privacy-accepted")?.checked || false;
+
+    if (password !== confirmPassword) {
+      state.cloudError = "Les contrasenyes no coincideixen.";
+      render();
+      return;
+    }
+    if (password.length < 8) {
+      state.cloudError = "La contrasenya de Railway ha de tenir almenys 8 caràcters.";
+      render();
+      return;
+    }
+    if (!privacyAccepted) {
+      state.cloudError = "Has d'acceptar la Política de Privacitat per registrar-te.";
+      render();
+      return;
+    }
+
+    state.cloudLoading = true;
+    render();
+
+    try {
+      const authData = await invoke("register_official_cloud", {
+        username,
+        password,
+        railwayUrl: customUrl || null,
+      });
+
+      const updatedConfig = {
+        ...state.cloudConfig,
+        provider: customUrl ? "custom" : "official",
+        railwayUrl: customUrl,
+        vaultId: customVaultId || authData.vault_id || "",
+        token: authData.access_token,
+        authUser: authData.username,
+      };
+
+      state.cloudConfig = updatedConfig;
+      localStorage.setItem("caixa-forta-cloud", JSON.stringify(updatedConfig));
+      await invoke("set_railway_sync_config", rustCloudConfig(updatedConfig));
+
+      if (!state.locked && state.masterPassword) {
+        try {
+          await invoke("sync_upload_vault", {
+            masterPassword: state.masterPassword,
+            config: rustCloudConfig(updatedConfig),
+          });
+          showToast("Compte creat i caixa forta sincronitzada a Railway!");
+        } catch {
+          showToast(`Compte creat com a ${authData.username} a Railway.`);
+        }
+      } else {
+        showToast(`Compte creat com a ${authData.username} a Railway.`);
+      }
+
+      state.showCloudLogin = false;
+    } catch (error) {
+      state.cloudError = String(error);
+    } finally {
+      state.cloudLoading = false;
+      render();
+    }
+    return;
+  }
+
+  // Handle Login
+  const isDownload = state.cloudActionContext === "download";
+  const masterPassword = document.querySelector("#auth-master-password")?.value || "";
+
+  if (isDownload && !masterPassword) {
+    state.cloudError = "Introdueix la contrasenya mestra de la caixa forta per desxifrar-la.";
+    render();
+    return;
+  }
+
+  state.cloudLoading = true;
   render();
+
   try {
-    await invoke("set_railway_sync_config", rustCloudConfig(config));
-    state.cloudConfig = config;
-    localStorage.setItem("caixa-forta-cloud", JSON.stringify(config));
-    state.showCloudLogin = false;
-    showToast("Connexió amb Railway desada.");
+    const authData = await invoke("auth_official_cloud", {
+      username,
+      password,
+      railwayUrl: customUrl || null,
+    });
+
+    const updatedConfig = {
+      ...state.cloudConfig,
+      provider: customUrl ? "custom" : "official",
+      railwayUrl: customUrl,
+      vaultId: customVaultId || authData.vault_id || "",
+      token: authData.access_token,
+      authUser: authData.username,
+    };
+
+    state.cloudConfig = updatedConfig;
+    localStorage.setItem("caixa-forta-cloud", JSON.stringify(updatedConfig));
+    await invoke("set_railway_sync_config", rustCloudConfig(updatedConfig));
+
+    if (isDownload) {
+      const serialized = await invoke("sync_download_vault", {
+        masterPassword,
+        config: rustCloudConfig(updatedConfig),
+      });
+
+      const vault = JSON.parse(serialized);
+      state.entries = (vault.entries || []).map((entry) => ({
+        ...entry,
+        folderId: entry.folder_id || null,
+        createdAt: entry.created_at,
+        updatedAt: entry.updated_at,
+      }));
+      state.folders = vault.folders || [];
+      state.trash = (vault.deleted_entries || []).map((entry) => ({
+        ...entry,
+        folderId: entry.folder_id || null,
+        createdAt: entry.created_at,
+        updatedAt: entry.updated_at,
+        deletedAt: entry.deleted_at,
+      }));
+      state.history = (vault.history || []).map((item) => ({
+        ...item,
+        type: item.kind,
+        createdAt: item.created_at,
+      }));
+      state.masterPassword = masterPassword;
+      state.vaultExists = true;
+      state.locked = false;
+      state.view = "vault";
+      state.showCloudLogin = false;
+      showToast("Caixa forta descarregada de Railway i oberta correctament!");
+    } else {
+      showToast(`Sessió iniciada a Railway com a ${authData.username}.`);
+      state.showCloudLogin = false;
+    }
   } catch (error) {
     state.cloudError = String(error);
   } finally {
@@ -461,28 +582,74 @@ async function saveCloudConfig(event) {
   }
 }
 
-async function downloadCloudVault() {
-  const config = cloudFormConfig();
+async function handleCloudSyncNow() {
+  if (!state.cloudConfig.token) {
+    state.showCloudLogin = true;
+    state.cloudActionContext = "settings";
+    render();
+    return;
+  }
 
-  if (config.provider === "official" && !state.cloudConfig.authUser) {
-    if (!state.locked) {
-      showToast("L'usuari no està autenticat. Autentica primer.");
-      return;
-    }
-    if (!confirm("La contrasenya mestra per obrir la caixa forta:")) return;
+  let pwd = state.masterPassword;
+  if (!pwd) {
+    try {
+      pwd = localStorage.getItem("caixa-forta-master-password");
+    } catch {}
+  }
+  if (!pwd) {
+    pwd = prompt("Introdueix la teva contrasenya mestra per sincronitzar:");
+    if (!pwd) return;
   }
 
   state.cloudLoading = true;
-  state.cloudError = "";
   render();
+
+  try {
+    const res = await invoke("sync_upload_vault", {
+      masterPassword: pwd,
+      config: rustCloudConfig(state.cloudConfig),
+    });
+    showToast(res.message || "Caixa forta pujada correctament a Railway!");
+  } catch (err) {
+    showToast(`Error de sincronització: ${err}`);
+  } finally {
+    state.cloudLoading = false;
+    render();
+  }
+}
+
+async function handleCloudDownloadNow() {
+  if (!state.cloudConfig.token) {
+    state.showCloudLogin = true;
+    state.cloudActionContext = "download";
+    render();
+    return;
+  }
+
+  let pwd = state.masterPassword;
+  if (!pwd) {
+    try {
+      pwd = localStorage.getItem("caixa-forta-master-password");
+    } catch {}
+  }
+  if (!pwd) {
+    pwd = prompt("Introdueix la contrasenya mestra per desxifrar la còpia de Railway:");
+    if (!pwd) return;
+  }
+
+  if (!confirm("Això sincronitzarà les dades locals amb la còpia de Railway. Vols continuar?")) {
+    return;
+  }
+
+  state.cloudLoading = true;
+  render();
+
   try {
     const serialized = await invoke("sync_download_vault", {
-      masterPassword: config.password,
-      config: rustCloudConfig(config),
+      masterPassword: pwd,
+      config: rustCloudConfig(state.cloudConfig),
     });
     const vault = JSON.parse(serialized);
-    state.cloudConfig = config;
-    localStorage.setItem("caixa-forta-cloud", JSON.stringify(config));
     state.entries = (vault.entries || []).map((entry) => ({
       ...entry,
       folderId: entry.folder_id || null,
@@ -502,120 +669,33 @@ async function downloadCloudVault() {
       type: item.kind,
       createdAt: item.created_at,
     }));
+    state.masterPassword = pwd;
+    state.vaultExists = true;
     state.locked = false;
-    state.showCloudLogin = false;
-    showToast("Vault descarregat del núvol.");
-  } catch (error) {
-    state.cloudError = String(error);
+    showToast("Caixa forta descarregada i sincronitzada de Railway!");
+  } catch (err) {
+    showToast(`Error en descarregar de Railway: ${err}`);
   } finally {
     state.cloudLoading = false;
     render();
   }
 }
 
-async function registerCloudVault() {
-  const config = cloudFormConfig();
-  if (config.password !== config.confirmPassword) {
-    state.cloudError = "Les contrasenyes no coincideixen.";
-    render();
+async function handleCloudLogout() {
+  if (!confirm("Vols tancar la sessió a Railway? Les teves dades locals es mantindran intactes.")) {
     return;
   }
-  if (config.password.length < 16) {
-    state.cloudError =
-      "La contrasenya mestra ha de tenir almenys 16 caràcters.";
-    render();
-    return;
-  }
-  if (!config.privacyAccepted) {
-    state.cloudError = "Has d'acceptar la Política de Privacitat.";
-    render();
-    return;
-  }
-
-  const masterPassword = config.password;
-  state.cloudLoading = true;
-  state.cloudError = "";
-  render();
+  state.cloudConfig = { railwayUrl: "", vaultId: "", token: "", authUser: "" };
+  localStorage.removeItem("caixa-forta-cloud");
   try {
-    if (config.provider === "official") {
-      await invoke("auth_official_cloud", {
-        username: config.username,
-        password: masterPassword,
-      });
-      state.cloudConfig.authUser = config.username;
-    } else {
-      await invoke("register_vault", {
-        masterPassword,
-        config: rustCloudConfig(config),
-      });
-    }
-    state.cloudConfig = config;
-    localStorage.setItem("caixa-forta-cloud", JSON.stringify(config));
-    state.showCloudLogin = false;
-    showToast(
-      config.provider === "official"
-        ? "Authenticació completada. Obre la caixa forta."
-        : "Vault creat al núvol.",
-    );
-  } catch (error) {
-    state.cloudError = String(error);
-  } finally {
-    state.cloudLoading = false;
-    render();
-  }
-}
-
-async function cloudAuthSubmit(event) {
-  event.preventDefault();
-  const config = cloudFormConfig();
-
-  if (config.password !== config.confirmPassword) {
-    state.cloudError = "Les contrasenyes no coincideixen.";
-    render();
-    return;
-  }
-  if (config.password.length < 16) {
-    state.cloudError =
-      "La contrasenya mestra ha de tenir almenys 16 caràcters.";
-    render();
-    return;
-  }
-  if (!config.privacyAccepted) {
-    state.cloudError = "Has d'acceptar la Política de Privacitat.";
-    render();
-    return;
-  }
-
-  state.cloudLoading = true;
-  state.cloudError = "";
+    await invoke("set_railway_sync_config", {
+      railway_url: "",
+      vault_id: "",
+      token: "",
+    });
+  } catch {}
+  showToast("Sessió tancada a Railway.");
   render();
-
-  try {
-    if (config.provider === "official") {
-      await invoke("auth_official_cloud", {
-        username: config.username,
-        password: config.password,
-      });
-      state.cloudConfig.authUser = config.username;
-      state.locked = false;
-    } else {
-      await invoke("set_railway_sync_config", rustCloudConfig(config));
-      state.cloudConfig = config;
-      localStorage.setItem("caixa-forta-cloud", JSON.stringify(config));
-    }
-
-    state.showCloudLogin = false;
-    showToast(
-      config.provider === "official"
-        ? "Autenticació completada. Obre la caixa forta."
-        : "Connexió amb Railway completada.",
-    );
-  } catch (error) {
-    state.cloudError = String(error);
-  } finally {
-    state.cloudLoading = false;
-    render();
-  }
 }
 
 function resetLocalVault() {
@@ -978,8 +1058,8 @@ function lockScreen() {
             ${state.loading ? "Desbloquejant..." : "Crear o desbloquejar la caixa forta"}
           </button>
         </form>
-        <button class="secondary full" id="open-cloud-login">
-          ${icon("Cloud", 17)} Descarregar des del núvol
+        <button class="secondary full" id="open-cloud-login" data-context="download">
+          ${icon("Cloud", 17)} Restaurar des del núvol (Railway)
         </button>
         <p class="security-note">
           ${icon("ShieldCheck", 15)} Xifratge local amb Argon2id i AES-256-GCM
@@ -1118,7 +1198,6 @@ function imageAuthSetupModal() {
 }
 
 function imageAuthUnlockModal() {
-  const persistedImage = localStorage.getItem("image_auth_image") || "";
   return `
     <div class="modal-backdrop image-auth-modal-backdrop">
       <section class="entry-modal image-auth-unlock-modal" role="dialog" aria-modal="true" aria-labelledby="image-auth-unlock-title">
@@ -1493,12 +1572,40 @@ function settingsScreen() {
         <section class="settings-section">
           <div class="settings-section-title">
             ${icon("Cloud", 19)}
-            <h2>Inici de sessió al núvol</h2>
+            <h2>Sincronització amb Railway</h2>
           </div>
-          <p class="helper">Connecta amb el teu vault de Railway per descarregar-lo o sincronitzar-lo.</p>
-          <button class="setting-action" id="open-cloud-login">
-            ${icon("Cloud", 18)} Configura Railway
-          </button>
+          ${state.cloudConfig.authUser ? `
+            <div class="cloud-status-card">
+              <div class="cloud-status-header">
+                <span class="cloud-badge">
+                  <span class="cloud-badge-dot"></span>
+                  Sessió activa a Railway com a <strong>${escapeHtml(state.cloudConfig.authUser)}</strong>
+                </span>
+                <span style="font-size: 0.75rem; color: var(--text-folder, #94a3b8); font-weight: 600;">
+                  ${state.cloudConfig.railwayUrl ? "Servidor propi" : "Núvol oficial"}
+                </span>
+              </div>
+              <p class="helper" style="margin-top: 8px;">
+                Còpia de seguretat xifrada al núvol oficial de Railway. El servidor només guarda les teves credencials i la caixa forta xifrada (AES-256-GCM).
+              </p>
+              <div class="cloud-actions-row">
+                <button type="button" class="primary" id="btn-cloud-sync-now" ${state.cloudLoading ? "disabled" : ""}>
+                  ${icon("RefreshCw", 16)} Sincronitzar ara
+                </button>
+                <button type="button" class="secondary" id="btn-cloud-download-now" ${state.cloudLoading ? "disabled" : ""}>
+                  ${icon("DownloadCloud", 16)} Descarregar del núvol
+                </button>
+                <button type="button" class="secondary danger" id="btn-cloud-logout">
+                  ${icon("LogOut", 16)} Tancar sessió
+                </button>
+              </div>
+            </div>
+          ` : `
+            <p class="helper">Connecta amb el núvol oficial de Railway per mantenir una còpia xifrada de la teva caixa forta i sincronitzar-la entre dispositius.</p>
+            <button class="setting-action" id="open-cloud-login" data-context="settings">
+              ${icon("Cloud", 18)} Iniciar sessió o crear compte a Railway
+            </button>
+          `}
         </section>
 
         <section class="settings-section">
@@ -1871,60 +1978,237 @@ function resetConfirmModal() {
 
 function cloudLoginModal() {
   const config = state.cloudConfig;
-  const isOfficial = config.provider === "official" || !config.provider;
+  const isDownloadContext = state.cloudActionContext === "download";
+  const activeTab = state.cloudTab || "login";
+  const isAuthenticated = Boolean(config.authUser && config.token);
+
+  if (isAuthenticated && !isDownloadContext) {
+    return `
+      <div class="modal-backdrop">
+        <section class="entry-modal" role="dialog" aria-modal="true" aria-labelledby="cloud-login-title">
+          <header class="modal-header">
+            <button class="modal-icon" id="cancel-cloud-login" title="Tancar">${icon("X", 20)}</button>
+            <div>
+              <h2 id="cloud-login-title">${icon("Cloud", 20)} Connexió amb Railway</h2>
+              <p class="modal-subtitle" style="font-size: 0.8125rem; color: var(--text-folder, #94a3b8); margin-top: 2px;">
+                Estat de la sincronització al núvol oficial
+              </p>
+            </div>
+          </header>
+          <div class="modal-scroll">
+            <div class="cloud-status-card">
+              <div class="cloud-status-header">
+                <span class="cloud-badge">
+                  <span class="cloud-badge-dot"></span>
+                  Sessió activa a Railway
+                </span>
+                <span style="font-size: 0.75rem; color: var(--text-folder, #94a3b8); font-weight: 600;">
+                  ${config.railwayUrl ? "Servidor personalitzat" : "Núvol oficial"}
+                </span>
+              </div>
+              <div class="cloud-user-meta" style="margin-top: 8px;">
+                <span><strong>Usuari:</strong> ${escapeHtml(config.authUser)}</span>
+                <span><strong>Identificador:</strong> ${config.vaultId ? escapeHtml(config.vaultId) : "Sincronitzat"}</span>
+              </div>
+            </div>
+
+            <div class="cloud-info-box">
+              ${icon("ShieldCheck", 18)}
+              <span>
+                <strong>Privacitat garantida:</strong> La caixa forta roman sempre xifrada amb AES-256-GCM. El servidor mai coneix la teva contrasenya mestra ni pot desxifrar les teves dades.
+              </span>
+            </div>
+
+            <div class="form-section" style="display: flex; flex-direction: column; gap: 10px; margin-top: 14px;">
+              <button type="button" class="primary full" id="btn-cloud-sync-modal" ${state.cloudLoading ? "disabled" : ""}>
+                ${icon("RefreshCw", 16)} Sincronitzar ara (Pujar canvis)
+              </button>
+              <button type="button" class="secondary full" id="btn-cloud-download-modal" ${state.cloudLoading ? "disabled" : ""}>
+                ${icon("DownloadCloud", 16)} Descarregar còpia del núvol
+              </button>
+              <button type="button" class="secondary full danger" id="btn-cloud-logout-modal">
+                ${icon("LogOut", 16)} Tancar sessió a Railway
+              </button>
+            </div>
+          </div>
+          <footer class="modal-footer">
+            <button type="button" class="secondary" id="cancel-cloud-login">Tancar</button>
+          </footer>
+        </section>
+      </div>
+    `;
+  }
+
   return `
     <div class="modal-backdrop">
       <section class="entry-modal" role="dialog" aria-modal="true" aria-labelledby="cloud-login-title">
         <header class="modal-header">
           <button class="modal-icon" id="cancel-cloud-login" title="Tancar">${icon("X", 20)}</button>
-          <h2 id="cloud-login-title">Autenticació al núvol</h2>
+          <div>
+            <h2 id="cloud-login-title">${icon("Cloud", 20)} Connexió amb Railway</h2>
+            <p class="modal-subtitle" style="font-size: 0.8125rem; color: var(--text-folder, #94a3b8); margin-top: 2px;">
+              ${isDownloadContext ? "Restaura la teva caixa forta des del núvol oficial" : "Sincronització segura al núvol de Railway"}
+            </p>
+          </div>
         </header>
+
         <form id="cloud-login-form">
           <div class="modal-scroll">
-            <!-- Cloud Provider Selection -->
-            <div class="form-section cloud-provider-section">
-              <label class="form-label">Proveïdor de núvol:</label>
-              <div class="input-group">
-                <select class="form-input" id="cloud-provider" name="provider" ${isOfficial ? 'disabled style="opacity: 0.5"' : ""}>
-                  <option value="official" ${isOfficial ? "selected" : ""}>Núvol oficial (recomanat)</option>
-                  <option value="custom" ${!isOfficial ? "selected" : ""}>Personalitzat (domini propi)</option>
-                </select>
-                ${!isOfficial ? '<span class="provider-hint">Introdueix el teu propi domini Railway</span>' : ""}
+            <!-- Tabs -->
+            <div class="cloud-tabs">
+              <button type="button" class="cloud-tab ${activeTab === "login" ? "active" : ""}" id="tab-cloud-login">
+                ${icon("LogIn", 16)} Iniciar sessió
+              </button>
+              <button type="button" class="cloud-tab ${activeTab === "register" ? "active" : ""}" id="tab-cloud-register">
+                ${icon("UserPlus", 16)} Crear compte
+              </button>
+            </div>
+
+            <!-- Zero-knowledge info box -->
+            <div class="cloud-info-box">
+              ${icon("ShieldCheck", 18)}
+              <span>
+                <strong>Privacitat d'extrem a extrem:</strong> La instància oficial de Railway només emmagatzema les credencials del compte i la teva caixa forta xifrada. El servidor no pot desxifrar ni llegir mai les teves contrasenyes.
+              </span>
+            </div>
+
+            ${state.cloudError ? `
+              <div class="cloud-error-banner">
+                ${icon("AlertCircle", 18)}
+                <span>${escapeHtml(state.cloudError)}</span>
               </div>
-              ${!isOfficial ? `<div class="provider-hint">El núvol oficial no requereix configuració extra</div>` : ""}
+            ` : ""}
+
+            <!-- Common Username -->
+            <div class="form-section">
+              <label class="form-label" for="auth-username">Nom d'usuari a Railway:</label>
+              <input
+                class="form-input"
+                id="auth-username"
+                name="username"
+                type="text"
+                required
+                minlength="3"
+                placeholder="Ex. joan"
+                value="${escapeHtml(state.cloudFormUsername || config.authUser || "")}"
+                autofocus
+              />
             </div>
-            
-            <!-- Username/Email -->
-            <div class="form-section auth-section">
-              <label class="form-label" for="auth-username">Usuari o correu electrònic:</label>
-              <input class="form-input" id="auth-username" name="username" type="text" required minlength="3" placeholder="E. g., joan.perez" ${isOfficial && !config.authUser ? "required" : ""} />
-              ${state.cloudError ? `<p class="error form-error">${escapeHtml(state.cloudError)}</p>` : ""}
-            </div>
-            
-            <!-- Master Password -->
-            <div class="form-section master-password-section">
-              <label class="form-label" for="auth-password">Contrasenya mestra:</label>
-              <input class="form-input" id="auth-password" name="password" type="password" required minlength="16" placeholder="Mínim 16 caràcters" />
-              <label class="form-label" for="auth-confirm-password">Confirma la contrasenya:</label>
-              <input class="form-input" id="auth-confirm-password" name="confirmPassword" type="password" required minlength="16" placeholder="Repeteix la contrasenya" />
-              <div class="privacy-note">
-                🔒 Les teves contrasenyes estan encriptades amb AES-256-GCM. El servidor només emmagatzema la versió encriptada.
+
+            <!-- Common Password -->
+            <div class="form-section">
+              <label class="form-label" for="auth-password">Contrasenya de Railway:</label>
+              <div class="password-input-wrapper" style="position: relative; display: flex; align-items: center;">
+                <input
+                  class="form-input"
+                  id="auth-password"
+                  name="password"
+                  type="password"
+                  required
+                  minlength="${activeTab === "register" ? "8" : "1"}"
+                  placeholder="${activeTab === "register" ? "Mínim 8 caràcters" : "La teva contrasenya de Railway"}"
+                  style="width: 100%; padding-right: 40px;"
+                />
+                <button type="button" class="reveal" id="reveal-cloud-password" title="Mostrar/Amagar" style="position: absolute; right: 10px; background: none; border: none; cursor: pointer; color: var(--text-folder);">
+                  ${icon("Eye", 16)}
+                </button>
               </div>
             </div>
-            
-            <!-- Privacy Policy -->
-            <div class="form-section privacy-section">
-              <label class="form-checkbox" for="privacy-accepted">
-                <input type="checkbox" id="privacy-accepted" name="privacyAccepted" required />
-                He llegit i accepto la <a href="PRIVACY_POLICY.md" target="_blank" class="policy-link">Política de Privacitat</a>
-              </label>
+
+            ${activeTab === "register" ? `
+              <!-- Register: Confirm Password -->
+              <div class="form-section">
+                <label class="form-label" for="auth-confirm-password">Confirma la contrasenya de Railway:</label>
+                <input
+                  class="form-input"
+                  id="auth-confirm-password"
+                  name="confirmPassword"
+                  type="password"
+                  required
+                  minlength="8"
+                  placeholder="Repeteix la contrasenya"
+                />
+              </div>
+
+              <!-- Register: Privacy Policy -->
+              <div class="form-section privacy-section" style="margin-top: 10px;">
+                <label class="form-checkbox" for="privacy-accepted" style="display: flex; align-items: center; gap: 8px; font-size: 0.8125rem; color: var(--text-folder); cursor: pointer;">
+                  <input type="checkbox" id="privacy-accepted" name="privacyAccepted" required />
+                  <span>He llegit i accepto la <a href="PRIVACY_POLICY.md" target="_blank" class="policy-link" style="color: var(--accent-primary, #3b82f6);">Política de Privacitat</a></span>
+                </label>
+              </div>
+            ` : ""}
+
+            ${isDownloadContext && activeTab === "login" ? `
+              <!-- Download context: Master Password -->
+              <div class="form-section master-password-section" style="margin-top: 14px; padding-top: 12px; border-top: 1px dashed var(--border-section);">
+                <label class="form-label" for="auth-master-password">
+                  ${icon("KeyRound", 14)} Contrasenya mestra de la caixa forta:
+                </label>
+                <input
+                  class="form-input"
+                  id="auth-master-password"
+                  name="masterPassword"
+                  type="password"
+                  placeholder="Contrasenya per desxifrar la caixa forta descarregada"
+                  required
+                />
+                <p class="helper" style="font-size: 0.75rem; color: var(--text-folder); margin-top: 4px;">
+                  Necessària per desxifrar la còpia de seguretat un cop descarregada de Railway.
+                </p>
+              </div>
+            ` : ""}
+
+            <!-- Advanced / Custom Server Toggle -->
+            <div style="margin-top: 14px;">
+              <button type="button" class="cloud-advanced-toggle" id="toggle-cloud-advanced">
+                ${icon(state.cloudShowAdvanced ? "ChevronDown" : "ChevronRight", 14)}
+                Opcions avançades (Servidor personalitzat)
+              </button>
+              ${state.cloudShowAdvanced ? `
+                <div class="cloud-advanced-panel">
+                  <div class="form-section">
+                    <label class="form-label" for="cloud-railway-url">URL del servidor Railway:</label>
+                    <input
+                      class="form-input"
+                      id="cloud-railway-url"
+                      name="railwayUrl"
+                      type="url"
+                      placeholder="https://password-manager-cloud-production.up.railway.app"
+                      value="${escapeHtml(config.railwayUrl || "")}"
+                    />
+                    <small class="helper" style="font-size: 0.75rem; color: var(--text-folder);">
+                      Deixa buit per defecte per utilitzar el servidor oficial de Railway.
+                    </small>
+                  </div>
+                  <div class="form-section" style="margin-top: 10px;">
+                    <label class="form-label" for="cloud-vault-id">Identificador de caixa forta (opcional):</label>
+                    <input
+                      class="form-input"
+                      id="cloud-vault-id"
+                      name="vaultId"
+                      type="text"
+                      placeholder="Assignat automàticament pel compte"
+                      value="${escapeHtml(config.vaultId || "")}"
+                    />
+                  </div>
+                </div>
+              ` : ""}
             </div>
           </div>
+
           <footer class="modal-footer">
             <button type="button" class="secondary" id="cancel-cloud-login">Cancel·la</button>
-            <button type="button" class="secondary" id="register-cloud-vault" ${state.cloudLoading ? "disabled" : ""}>Registra't</button>
-            <button type="button" class="secondary" id="download-cloud-vault" ${state.cloudLoading ? "disabled" : ""}>Connexió següent</button>
-            <button type="submit" class="primary" ${state.cloudLoading ? "disabled" : ""}>${state.cloudLoading ? "Autenticant..." : isOfficial ? "Autentica" : "Configura núvol"}</button>
+            <button type="submit" class="primary" ${state.cloudLoading ? "disabled" : ""}>
+              ${state.cloudLoading
+                ? `${icon("Loader", 16)} Processant...`
+                : activeTab === "register"
+                  ? `${icon("UserPlus", 16)} Crear compte a Railway`
+                  : isDownloadContext
+                    ? `${icon("DownloadCloud", 16)} Iniciar sessió i descarregar`
+                    : `${icon("LogIn", 16)} Iniciar sessió`
+              }
+            </button>
           </footer>
         </form>
       </section>
@@ -2573,147 +2857,6 @@ async function saveVault(masterPassword = null, syncToRailway = false) {
   }
 }
 
-function readImportValue(record, keys) {
-  for (const key of keys) {
-    const value = record?.[key];
-    if (typeof value === "string" && value.trim()) return value;
-  }
-  return "";
-}
-
-function parseCsv(text) {
-  const rows = [];
-  let row = [];
-  let field = "";
-  let quoted = false;
-  for (let index = 0; index < text.length; index += 1) {
-    const character = text[index];
-    if (character === '"') {
-      if (quoted && text[index + 1] === '"') {
-        field += '"';
-        index += 1;
-      } else {
-        quoted = !quoted;
-      }
-    } else if (!quoted && (character === "," || character === ";")) {
-      row.push(field);
-      field = "";
-    } else if (!quoted && (character === "\n" || character === "\r")) {
-      if (character === "\r" && text[index + 1] === "\n") index += 1;
-      row.push(field);
-      if (row.some((value) => value.trim())) rows.push(row);
-      row = [];
-      field = "";
-    } else {
-      field += character;
-    }
-  }
-  row.push(field);
-  if (row.some((value) => value.trim())) rows.push(row);
-  if (quoted) throw new Error("El CSV conté cometes sense tancar.");
-  if (rows.length < 2)
-    throw new Error("El CSV no conté cap accés per importar.");
-
-  const headers = rows.shift().map((header) =>
-    header
-      .trim()
-      .replace(/^\uFEFF/, "")
-      .toLowerCase(),
-  );
-  return rows.map((values) =>
-    Object.fromEntries(
-      headers.map((header, index) => [header, values[index] || ""]),
-    ),
-  );
-}
-
-function normalizeImportedEntries(records) {
-  if (!Array.isArray(records) || records.length > 10_000) {
-    throw new Error("El fitxer supera el límit de 10.000 accessos.");
-  }
-  const now = new Date().toISOString();
-  const ids = new Set();
-  let skipped = 0;
-  const entries = records.flatMap((record) => {
-    if (!record || typeof record !== "object") {
-      skipped += 1;
-      return [];
-    }
-    const login =
-      record.login && typeof record.login === "object" ? record.login : {};
-    const url = (
-      readImportValue(record, ["url", "website", "uri", "formactionorigin"]) ||
-      readImportValue(login, ["uri", "url"]) ||
-      String(login.uris?.[0]?.uri || "")
-    ).trim();
-    const password =
-      readImportValue(record, ["password", "pass"]) ||
-      readImportValue(login, ["password"]);
-    const site = (
-      readImportValue(record, ["site", "name", "title"]) ||
-      url ||
-      "Accés importat"
-    ).trim();
-    const username =
-      readImportValue(record, ["username", "user", "email", "login"]) ||
-      readImportValue(login, ["username"]);
-    const notes = readImportValue(record, ["notes", "note"]);
-    const savedNotes = url ? `URL: ${url}${notes ? `\n${notes}` : ""}` : notes;
-    if (
-      !password ||
-      site.length > 4_096 ||
-      username.length > 4_096 ||
-      password.length > 16_384 ||
-      savedNotes.length > 32_768 ||
-      url.length > 4_000
-    ) {
-      skipped += 1;
-      return [];
-    }
-    let id = readImportValue(record, ["id"]).trim();
-    if (!id || ids.has(id)) id = crypto.randomUUID();
-    ids.add(id);
-    return [
-      {
-        id,
-        site,
-        username,
-        password,
-        notes: savedNotes,
-        folderId: readImportValue(record, ["folderId", "folderid"]),
-        createdAt: readImportValue(record, ["createdat"]) || now,
-        updatedAt: readImportValue(record, ["updatedat"]) || now,
-      },
-    ];
-  });
-  if (!entries.length)
-    throw new Error("No s'ha trobat cap accés vàlid al fitxer.");
-  return { entries, skipped };
-}
-
-function normalizeImportedFolders(folders) {
-  if (!Array.isArray(folders)) return [];
-  const ids = new Set();
-  return folders
-    .flatMap((folder) => {
-      const id = String(folder?.id || "").trim();
-      const name = String(folder?.name || "").trim();
-      if (!id || !name || ids.has(id) || name.length > 80) return [];
-      ids.add(id);
-      return [
-        {
-          id,
-          name,
-          icon: folderIcons.includes(folder.icon) ? folder.icon : "Folder",
-          color: folderColors.includes(folder.color)
-            ? folder.color
-            : folderColors[0],
-        },
-      ];
-    })
-    .slice(0, 100);
-}
-
 async function persistImportedVault(
   entries,
   history,
@@ -2771,7 +2914,7 @@ async function importVault(event) {
         ? normalizeImportedEntries(data.trash).entries
         : [];
     const folders = !Array.isArray(data)
-      ? normalizeImportedFolders(data.folders)
+      ? normalizeImportedFolders(data.folders, folderIcons, folderColors)
       : [];
     const folderIds = new Set(folders.map((folder) => folder.id));
     entries.forEach((entry) => {
@@ -3964,13 +4107,11 @@ function bindEvents() {
   document.querySelectorAll("#open-cloud-login").forEach((button) =>
     button.addEventListener("click", () => {
       state.cloudError = "";
+      state.cloudActionContext = button.dataset.context || (state.locked ? "download" : "settings");
       state.showCloudLogin = true;
       render();
     }),
   );
-  document
-    .querySelector("#cloud-login-form")
-    ?.addEventListener("submit", cloudAuthSubmit);
   document.querySelectorAll("#cancel-cloud-login").forEach((button) =>
     button.addEventListener("click", () => {
       state.showCloudLogin = false;
@@ -3979,11 +4120,35 @@ function bindEvents() {
     }),
   );
   document
-    .querySelector("#download-cloud-vault")
-    ?.addEventListener("click", downloadCloudVault);
-  document
-    .querySelector("#register-cloud-vault")
-    ?.addEventListener("click", registerCloudVault);
+    .querySelector("#cloud-login-form")
+    ?.addEventListener("submit", cloudAuthSubmit);
+
+  document.querySelector("#tab-cloud-login")?.addEventListener("click", () => {
+    state.cloudTab = "login";
+    state.cloudError = "";
+    render();
+  });
+  document.querySelector("#tab-cloud-register")?.addEventListener("click", () => {
+    state.cloudTab = "register";
+    state.cloudError = "";
+    render();
+  });
+  document.querySelector("#toggle-cloud-advanced")?.addEventListener("click", () => {
+    state.cloudShowAdvanced = !state.cloudShowAdvanced;
+    render();
+  });
+  document.querySelector("#reveal-cloud-password")?.addEventListener("click", () => {
+    const input = document.querySelector("#auth-password");
+    if (input) input.type = input.type === "password" ? "text" : "password";
+  });
+
+  document.querySelector("#btn-cloud-sync-now")?.addEventListener("click", handleCloudSyncNow);
+  document.querySelector("#btn-cloud-download-now")?.addEventListener("click", handleCloudDownloadNow);
+  document.querySelector("#btn-cloud-logout")?.addEventListener("click", handleCloudLogout);
+
+  document.querySelector("#btn-cloud-sync-modal")?.addEventListener("click", handleCloudSyncNow);
+  document.querySelector("#btn-cloud-download-modal")?.addEventListener("click", handleCloudDownloadNow);
+  document.querySelector("#btn-cloud-logout-modal")?.addEventListener("click", handleCloudLogout);
   document
     .querySelector("#reset-vault")
     ?.addEventListener("click", resetLocalVault);

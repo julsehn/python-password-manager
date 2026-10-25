@@ -1,6 +1,7 @@
 # ✅ Guia Visual amb Fletxes - Implementació Final
 
 ## 🎯 Objectiu
+
 Crear una guia visual que aparegui **sobre la interfície existent** amb fletxes que apunten als botons reals per guiar l'usuari pas a pas en crear el seu primer accés.
 
 ## 📱 Implementació
@@ -88,10 +89,11 @@ He creat un nou diàleg d'overlay a `src/ui/overlay_guide.py` que:
 ## 📂 Arxius Modificats
 
 ### 1. `src/ui/overlay_guide.py` (NOU)
+
 ```python
 class OverlayGuideDialog(QDialog):
     """Overlay guide que es mostra sobre la UI existent."""
-    
+
     - _init_ui(): Crea l'overlay amb fons semi-transparent
     - _find_afegir_button(): Troba el botó real "Afegir accés"
     - _draw_arrow_to_button(): Dibuixa fletxa cap al botó
@@ -99,6 +101,7 @@ class OverlayGuideDialog(QDialog):
 ```
 
 ### 2. `src/ui/main_window.py`
+
 ```python
 # Import nou
 from src.ui.overlay_guide import OverlayGuideDialog
@@ -116,11 +119,13 @@ def _on_guide_complete(self):
 ## 🎨 Disseny Visual
 
 ### Colors:
+
 - **Blau (#2563eb)**: Elements principals, fletxes, botons actius
 - **Gris clar (#f1f5f9)**: Botons secundaris
 - **Blanc amb transparència (rgba)**: Fons de l'overlay
 
 ### Efectes:
+
 - **Ombra**: Per destacar l'overlay del fons
 - **Blur suau**: Per difuminar el fons
 - **Borda gruixuda**: Per delimitar clarament l'overlay
@@ -128,6 +133,7 @@ def _on_guide_complete(self):
 ## ✅ Resultat Final
 
 L'usuari veu:
+
 1. ✅ Una guia **sobre la interfície** (no un diàleg separat)
 2. ✅ **Fletxes visuals** que apunten als elements reals
 3. ✅ Instruccions clares en **català**
