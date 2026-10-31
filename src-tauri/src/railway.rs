@@ -249,19 +249,6 @@ pub async fn download_vault(
         .await
         .map_err(|e| format!("Error en interpretar la resposta del servidor: {}", e))?;
 
-    let home = std::env::var("HOME").ok();
-    let vault_path = home
-        .as_ref()
-        .map(|h| format!("{}/.password_manager/vault.json", h))
-        .unwrap_or_else(|| "./vault.json".to_string());
-
-    if let Some(parent) = std::path::Path::new(&vault_path).parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-
-    std::fs::write(&vault_path, vault_response.blob.clone())
-        .map_err(|e| format!("Error en desar la caixa forta localment: {}", e))?;
-
     Ok(vault_response.blob)
 }
 

@@ -824,14 +824,17 @@ async fn sync_upload_vault(
 async fn sync_download_vault(
     master_password: String,
     config: SyncConfig,
+    server_state: tauri::State<'_, Arc<ServerState>>,
 ) -> Result<String, String> {
     println!("Downloading vault from Railway: {}", config.vault_id);
 
     let blob = railway::download_vault(master_password.clone(), &config).await?;
 
+    // 1. Verify downloaded vault structure
     let vault_file: VaultFile = serde_json::from_str(&blob)
         .map_err(|e| format!("Failed to parse downloaded vault structure: {}", e))?;
 
+    // 2. Derive key with Argon2id and decrypt to verify integrity and master password
     let salt_bytes = security::decode_hex_or_base64(&vault_file.salt, "salt")?;
     let key = security::derive_key_from_password(&master_password, &salt_bytes)
         .map_err(|e| format!("Failed to derive key: {}", e))?;
@@ -847,9 +850,62 @@ async fn sync_download_vault(
             )
         })?;
 
+    // 3. Verify that decrypted content is valid VaultData
     let data: String = String::from_utf8_lossy(&decrypted).into();
     let vault_data: VaultData = serde_json::from_str(&data)
         .map_err(|e| format!("Failed to parse decrypted vault: {}", e))?;
+
+    // 4. Decryption and validation succeeded!
+    // Safely update the local vault file only now.
+    let vault_path = std::env::var("HOME")
+        .ok()
+        .map(|h| format!("{}/.password_manager/vault.json", h))
+        .unwrap_or_else(|| "./vault.json".to_string());
+
+    let vault_dir = std::path::Path::new(&vault_path)
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."));
+    std::fs::create_dir_all(vault_dir).map_err(|e| format!("Failed to create directory: {}", e))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(vault_dir, std::fs::Permissions::from_mode(0o700));
+    }
+
+    // 5. Create timestamped backup of the existing vault.json if present
+    if std::path::Path::new(&vault_path).exists() {
+        let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S");
+        let backup_path = format!("{}.{}.bak", vault_path, timestamp);
+        if let Ok(_) = std::fs::copy(&vault_path, &backup_path) {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = std::fs::set_permissions(&backup_path, std::fs::Permissions::from_mode(0o600));
+            }
+            println!("Created local vault backup before sync: {}", backup_path);
+        }
+    }
+
+    // 6. Write atomically via temporary file and atomic rename
+    let tmp_path = format!("{}.tmp.{}", vault_path, std::process::id());
+    std::fs::write(&tmp_path, &blob)
+        .map_err(|e| format!("Failed to write downloaded vault to temporary file: {}", e))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&tmp_path, std::fs::Permissions::from_mode(0o600));
+    }
+    std::fs::rename(&tmp_path, &vault_path)
+        .map_err(|e| format!("Failed to update local vault atomically: {}", e))?;
+
+    // 7. Update active in-memory session for autofill server
+    server_state.set_unlocked(
+        master_password.clone(),
+        vault_data.entries.clone(),
+        vault_data.folders.clone(),
+        vault_data.deleted_entries.clone(),
+        vault_data.history.clone(),
+    );
 
     serde_json::to_string(&vault_data).map_err(|e| format!("Failed to serialize vault: {}", e))
 }
@@ -1636,5 +1692,30 @@ mod image_grid_tests {
         values[0] = "AB12".to_string();
 
         assert!(validate_new_image_grid("data:image/png;base64,AA==", &values).is_err());
+    }
+}
+
+#[cfg(test)]
+mod sync_download_tests {
+    use super::*;
+
+    #[test]
+    fn invalid_downloaded_blob_fails_validation() {
+        let corrupt_blob = "not a valid json blob";
+        let parse_result = serde_json::from_str::<VaultFile>(corrupt_blob);
+        assert!(parse_result.is_err());
+    }
+
+    #[test]
+    fn downloaded_blob_with_wrong_password_fails_decryption() {
+        let salt = vec![1u8; 16];
+        let key = security::derive_key_from_password("correct_password", &salt).unwrap();
+        let nonce = security::generate_nonce().unwrap();
+        let payload = r#"{"entries":[],"folders":[],"deleted_entries":[],"history":[]}"#;
+        let ciphertext = security::encrypt_aes_gcm(&key, &nonce, payload.as_bytes()).unwrap();
+
+        let wrong_key = security::derive_key_from_password("wrong_password", &salt).unwrap();
+        let decrypt_result = security::decrypt_aes_gcm(&wrong_key, &nonce, &ciphertext);
+        assert!(decrypt_result.is_err(), "Decryption must fail when password does not match");
     }
 }
