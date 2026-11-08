@@ -581,19 +581,6 @@ fn generate_username(
 }
 
 #[tauri::command]
-#[allow(dead_code)]
-fn create_entry(
-    site: String,
-    username: String,
-    password: String,
-    notes: String,
-    folder_id: Option<String>,
-) -> Result<Entry, String> {
-    let _ = (site, username, password, notes, folder_id);
-    Err("This legacy command is disabled; save through the encrypted vault command".to_string())
-}
-
-#[tauri::command]
 fn update_entry(
     entry_id: String,
     site: String,
@@ -641,53 +628,6 @@ fn update_entry(
     );
 
     Ok(updated_entry)
-}
-
-#[tauri::command]
-#[allow(dead_code)]
-fn trash_entry(entry_id: String) -> Result<(), String> {
-    let _ = entry_id;
-    Err("This legacy command is disabled; save through the encrypted vault command".to_string())
-}
-
-#[tauri::command]
-#[allow(dead_code)]
-fn restore_entry(entry_id: String) -> Result<(), String> {
-    let _ = entry_id;
-    Err("This legacy command is disabled; save through the encrypted vault command".to_string())
-}
-
-#[tauri::command]
-#[allow(dead_code)]
-fn delete_entry_permanently(entry_id: String) -> Result<(), String> {
-    let _ = entry_id;
-    Err("This legacy command is disabled; save through the encrypted vault command".to_string())
-}
-
-#[tauri::command]
-#[allow(dead_code)]
-fn create_folder(name: String, icon: String, color: String) -> Result<Folder, String> {
-    let _ = (name, icon, color);
-    Err("This legacy command is disabled; save through the encrypted vault command".to_string())
-}
-
-#[tauri::command]
-#[allow(dead_code)]
-fn update_folder(
-    folder_id: String,
-    name: String,
-    icon: String,
-    color: String,
-) -> Result<Folder, String> {
-    let _ = (folder_id, name, icon, color);
-    Err("This legacy command is disabled; save through the encrypted vault command".to_string())
-}
-
-#[tauri::command]
-#[allow(dead_code)]
-fn delete_folder(folder_id: String) -> Result<(), String> {
-    let _ = folder_id;
-    Err("This legacy command is disabled; save through the encrypted vault command".to_string())
 }
 
 #[tauri::command]

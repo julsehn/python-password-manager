@@ -1,6 +1,7 @@
 # 📱 Guia Visual amb Fletxes - Pas a Pas
 
 ## 🎯 Objectiu
+
 Mostrar als usuaris novells com crear el seu primer accés amb **fletxes visuals** que indiquin clarament el flux de treball.
 
 ## ✅ Implementació
@@ -10,18 +11,20 @@ Mostrar als usuaris novells com crear el seu primer accés amb **fletxes visuals
 He creat un nou diàleg a `src/ui/tutorial_dialog.py` que mostra:
 
 #### 📊 Diagrama de Flux Visual
+
 ```
-┌─────────────────────────────────────────────┐
+┌─────┐
 │  🏁 Començar →                               │
 │  🌐 Omplir lloc web →                        │
 │  👤 Omplir usuari →                          │
 │  🔒 Omplir contrasenya →                     │
 │  ✨ Confirmar →                              │
 │  ✅ Finalitzar                               │
-└─────────────────────────────────────────────┘
+└─────┘
 ```
 
 #### 📍 Indicador de Posició Actual
+
 ```
 Pass 2 de 6: Lloc web
 Introdueix el lloc web (ex: google.com). Ves al següent pas amb la fletxa.
@@ -29,6 +32,7 @@ Introdueix el lloc web (ex: google.com). Ves al següent pas amb la fletxa.
 ```
 
 #### ⬅️ ➡️ Navegació amb Fletxes
+
 ```
 ◀ Anterior    Següent ▶
 ```
@@ -36,12 +40,14 @@ Introdueix el lloc web (ex: google.com). Ves al següent pas amb la fletxa.
 ## 🎨 Característiques Visuals
 
 ### Arrows (Fletxes) Show:
+
 1. **Diagrama de flux** amb emojis a cada pas
 2. **Fletxa de posició** (📍) que mostra on ets
 3. **Fletxes de navegació** (◀ ▶) per avançar/retrocedir
 4. **Fletxes indicadors** (→) que s'actualitzen amb cada pas
 
 ### Colors:
+
 - **Blau (#2563eb)**: Botons principals, elements actius
 - **Gris clar (#f1f5f9)**: Botons secundaris
 - **Verd (#16803c)**: Èxit
@@ -52,17 +58,17 @@ Introdueix el lloc web (ex: google.com). Ves al següent pas amb la fletxa.
 Quan l'usuari obre l'app per primera vegada:
 
 ```
-┌─────────────────────────────────────────────────┐
+┌─────────┐
 │  🎯 Crea el teu primer accés                    │
 │                                                  │
-│  ┌─────────────────────────────────────────┐   │
+│  ┌─┐   │
 │  │  🏁 Començar →                           │   │
 │  │  🌐 Omplir lloc web →                    │   │
 │  │  👤 Omplir usuari →                      │   │
 │  │  🔒 Omplir contrasenya →                 │   │
 │  │  ✨ Confirmar →                          │   │
 │  │  ✅ Finalitzar                           │   │
-│  └─────────────────────────────────────────┘   │
+│  └─┘   │
 │                                                  │
 │  Pass 1 de 6: Començar                          │
 │  Prèst atenció al diagrama de dalt amb les     │
@@ -71,13 +77,13 @@ Quan l'usuari obre l'app per primera vegada:
 │  🏁                                         │
 │                                                  │
 │  ◀ Anterior   Següent ▶                         │
-└─────────────────────────────────────────────────┘
+└─────────┘
 ```
 
 ## 🔄 Flux Complet
 
 ```
-┌──────────────────────────────────────────────────┐
+┌──────────┐
 │                                                  │
 │  1. L'usuari crea la caixa forta                 │
 │     ↓                                            │
@@ -91,7 +97,7 @@ Quan l'usuari obre l'app per primera vegada:
 │     ↓                                            │
 │  6. La entrada es guarda                         │
 │                                                  │
-└──────────────────────────────────────────────────┘
+└──────────┘
 ```
 
 ## 📂 Arxius Modificats
@@ -119,6 +125,7 @@ python3 main.py
 ## 🎯 Resultat Final
 
 L'usuari veu clarament:
+
 - ✅ **On és** en el procés (📍 Pass X de Y)
 - ✅ **Què ha de fer** (instruccions clares)
 - ✅ **Com avançar** (fletxes visibles ◀ ▶)

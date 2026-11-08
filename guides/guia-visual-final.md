@@ -18,25 +18,25 @@ He creat un nou diàleg d'overlay a `src/ui/overlay_guide.py` que:
 ### Característiques Clau:
 
 ```
-┌─────────────────────────────────────────────────┐
+┌─────────┐
 │  🎯 Comença!                                    │
 │  Prèst atenció al diagrama de dalt.             │
 │  Segueix les fletxes per avançar.               │
 │                                                  │
 │  📍 Pass 1 de 5                                 │
-│  ───────────────────────────────────────────    │
+│  ───    │
 │  [Barra de progrés]                            │
 │                                                  │
 │  👉 → → → → → →                                │
 │                                                  │
 │  [◀ Anterior]         [Següent ▶]              │
-└─────────────────────────────────────────────────┘
+└─────────┘
 ```
 
 ### Fletxes que apunten als botons reals:
 
 ```
-┌─────────────────────────────────────────────────┐
+┌─────────┐
 │                                                  │
 │  [Overlay Guide]                                │
 │    ↓                                             │
@@ -46,7 +46,7 @@ He creat un nou diàleg d'overlay a `src/ui/overlay_guide.py` que:
 │  │  Afegir accés   │ ← Botó real de la UI       │
 │  └─────────────────┘                            │
 │                                                  │
-└─────────────────────────────────────────────────┘
+└─────────┘
 ```
 
 ## 🔄 Flux d'Usuari
@@ -54,7 +54,7 @@ He creat un nou diàleg d'overlay a `src/ui/overlay_guide.py` que:
 ### Seqüència Completa:
 
 ```
-┌─────────────────────────────────────────────────┐
+┌─────────┐
 │                                                  │
 │  1. Executar app (python main.py)                │
 │     ↓                                            │
@@ -83,7 +83,7 @@ He creat un nou diàleg d'overlay a `src/ui/overlay_guide.py` que:
 │     ↓                                            │
 │ 11. Guarda l'entrada                             │
 │                                                  │
-└─────────────────────────────────────────────────┘
+└─────────┘
 ```
 
 ## 📂 Arxius Modificats

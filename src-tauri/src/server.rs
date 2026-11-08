@@ -48,7 +48,6 @@ pub struct PairingCode {
 
 pub struct ServerState {
     pub unlocked_data: Mutex<Option<UnlockedVault>>,
-    pub session_token: Mutex<Option<SessionToken>>, // legacy fallback slot
     pub client_sessions: Mutex<HashMap<String, SessionToken>>, // token -> SessionToken
     pub shared_secret: Mutex<String>,
     pub write_semaphore: Arc<tokio::sync::Semaphore>,
@@ -72,7 +71,6 @@ impl ServerState {
         let semaphore = Arc::new(tokio::sync::Semaphore::new(1));
         Self {
             unlocked_data: Mutex::new(None),
-            session_token: Mutex::new(None),
             client_sessions: Mutex::new(HashMap::new()),
             shared_secret: Mutex::new(secret),
             write_semaphore: semaphore,
@@ -111,8 +109,6 @@ impl ServerState {
     pub fn lock(&self) {
         let mut data = self.unlocked_data.lock().unwrap();
         *data = None;
-        let mut token = self.session_token.lock().unwrap();
-        *token = None;
         let mut sessions = self.client_sessions.lock().unwrap();
         sessions.clear();
         let mut auth = self.authorized_clients.lock().unwrap();
@@ -152,10 +148,7 @@ impl ServerState {
         let mut sessions = self.client_sessions.lock().unwrap();
         let now = Utc::now().timestamp();
         sessions.retain(|_, s| s.expires_at > now);
-        sessions.insert(token.clone(), st.clone());
-
-        let mut legacy = self.session_token.lock().unwrap();
-        *legacy = Some(st);
+        sessions.insert(token.clone(), st);
 
         token
     }
@@ -175,18 +168,6 @@ impl ServerState {
             }
         }
 
-        let legacy = self.session_token.lock().unwrap();
-        if let Some(st) = &*legacy {
-            if st.token == token_to_check && st.expires_at > now {
-                if let Some(ref cid) = st.client_id {
-                    let clients = load_paired_clients();
-                    if !clients.iter().any(|c| c.id == *cid) {
-                        return false;
-                    }
-                }
-                return true;
-            }
-        }
         false
     }
 
@@ -283,7 +264,7 @@ pub fn save_paired_clients(clients: &[PairedClient]) -> Result<(), String> {
     }
 }
 
-// ── ECDSA P-256 verification ────────────────────────────────────────────────
+// ── ECDSA P-256 verification ────────
 
 pub fn verify_ecdsa_p256_signature(
     public_key_hex: &str,
@@ -309,7 +290,7 @@ pub fn verify_ecdsa_p256_signature(
         .is_ok()
 }
 
-// ── Domain matching ──────────────────────────────────────────────────────────
+// ── Domain matching ──────────────────
 
 pub fn matches_domain(entry_site: &str, query_domain: &str) -> bool {
     let q = query_domain.trim().to_lowercase();
@@ -356,7 +337,7 @@ fn clean_host(input: &str) -> String {
     s.trim_start_matches("www.").to_string()
 }
 
-// ── Vault persistence helpers ────────────────────────────────────────────────
+// ── Vault persistence helpers ────────
 
 fn load_or_generate_secret() -> String {
     let secret_path = config_dir().join("extension_secret.key");
@@ -475,7 +456,7 @@ pub fn decrypt_vault_from_disk(master_password: &str) -> Result<VaultData, Strin
     Ok(vault_data)
 }
 
-// ── HTTP Server Implementation ───────────────────────────────────────────────
+// ── HTTP Server Implementation ───────
 
 pub async fn start_server(state: Arc<ServerState>, port: u16) -> Result<(), String> {
     let requested_addr = format!("127.0.0.1:{}", port);
@@ -676,7 +657,7 @@ pub async fn route_request(
         return (200, res.to_string());
     }
 
-    // ── 2. Vault status info ───────────────────────────────────────────────
+    // ── 2. Vault status info ───────
     if path == "/api/v1/vault-info" && method == "GET" {
         let unlocked = state.is_unlocked();
         let count = if unlocked { state.get_entry_count() } else { 0 };
@@ -689,7 +670,7 @@ pub async fn route_request(
         return (200, res.to_string());
     }
 
-    // ── 3. Device pairing (Phase 3) ────────────────────────────────────────
+    // ── 3. Device pairing (Phase 3) 
     if path == "/api/v1/pair" && method == "POST" {
         let parsed: serde_json::Value = match serde_json::from_str(body) {
             Ok(v) => v,
@@ -789,7 +770,7 @@ pub async fn route_request(
         return (200, res.to_string());
     }
 
-    // ── 4. Challenge generation (Phase 3) ──────────────────────────────────
+    // ── 4. Challenge generation (Phase 3) ───────
     if path == "/api/v1/challenge" && method == "GET" {
         let client_id = query
             .split('&')
@@ -963,7 +944,7 @@ pub async fn route_request(
         return (200, res.to_string());
     }
 
-    // ── 7. Desktop authentication route ────────────────────────────────────
+    // ── 7. Desktop authentication route ─────────
     if path == "/api/v1/auth" && method == "POST" {
         let parsed: serde_json::Value = match serde_json::from_str(body) {
             Ok(v) => v,
@@ -1057,7 +1038,7 @@ pub async fn route_request(
         return (200, res.to_string());
     }
 
-    // ── 8. Authenticated credential access ─────────────────────────────────
+    // ── 8. Authenticated credential access ──────
     let is_authenticated = check_request_auth(headers, state);
     if !is_authenticated {
         return (

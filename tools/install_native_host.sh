@@ -29,7 +29,7 @@ INSTALLED_HOST_PATH="$HOST_INSTALL_DIR/caixa_forta_native.sh"
 DEFAULT_CHROME_EXTENSION_ID="lcbgmkafanopplcefoapdfmhhjfoaamd"
 CHROME_EXTENSION_ID="${1:-${CHROME_EXTENSION_ID:-$DEFAULT_CHROME_EXTENSION_ID}}"
 
-# ── Copy host files ───────────────────────────────────────────────────────────
+# ── Copy host files ───────────────────
 chmod +x "$HOST_PATH"
 mkdir -p "$HOST_INSTALL_DIR"
 cp "$HOST_PATH" "$INSTALLED_HOST_PATH"
@@ -37,7 +37,7 @@ cp "$SCRIPT_DIR/browser-extension/native/caixa_forta_native.py" \
    "$HOST_INSTALL_DIR/caixa_forta_native.py"
 chmod +x "$INSTALLED_HOST_PATH" "$HOST_INSTALL_DIR/caixa_forta_native.py"
 
-# ── Firefox ──────────────────────────────────────────────────────────────────
+# ── Firefox ─
 # macOS (stable + Developer Edition): ~/Library/Application Support/Mozilla/NativeMessagingHosts/
 # The path "$HOME/Library/Application Support/Firefox/NativeMessagingHosts/" is
 # NOT read by any current Firefox release on macOS; only the Mozilla path is.
@@ -55,7 +55,7 @@ cat > "$FF_DIR/caixa_forta.json" << EOF
 }
 EOF
 
-# ── Chrome ────────────────────────────────────────────────────────────────────
+# ── Chrome ─
 CHROME_DIR="$HOME/Library/Application Support/Google/Chrome/NativeMessagingHosts"
 mkdir -p "$CHROME_DIR"
 cat > "$CHROME_DIR/caixa_forta.json" << EOF

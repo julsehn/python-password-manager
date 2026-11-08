@@ -19,19 +19,19 @@ He creat un nou diàleg d'overlay a `src/ui/overlay_guide.py` que:
 ### Característiques Clau:
 
 ```
-┌─────────────────────────────────────────────────┐
+┌─────────┐
 │  🎯 Comença!                                    │
 │  Prèst atenció al diagrama de dalt.             │
 │  Segueix les fletxes per avançar.               │
 │                                                  │
 │  📍 Pass 1 de 5                                 │
-│  ───────────────────────────────────────────    │
+│  ───    │
 │  [Barra de progrés]                            │
 │                                                  │
 │  👉 → → → → → →                                │
 │                                                  │
 │  [◀ Anterior]         [Següent ▶]              │
-└─────────────────────────────────────────────────┘
+└─────────┘
 ```
 
 ### Detecció del Botó "Afegir accés":
@@ -43,7 +43,7 @@ El guide busca automàticament el botó "Afegir accés" amb aquesta prioritat:
 3. Si encara no troba, pren el primer botó disponible
 
 ```
-┌─────────────────────────────────────────────────┐
+┌─────────┐
 │                                                  │
 │  [Overlay Guide]                                │
 │    ↓                                             │
@@ -53,7 +53,7 @@ El guide busca automàticament el botó "Afegir accés" amb aquesta prioritat:
 │  │  Afegir accés   │ ← Botó real de la UI       │
 │  └─────────────────┘                            │
 │                                                  │
-└─────────────────────────────────────────────────┘
+└─────────┘
 ```
 
 ## 🔄 Flux d'Usuari
@@ -61,7 +61,7 @@ El guide busca automàticament el botó "Afegir accés" amb aquesta prioritat:
 ### Seqüència Completa:
 
 ```
-┌─────────────────────────────────────────────────┐
+┌─────────┐
 │                                                  │
 │  1. Executar app (python main.py)                │
 │     ↓                                            │
@@ -91,7 +91,7 @@ El guide busca automàticament el botó "Afegir accés" amb aquesta prioritat:
 │     ↓                                            │
 │ 11. Guarda l'entrada                             │
 │                                                  │
-└─────────────────────────────────────────────────┘
+└─────────┘
 ```
 
 ## 📂 Arxius Modificats

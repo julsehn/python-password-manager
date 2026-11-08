@@ -108,7 +108,7 @@ def probe(host_script: Path, argv_origin: str, setup_registry: bool) -> bool:
 
         ok = True
         try:
-            # ── Probe 1: ping ─────────────────────────────────────────────
+            # ── Probe 1: ping ─────
             print("\n[probe] action=ping")
             send_msg(proc, {"action": "ping", "extension_id": "caixa_forta_manager"})
             r = recv_msg(proc)
@@ -121,7 +121,7 @@ def probe(host_script: Path, argv_origin: str, setup_registry: bool) -> bool:
             else:
                 print(f"       ⚠️  unexpected: {r}")
 
-            # ── Probe 2: getVaultInfo ─────────────────────────────────────
+            # ── Probe 2: getVaultInfo ──────────
             print("\n[probe] action=getVaultInfo")
             send_msg(proc, {"action": "getVaultInfo", "extension_id": "caixa_forta_manager"})
             r = recv_msg(proc)
@@ -134,7 +134,7 @@ def probe(host_script: Path, argv_origin: str, setup_registry: bool) -> bool:
             else:
                 print(f"       ℹ️  {r.get('error','no error field')}")
 
-            # ── Probe 3: fetchCredentials ─────────────────────────────────
+            # ── Probe 3: fetchCredentials ──────
             print("\n[probe] action=fetchCredentials")
             send_msg(
                 proc,
@@ -177,7 +177,7 @@ def probe(host_script: Path, argv_origin: str, setup_registry: bool) -> bool:
 
 def check_extension_id_mismatch() -> None:
     """F1: compare the ID derived from the key in manifest.json vs chrome manifest."""
-    print("\n── F1: Extension ID Mismatch Check ─────────────────────────────")
+    print("\n── F1: Extension ID Mismatch Check ──")
     chrome_manifest = ROOT / "browser-extension" / "manifest.chrome.json"
     root_manifest = ROOT / "browser-extension" / "manifest.json"
 
@@ -207,7 +207,7 @@ def check_extension_id_mismatch() -> None:
 
 def check_f7_handshake() -> None:
     """F7: describe curl command for unauthenticated handshake (cannot run without network)."""
-    print("\n── F7: Unauthenticated /handshake ───────────────────────────────")
+    print("\n── F7: Unauthenticated /handshake ────")
     print("  To confirm F7, run against a live app:")
     print("  curl -s http://127.0.0.1:8080/api/v1/handshake")
     print("  Expected (vulnerable): returns shared_secret + token with no auth.")

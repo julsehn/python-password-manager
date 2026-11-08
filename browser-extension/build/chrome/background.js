@@ -8,12 +8,10 @@
 //  - Added per-request timeout (10 s) with automatic port reconnect.
 //  - getActiveTab now uses the Promise form (async/await) so it works in both
 //    Firefox (Promise-based browser.*) and Chrome (callback-based chrome.*).
-//  - unlockVault is kept in the background script for Phase 1 compatibility;
-//    Phase 2 will remove it and move unlock to the desktop app UI only.
 
 const browser = globalThis.browser ?? globalThis.chrome;
 
-// ── Native port management ────────────────────────────────────────────────────
+// ── Native port management 
 
 let nativePort = null;
 // Map from request_id → { resolve, reject, timeoutId }
@@ -65,7 +63,7 @@ function connectToNative() {
   }
 }
 
-// ── Send a message to the native host ────────────────────────────────────────
+// ── Send a message to the native host 
 
 async function sendNativeMessage(action, payload = {}) {
   if (!nativePort) {
@@ -219,16 +217,10 @@ async function sendToNative(action, payload = {}) {
   return sendNativeMessage(action, payload);
 }
 
-// ── Public vault actions ──────────────────────────────────────────────────────
+// ── Public vault actions ──────────────
 
 async function getVaultInfo() {
   return sendToNative("getVaultInfo");
-}
-
-// NOTE (Phase 2): unlockVault will be removed. The popup will show
-// "Desbloqueja a l'aplicació" and poll getVaultInfo instead.
-async function unlockVault(masterPassword) {
-  return sendToNative("unlockVault", { masterPassword });
 }
 
 async function lockVault() {
@@ -251,7 +243,7 @@ async function generatePassword(options = {}) {
   return sendToNative("generatePassword", { options });
 }
 
-// ── Message router (popup / content scripts) ──────────────────────────────────
+// ── Message router (popup / content scripts) ───────
 
 browser.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === "pairBrowser") {
@@ -266,16 +258,6 @@ browser.runtime.onMessage.addListener((request, sender, sendResponse) => {
       .then(sendResponse)
       .catch((error) => {
         console.error("[caixa] getVaultInfo error:", error);
-        sendResponse({ success: false, error: error.message });
-      });
-    return true;
-  }
-
-  if (request.action === "unlockVault") {
-    unlockVault(request.masterPassword)
-      .then(sendResponse)
-      .catch((error) => {
-        console.error("[caixa] unlockVault error:", error);
         sendResponse({ success: false, error: error.message });
       });
     return true;
@@ -360,7 +342,7 @@ browser.runtime.onMessage.addListener((request, sender, sendResponse) => {
   return false;
 });
 
-// ── Context menus ─────────────────────────────────────────────────────────────
+// ── Context menus 
 
 browser.runtime.onInstalled.addListener(() => {
   try {

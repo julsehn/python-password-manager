@@ -3,16 +3,20 @@
 ## Problemes Detectats i Solucionats
 
 ### 1️⃣ Problema: La guia no apareixia a l'app
+
 **Causa:** El codi feia referència a `FirstTimeGuideDialog` en lloc de `StepByStepGuideDialog`
 
 **Solució:**
+
 - Actualitzat la referència a `StepByStepGuideDialog` en `_initialize_new_vault()` (línia 364)
 - Afecta quan es crea una nova caixa forta per primera vegada
 
 ### 2️⃣ Problema: Els usuaris havien de reintroduir la contrasenya
+
 **Causa:** Quan l'usuari feia clic a "Afegir accés" després de la guia, el codi mostrava la guia de nou i intentava autenticar, però l'usuari ja estava autenticat
 
 **Solució:**
+
 - Afegit un flag `_showed_first_time_guide` per recordar si la guia ja s'ha mostrat
 - Actualitzat `on_add()` per no mostrar la guia si ja s'ha mostrat abans
 - La guia només es mostra una vegada quan la caixa forta està buida
@@ -22,11 +26,13 @@
 ### `src/ui/main_window.py`
 
 #### 1. Nou atribut a `__init__`:
+
 ```python
 self._showed_first_time_guide = False
 ```
 
 #### 2. Actualitzat `_initialize_new_vault()`:
+
 ```python
 # Show first-time guide with arrow navigation
 guide_dialog = StepByStepGuideDialog(self)
@@ -35,6 +41,7 @@ self._showed_first_time_guide = True  # ← Nou: marcar que la guia s'ha mostrat
 ```
 
 #### 3. Actualitzat `on_add()`:
+
 ```python
 # Show guide if vault is empty AND guide hasn't been shown yet (first-time user)
 if not self.manager.get_entries() and not self._showed_first_time_guide:
@@ -48,6 +55,7 @@ if not self.manager.get_entries() and not self._showed_first_time_guide:
 ```
 
 #### 4. Actualitzat `_on_delete_all_data()`:
+
 ```python
 self._showed_first_time_guide = False  # ← Nou: resetejar quan es borren les dades
 ```
@@ -55,13 +63,14 @@ self._showed_first_time_guide = False  # ← Nou: resetejar quan es borren les d
 ### `src/ui/tutorial_dialog.py`
 
 Ja existent amb les classes:
+
 - `FirstTimeGuideDialog`: Guia bàsica
 - `StepByStepGuideDialog`: Guia detallada amb diagrama de flux
 
 ## 🔄 Flux Correcte Ara
 
 ```
-┌─────────────────────────────────────────────────┐
+┌─────────┐
 │  1. L'usuari executa python main.py             │
 │     ↓                                            │
 │  2. Crea una nova caixa forta                   │
@@ -81,12 +90,13 @@ Ja existent amb les classes:
 │  9. L'usuari omple les dades                    │
 │     ↓                                            │
 │ 10. La entrada es guarda                        │
-└─────────────────────────────────────────────────┘
+└─────────┘
 ```
 
 ## ✅ Resultat
 
 Ara l'experiència de l'usuari és:
+
 1. ✅ La guia visual amb fletxes **sí que apareix**
 2. ✅ No cal reintroduir la contrasenya
 3. ✅ La guia només es mostra **una vegada**

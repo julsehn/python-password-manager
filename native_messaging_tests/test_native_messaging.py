@@ -30,7 +30,7 @@ HOST_SCRIPT = (
 MESSAGE_TIMEOUT_SECONDS = 5
 
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
+# ── Helpers 
 
 
 def send_message(process: subprocess.Popen, message: dict) -> None:
@@ -75,7 +75,7 @@ def _terminate(process: subprocess.Popen) -> None:
                 pass
 
 
-# ── Fixtures ──────────────────────────────────────────────────────────────────
+# ── Fixtures ─
 
 
 @pytest.fixture
@@ -104,7 +104,7 @@ def host_process(host_dir, monkeypatch):
         _terminate(proc)
 
 
-# ── Tests ─────────────────────────────────────────────────────────────────────
+# ── Tests ──
 
 
 class TestBasicProtocol:

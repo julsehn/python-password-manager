@@ -8,12 +8,10 @@
 //  - Added per-request timeout (10 s) with automatic port reconnect.
 //  - getActiveTab now uses the Promise form (async/await) so it works in both
 //    Firefox (Promise-based browser.*) and Chrome (callback-based chrome.*).
-//  - unlockVault is kept in the background script for Phase 1 compatibility;
-//    Phase 2 will remove it and move unlock to the desktop app UI only.
 
 const browser = globalThis.browser ?? globalThis.chrome;
 
-// ── Native port management ────────────────────────────────────────────────────
+// ── Native port management
 
 let nativePort = null;
 // Map from request_id → { resolve, reject, timeoutId }
@@ -65,7 +63,7 @@ function connectToNative() {
   }
 }
 
-// ── Send a message to the native host ────────────────────────────────────────
+// ── Send a message to the native host
 
 async function sendNativeMessage(action, payload = {}) {
   if (!nativePort) {
@@ -90,7 +88,9 @@ async function sendNativeMessage(action, payload = {}) {
         pendingRequests.delete(id);
         // Disconnect so next call gets a fresh port
         if (nativePort) {
-          try { nativePort.disconnect(); } catch (_) {}
+          try {
+            nativePort.disconnect();
+          } catch (_) {}
           nativePort = null;
         }
         reject(new Error(`Native host timeout for action "${action}"`));
@@ -116,7 +116,11 @@ function bytesToHex(bytes) {
 }
 
 function hexToBytes(hex) {
-  if (typeof hex !== "string" || hex.length % 2 !== 0 || !/^[0-9a-f]+$/i.test(hex)) {
+  if (
+    typeof hex !== "string" ||
+    hex.length % 2 !== 0 ||
+    !/^[0-9a-f]+$/i.test(hex)
+  ) {
     throw new Error("La clau o el repte del navegador no és vàlid");
   }
   return Uint8Array.from(hex.match(/.{2}/g), (byte) => parseInt(byte, 16));
@@ -125,7 +129,9 @@ function hexToBytes(hex) {
 async function pairBrowser(code) {
   const normalizedCode = String(code || "").replace(/\D/g, "");
   if (!/^\d{6}$/.test(normalizedCode)) {
-    throw new Error("Introdueix el codi de sis xifres que mostra l'app Caixa Forta");
+    throw new Error(
+      "Introdueix el codi de sis xifres que mostra l'app Caixa Forta",
+    );
   }
 
   const keyPair = await crypto.subtle.generateKey(
@@ -133,13 +139,18 @@ async function pairBrowser(code) {
     true,
     ["sign", "verify"],
   );
-  const publicKey = bytesToHex(await crypto.subtle.exportKey("raw", keyPair.publicKey));
-  const privateKey = bytesToHex(await crypto.subtle.exportKey("pkcs8", keyPair.privateKey));
+  const publicKey = bytesToHex(
+    await crypto.subtle.exportKey("raw", keyPair.publicKey),
+  );
+  const privateKey = bytesToHex(
+    await crypto.subtle.exportKey("pkcs8", keyPair.privateKey),
+  );
 
   let browserName = "Browser";
   if (browser.runtime.getBrowserInfo) {
     try {
-      browserName = (await browser.runtime.getBrowserInfo()).name || browserName;
+      browserName =
+        (await browser.runtime.getBrowserInfo()).name || browserName;
     } catch (_) {}
   } else if (globalThis.navigator?.userAgent?.includes("Chrome")) {
     browserName = "Chrome";
@@ -162,20 +173,25 @@ async function pairBrowser(code) {
 async function authenticatePairedBrowser() {
   if (browserAuthPromise) return browserAuthPromise;
   browserAuthPromise = (async () => {
-    const { caixa_browser_client_id: clientId, caixa_browser_private_key: privateKeyHex } =
-      await browser.storage.local.get([
-        "caixa_browser_client_id",
-        "caixa_browser_private_key",
-      ]);
+    const {
+      caixa_browser_client_id: clientId,
+      caixa_browser_private_key: privateKeyHex,
+    } = await browser.storage.local.get([
+      "caixa_browser_client_id",
+      "caixa_browser_private_key",
+    ]);
 
     if (!clientId || !privateKeyHex) {
-      throw new Error("Aquest navegador no està vinculat. Vincula'l des dels Ajustos.");
+      throw new Error(
+        "Aquest navegador no està vinculat. Vincula'l des dels Ajustos.",
+      );
     }
 
     const challenge = await sendNativeMessage("getBrowserChallenge", {
       client_id: clientId,
     });
-    if (!challenge.nonce) throw new Error("No s'ha rebut el repte de vinculació");
+    if (!challenge.nonce)
+      throw new Error("No s'ha rebut el repte de vinculació");
 
     const signingKey = await crypto.subtle.importKey(
       "pkcs8",
@@ -213,22 +229,23 @@ async function authenticatePairedBrowser() {
 }
 
 async function sendToNative(action, payload = {}) {
-  if (["listCredentials", "fetchCredentials", "saveCredentials", "lockVault"].includes(action)) {
+  if (
+    [
+      "listCredentials",
+      "fetchCredentials",
+      "saveCredentials",
+      "lockVault",
+    ].includes(action)
+  ) {
     await authenticatePairedBrowser();
   }
   return sendNativeMessage(action, payload);
 }
 
-// ── Public vault actions ──────────────────────────────────────────────────────
+// ── Public vault actions ──────────────
 
 async function getVaultInfo() {
   return sendToNative("getVaultInfo");
-}
-
-// NOTE (Phase 2): unlockVault will be removed. The popup will show
-// "Desbloqueja a l'aplicació" and poll getVaultInfo instead.
-async function unlockVault(masterPassword) {
-  return sendToNative("unlockVault", { masterPassword });
 }
 
 async function lockVault() {
@@ -251,7 +268,7 @@ async function generatePassword(options = {}) {
   return sendToNative("generatePassword", { options });
 }
 
-// ── Message router (popup / content scripts) ──────────────────────────────────
+// ── Message router (popup / content scripts) ───────
 
 browser.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === "pairBrowser") {
@@ -266,16 +283,6 @@ browser.runtime.onMessage.addListener((request, sender, sendResponse) => {
       .then(sendResponse)
       .catch((error) => {
         console.error("[caixa] getVaultInfo error:", error);
-        sendResponse({ success: false, error: error.message });
-      });
-    return true;
-  }
-
-  if (request.action === "unlockVault") {
-    unlockVault(request.masterPassword)
-      .then(sendResponse)
-      .catch((error) => {
-        console.error("[caixa] unlockVault error:", error);
         sendResponse({ success: false, error: error.message });
       });
     return true;
@@ -360,7 +367,7 @@ browser.runtime.onMessage.addListener((request, sender, sendResponse) => {
   return false;
 });
 
-// ── Context menus ─────────────────────────────────────────────────────────────
+// ── Context menus
 
 browser.runtime.onInstalled.addListener(() => {
   try {

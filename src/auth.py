@@ -8,8 +8,7 @@ import json
 from typing import Optional, Tuple
 from pathlib import Path
 from collections.abc import Mapping
-from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+from argon2.low_level import Type, hash_secret_raw
 import os
 from typing import TypedDict
 
@@ -40,15 +39,17 @@ def _load_secret(path: Path) -> bytes:
 
 
 def _derive_key_from_secret(secret: bytes) -> bytes:
-    """Derive a 32-byte key from secret using PBKDF2."""
+    """Derive a 32-byte key from secret using Argon2id."""
     salt = b"jwt_derivation_salt_v1"
-    kdf = PBKDF2HMAC(
-        algorithm=hashes.SHA256(),
-        length=32,
+    return hash_secret_raw(
+        secret=secret,
         salt=salt,
-        iterations=100_000,
+        time_cost=2,
+        memory_cost=19 * 1024,
+        parallelism=1,
+        hash_len=32,
+        type=Type.ID,
     )
-    return kdf.derive(secret)
 
 
 def generate_jwt_token(user_id: str, vault_unlocked: bool = True) -> str:
