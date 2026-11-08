@@ -25,6 +25,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from pathlib import Path
 from typing import Any, Dict, NoReturn, Optional
 
 # ── Allowed launcher origin ───────────────────────────────────────────────────
@@ -38,8 +39,19 @@ ALLOWED_FIREFOX_ID = "caixa-forta@juls.com"
 # ── Constants ─────────────────────────────────────────────────────────────────
 MAX_MESSAGE_SIZE = 1024 * 1024  # 1 MB
 VAULT_DIR: str = os.path.expanduser("~/.password_manager")
-VAULT_PATH: str = os.path.join(VAULT_DIR, "vault.json")
-APP_API_BASE = "http://127.0.0.1:8080/api/v1"
+VAULT_PATH: str = os.path.abspath(
+    os.path.expanduser(os.environ.get("VAULT_PATH", os.path.join(VAULT_DIR, "vault.json")))
+)
+def _read_app_port() -> int:
+    try:
+        port = int((Path(VAULT_DIR) / "extension_port").read_text(encoding="ascii").strip())
+        return port if 1 <= port <= 65535 else 8080
+    except (OSError, ValueError):
+        return 8080
+
+
+APP_PORT = _read_app_port()
+APP_API_BASE = f"http://127.0.0.1:{APP_PORT}/api/v1"
 APP_TOKEN: Optional[str] = None
 
 DEBUG_MODE: bool = "--debug" in sys.argv or "-d" in sys.argv
@@ -176,20 +188,20 @@ def app_request(
     timeout: int = 5,
 ) -> Dict[str, Any]:
     """Call the desktop app's loopback API and return its JSON response."""
-    url: str = f"{APP_API_BASE}{endpoint}"
+    port = _read_app_port()
+    url: str = f"http://127.0.0.1:{port}/api/v1{endpoint}"
     if query:
         url = f"{url}?{urllib.parse.urlencode(query)}"
     body = None
     headers: Dict[str, str] = {
         "Accept": "application/json",
-        "Origin": "http://127.0.0.1:8080",
+        "Origin": f"http://127.0.0.1:{port}",
     }
     if payload is not None:
         body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
         headers["Content-Type"] = "application/json"
     if APP_TOKEN:
         headers["Authorization"] = f"Bearer {APP_TOKEN}"
-
     request = urllib.request.Request(url, data=body, headers=headers, method=method)
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
@@ -211,22 +223,6 @@ def get_vault_info() -> Dict[str, Any]:
     response["exists"] = os.path.exists(VAULT_PATH)
     response["source"] = "native"
     return response
-
-
-def ensure_app_token() -> bool:
-    """Authenticate the native bridge when the desktop app is already unlocked."""
-    global APP_TOKEN
-    if APP_TOKEN:
-        return True
-    handshake = app_request("GET", "/handshake")
-    shared_secret = handshake.get("shared_secret")
-    if not shared_secret:
-        return False
-    authenticated = app_request("POST", "/auth", {"shared_secret": shared_secret})
-    if authenticated.get("success") and authenticated.get("token"):
-        APP_TOKEN = authenticated["token"]
-        return True
-    return False
 
 
 def generate_password(options: Dict[str, Any]) -> Dict[str, Any]:
@@ -300,6 +296,37 @@ def main() -> None:
                 elif action == "getVaultInfo":
                     response = get_vault_info()
 
+                elif action == "pairBrowser":
+                    response = app_request(
+                        "POST",
+                        "/pair",
+                        {
+                            "code": message.get("code", ""),
+                            "label": message.get("label", "Caixa Forta browser"),
+                            "browser": message.get("browser", "unknown"),
+                            "public_key": message.get("public_key", ""),
+                        },
+                    )
+
+                elif action == "getBrowserChallenge":
+                    client_id = str(message.get("client_id", "")).strip()
+                    response = app_request(
+                        "GET", "/challenge", query={"client_id": client_id}
+                    )
+
+                elif action == "authenticatePairedBrowser":
+                    response = app_request(
+                        "POST",
+                        "/challenge-response",
+                        {
+                            "client_id": message.get("client_id", ""),
+                            "nonce": message.get("nonce", ""),
+                            "signature": message.get("signature", ""),
+                        },
+                    )
+                    if response.get("success") and response.get("token"):
+                        APP_TOKEN = response["token"]
+
                 elif action == "generatePassword":
                     response = app_request(
                         "POST", "/generate-password", message.get("options", {})
@@ -308,8 +335,6 @@ def main() -> None:
                         response = generate_password(message.get("options", {}))
 
                 elif action == "fetchCredentials":
-                    if not APP_TOKEN:
-                        ensure_app_token()
                     response = app_request(
                         "GET",
                         "/credentials",
@@ -321,18 +346,12 @@ def main() -> None:
                         "error", ""
                     ):
                         logger.info("Token expired, refreshing…")
-                        if ensure_app_token():
-                            response = app_request(
-                                "GET",
-                                "/credentials",
-                                query={"domain": message.get("site", "")},
-                                timeout=8,
-                            )
-                            response["site"] = message.get("site", "")
+                        APP_TOKEN = None
+
+                elif action == "listCredentials":
+                    response = app_request("GET", "/credentials/index", timeout=8)
 
                 elif action == "saveCredentials":
-                    if not APP_TOKEN:
-                        ensure_app_token()
                     response = app_request(
                         "POST", "/credentials", message.get("data", {}), timeout=10
                     )
@@ -341,10 +360,7 @@ def main() -> None:
                         or "Desktop app unavailable" in response.get("error", "")
                     ):
                         logger.info("Token expired or app unavailable, refreshing…")
-                        if ensure_app_token():
-                            response = app_request(
-                                "POST", "/credentials", message.get("data", {}), timeout=10
-                            )
+                        APP_TOKEN = None
 
                 elif action == "lockVault":
                     # Phase 2 will remove this; for now relay to app

@@ -30,6 +30,11 @@ hex = "0.4"
 argon2 = "0.5"
 rand = "0.8"
 sha2 = "0.10"
+dirs = "6"
+tempfile = "3"
+psl = "2.1"
+zeroize = "1"
+keyring = { version = "4.2", default-features = false, features = ["v1", "apple-native-keyring-store", "windows-native-keyring-store", "zbus-secret-service-keyring-store"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 unicode-segmentation = "1.11"
 hex-literal = "0.4"

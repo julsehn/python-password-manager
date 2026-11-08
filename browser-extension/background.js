@@ -20,6 +20,7 @@ let nativePort = null;
 const pendingRequests = new Map();
 let nextRequestId = 1;
 const REQUEST_TIMEOUT_MS = 10_000;
+let browserAuthPromise = null;
 
 function connectToNative() {
   if (nativePort) return;
@@ -66,7 +67,7 @@ function connectToNative() {
 
 // ── Send a message to the native host ────────────────────────────────────────
 
-async function sendToNative(action, payload = {}) {
+async function sendNativeMessage(action, payload = {}) {
   if (!nativePort) {
     connectToNative();
   }
@@ -108,6 +109,116 @@ async function sendToNative(action, payload = {}) {
   });
 }
 
+function bytesToHex(bytes) {
+  return Array.from(new Uint8Array(bytes), (byte) =>
+    byte.toString(16).padStart(2, "0"),
+  ).join("");
+}
+
+function hexToBytes(hex) {
+  if (typeof hex !== "string" || hex.length % 2 !== 0 || !/^[0-9a-f]+$/i.test(hex)) {
+    throw new Error("La clau o el repte del navegador no és vàlid");
+  }
+  return Uint8Array.from(hex.match(/.{2}/g), (byte) => parseInt(byte, 16));
+}
+
+async function pairBrowser(code) {
+  const normalizedCode = String(code || "").replace(/\D/g, "");
+  if (!/^\d{6}$/.test(normalizedCode)) {
+    throw new Error("Introdueix el codi de sis xifres que mostra l'app Caixa Forta");
+  }
+
+  const keyPair = await crypto.subtle.generateKey(
+    { name: "ECDSA", namedCurve: "P-256" },
+    true,
+    ["sign", "verify"],
+  );
+  const publicKey = bytesToHex(await crypto.subtle.exportKey("raw", keyPair.publicKey));
+  const privateKey = bytesToHex(await crypto.subtle.exportKey("pkcs8", keyPair.privateKey));
+
+  let browserName = "Browser";
+  if (browser.runtime.getBrowserInfo) {
+    try {
+      browserName = (await browser.runtime.getBrowserInfo()).name || browserName;
+    } catch (_) {}
+  } else if (globalThis.navigator?.userAgent?.includes("Chrome")) {
+    browserName = "Chrome";
+  }
+
+  const result = await sendNativeMessage("pairBrowser", {
+    code: normalizedCode,
+    public_key: publicKey,
+    browser: browserName,
+    label: `Caixa Forta — ${browserName}`,
+  });
+
+  await browser.storage.local.set({
+    caixa_browser_client_id: result.client_id,
+    caixa_browser_private_key: privateKey,
+  });
+  return { success: true, browser: browserName };
+}
+
+async function authenticatePairedBrowser() {
+  if (browserAuthPromise) return browserAuthPromise;
+  browserAuthPromise = (async () => {
+    const { caixa_browser_client_id: clientId, caixa_browser_private_key: privateKeyHex } =
+      await browser.storage.local.get([
+        "caixa_browser_client_id",
+        "caixa_browser_private_key",
+      ]);
+
+    if (!clientId || !privateKeyHex) {
+      throw new Error("Aquest navegador no està vinculat. Vincula'l des dels Ajustos.");
+    }
+
+    const challenge = await sendNativeMessage("getBrowserChallenge", {
+      client_id: clientId,
+    });
+    if (!challenge.nonce) throw new Error("No s'ha rebut el repte de vinculació");
+
+    const signingKey = await crypto.subtle.importKey(
+      "pkcs8",
+      hexToBytes(privateKeyHex),
+      { name: "ECDSA", namedCurve: "P-256" },
+      false,
+      ["sign"],
+    );
+    const signature = await crypto.subtle.sign(
+      { name: "ECDSA", hash: "SHA-256" },
+      signingKey,
+      hexToBytes(challenge.nonce),
+    );
+
+    await sendNativeMessage("authenticatePairedBrowser", {
+      client_id: clientId,
+      nonce: challenge.nonce,
+      signature: bytesToHex(signature),
+    });
+  })();
+
+  try {
+    await browserAuthPromise;
+  } catch (error) {
+    if (/unknown or unapproved client|client not found/i.test(error.message)) {
+      await browser.storage.local.remove([
+        "caixa_browser_client_id",
+        "caixa_browser_private_key",
+      ]);
+    }
+    throw error;
+  } finally {
+    browserAuthPromise = null;
+  }
+}
+
+async function sendToNative(action, payload = {}) {
+  if (["listCredentials", "fetchCredentials", "saveCredentials", "lockVault"].includes(action)) {
+    await authenticatePairedBrowser();
+  }
+  return sendNativeMessage(action, payload);
+}
+
 // ── Public vault actions ──────────────────────────────────────────────────────
 
 async function getVaultInfo() {
@@ -128,6 +239,10 @@ async function fetchCredentials(domain = "") {
   return sendToNative("fetchCredentials", { site: domain || "" });
 }
 
+async function listCredentials() {
+  return sendToNative("listCredentials");
+}
+
 async function saveCredential(data) {
   return sendToNative("saveCredentials", { data });
 }
@@ -139,6 +254,13 @@ async function generatePassword(options = {}) {
 // ── Message router (popup / content scripts) ──────────────────────────────────
 
 browser.runtime.onMessage.addListener((request, sender, sendResponse) => {
+  if (request.action === "pairBrowser") {
+    pairBrowser(request.code)
+      .then(sendResponse)
+      .catch((error) => sendResponse({ success: false, error: error.message }));
+    return true;
+  }
+
   if (request.action === "getVaultInfo") {
     getVaultInfo()
       .then(sendResponse)
@@ -177,6 +299,13 @@ browser.runtime.onMessage.addListener((request, sender, sendResponse) => {
         console.error("[caixa] fetchCredentials error:", error);
         sendResponse({ success: false, error: error.message });
       });
+    return true;
+  }
+
+  if (request.action === "listCredentials") {
+    listCredentials()
+      .then(sendResponse)
+      .catch((error) => sendResponse({ success: false, error: error.message }));
     return true;
   }
 

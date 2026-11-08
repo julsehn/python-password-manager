@@ -8,6 +8,8 @@ pub struct SyncConfig {
     pub railway_url: String,
     pub vault_id: String,
     pub token: String,
+    #[serde(default)]
+    pub refresh_token: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -24,6 +26,7 @@ pub struct AuthResponseData {
     pub username: String,
     pub email: Option<String>,
     pub access_token: String,
+    pub refresh_token: String,
     pub vault_id: String,
     pub token_type: String,
 }
@@ -53,6 +56,43 @@ struct VaultResponse {
     blob: String,
     version: i64,
     updated_at: String,
+}
+
+#[derive(Debug, Serialize)]
+struct RefreshRequest<'a> {
+    refresh_token: &'a str,
+}
+
+async fn get_access_token(
+    client: &Client,
+    base_url: &str,
+    config: &SyncConfig,
+) -> Result<String, String> {
+    if config.refresh_token.is_empty() {
+        return Err("No s'ha configurat el refresh token segur de Railway".to_string());
+    }
+
+    let response = client
+        .post(format!("{}/v1/auth/refresh", base_url))
+        .json(&RefreshRequest {
+            refresh_token: &config.refresh_token,
+        })
+        .send()
+        .await
+        .map_err(|error| format!("Error en actualitzar la sessió de Railway: {}", error))?;
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        return Err(format!(
+            "La sessió de Railway ha caducat ({}): {}",
+            status, body
+        ));
+    }
+    let auth: AuthResponseData = response
+        .json()
+        .await
+        .map_err(|error| format!("Error en descodificar la sessió de Railway: {}", error))?;
+    Ok(auth.access_token)
 }
 
 fn resolve_url(url: &str) -> String {
@@ -140,26 +180,43 @@ pub async fn register_user(
     Ok(auth_data)
 }
 
-pub async fn upload_vault(
-    _master_password: String,
-    config: &SyncConfig,
-) -> Result<SyncResponse, String> {
-    let base_url = resolve_url(&config.railway_url);
-
-    if config.token.is_empty() {
-        return Err("No s'ha configurat el token d'autenticació de Railway".to_string());
+pub async fn revoke_refresh_token(config: &SyncConfig) -> Result<(), String> {
+    if config.refresh_token.is_empty() {
+        return Ok(());
     }
+    let base_url = resolve_url(&config.railway_url);
+    let client = Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .map_err(|error| format!("Error en crear client HTTP: {}", error))?;
+    let response = client
+        .post(format!("{}/v1/auth/logout", base_url))
+        .json(&RefreshRequest {
+            refresh_token: &config.refresh_token,
+        })
+        .send()
+        .await
+        .map_err(|error| format!("Error en revocar la sessió de Railway: {}", error))?;
+    if response.status().is_success() {
+        Ok(())
+    } else {
+        Err(format!(
+            "No s'ha pogut revocar la sessió de Railway ({})",
+            response.status()
+        ))
+    }
+}
+
+pub async fn upload_vault(config: &SyncConfig) -> Result<SyncResponse, String> {
+    let base_url = resolve_url(&config.railway_url);
 
     let client = Client::builder()
         .timeout(std::time::Duration::from_secs(30))
         .build()
         .map_err(|e| format!("Error en crear client HTTP: {}", e))?;
+    let access_token = get_access_token(&client, &base_url, config).await?;
 
-    let home = std::env::var("HOME").ok();
-    let vault_path = home
-        .as_ref()
-        .map(|h| format!("{}/.password_manager/vault.json", h))
-        .unwrap_or_else(|| "./vault.json".to_string());
+    let vault_path = crate::vault_path();
 
     if !std::path::Path::new(&vault_path).exists() {
         return Err("No s'ha trobat l'arxiu local de la caixa forta.".to_string());
@@ -182,7 +239,7 @@ pub async fn upload_vault(
     let response = client
         .put(&url)
         .json(&payload)
-        .header("Authorization", format!("Bearer {}", config.token))
+        .header("Authorization", format!("Bearer {}", access_token))
         .header("Content-Type", "application/json")
         .send()
         .await
@@ -191,7 +248,10 @@ pub async fn upload_vault(
     if !response.status().is_success() {
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
-        return Err(format!("Error en pujar la caixa forta ({}) : {}", status, body));
+        return Err(format!(
+            "Error en pujar la caixa forta ({}) : {}",
+            status, body
+        ));
     }
 
     let vault_response: VaultResponse = response
@@ -216,14 +276,11 @@ pub async fn download_vault(
 ) -> Result<String, String> {
     let base_url = resolve_url(&config.railway_url);
 
-    if config.token.is_empty() {
-        return Err("No s'ha configurat el token d'autenticació de Railway".to_string());
-    }
-
     let client = Client::builder()
         .timeout(std::time::Duration::from_secs(30))
         .build()
         .map_err(|e| format!("Error en crear client HTTP: {}", e))?;
+    let access_token = get_access_token(&client, &base_url, config).await?;
 
     let url = if config.vault_id.is_empty() {
         format!("{}/v1/vault", base_url)
@@ -233,7 +290,7 @@ pub async fn download_vault(
 
     let response = client
         .get(&url)
-        .header("Authorization", format!("Bearer {}", config.token))
+        .header("Authorization", format!("Bearer {}", access_token))
         .send()
         .await
         .map_err(|e| format!("Error en connectar amb Railway: {}", e))?;
@@ -241,7 +298,10 @@ pub async fn download_vault(
     if !response.status().is_success() {
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
-        return Err(format!("Error en descarregar la caixa forta ({}): {}", status, body));
+        return Err(format!(
+            "Error en descarregar la caixa forta ({}): {}",
+            status, body
+        ));
     }
 
     let vault_response: VaultResponse = response
@@ -290,7 +350,10 @@ pub async fn register_vault(
     if !response.status().is_success() {
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
-        return Err(format!("Error en registrar caixa forta ({}): {}", status, body));
+        return Err(format!(
+            "Error en registrar caixa forta ({}): {}",
+            status, body
+        ));
     }
 
     let vault_response: VaultResponse = response
@@ -334,7 +397,10 @@ pub async fn delete_vault(_master_password: String, config: &SyncConfig) -> Resu
         reqwest::StatusCode::NOT_FOUND => Ok(false),
         _ => {
             let body = response.text().await.unwrap_or_default();
-            Err(format!("Error en eliminar caixa forta ({}): {}", status, body))
+            Err(format!(
+                "Error en eliminar caixa forta ({}): {}",
+                status, body
+            ))
         }
     }
 }

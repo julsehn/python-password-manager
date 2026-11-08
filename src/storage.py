@@ -11,7 +11,11 @@ from src.models import PasswordEntry
 from threading import Lock
 
 # Default vault path (not committed)
-VAULT_FILENAME: str = os.path.expanduser("~/.password_manager/vault.json")
+VAULT_FILENAME: str = os.path.abspath(
+    os.path.expanduser(
+        os.environ.get("VAULT_PATH", "~/.password_manager/vault.json")
+    )
+)
 SIDEBAR_SETTINGS_FILENAME: str = os.path.expanduser("~/.password_manager/sidebar.json")
 LOCKOUT_STATE_FILENAME: str = os.path.expanduser("~/.password_manager/lockout_state.json")
 CONFIG_FILENAME: str = os.path.expanduser("~/.password_manager/config.json")

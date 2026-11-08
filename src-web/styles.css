@@ -23,8 +23,7 @@ button:not(:disabled):active {
 }
 
 :root {
-  --app-font-size: 16px;
-  font-size: var(--app-font-size);
+  font-size: 16px;
   font-family: "DM Sans", sans-serif;
   color-scheme: light;
   font-synthesis: none;
@@ -93,6 +92,46 @@ button:not(:disabled):active {
   --badge-yellow-text: #bd8b1d;
   --badge-pink-bg: #ffe3ea;
   --badge-pink-text: #c85d79;
+}
+
+:root[data-font-size="12"] {
+  font-size: 12px;
+}
+:root[data-font-size="13"] {
+  font-size: 13px;
+}
+:root[data-font-size="14"] {
+  font-size: 14px;
+}
+:root[data-font-size="15"] {
+  font-size: 15px;
+}
+:root[data-font-size="16"] {
+  font-size: 16px;
+}
+:root[data-font-size="17"] {
+  font-size: 17px;
+}
+:root[data-font-size="18"] {
+  font-size: 18px;
+}
+:root[data-font-size="19"] {
+  font-size: 19px;
+}
+:root[data-font-size="20"] {
+  font-size: 20px;
+}
+:root[data-font-size="21"] {
+  font-size: 21px;
+}
+:root[data-font-size="22"] {
+  font-size: 22px;
+}
+:root[data-font-size="23"] {
+  font-size: 23px;
+}
+:root[data-font-size="24"] {
+  font-size: 24px;
 }
 
 /* Dark mode definitions */
@@ -430,8 +469,115 @@ body {
   height: 30px;
   border-radius: 50%;
   border: 4px solid var(--bg-sidebar);
-  background: var(--folder-color);
+  background: var(--accent-primary);
   box-shadow: 0 0 0 1px var(--border-input);
+}
+
+.folder-swatch-0 {
+  background: #2471d1;
+}
+.folder-swatch-1 {
+  background: #2563eb;
+}
+.folder-swatch-2 {
+  background: #7c3aed;
+}
+.folder-swatch-3 {
+  background: #9c6ade;
+}
+.folder-swatch-4 {
+  background: #c026d3;
+}
+.folder-swatch-5 {
+  background: #db2777;
+}
+.folder-swatch-6 {
+  background: #dc2626;
+}
+.folder-swatch-7 {
+  background: #ea580c;
+}
+.folder-swatch-8 {
+  background: #d97706;
+}
+.folder-swatch-9 {
+  background: #ca8a04;
+}
+.folder-swatch-10 {
+  background: #65a30d;
+}
+.folder-swatch-11 {
+  background: #059669;
+}
+.folder-swatch-12 {
+  background: #0f766e;
+}
+.folder-swatch-13 {
+  background: #0891b2;
+}
+.folder-swatch-14 {
+  background: #475569;
+}
+
+.folder-icon.palette-color-0 {
+  color: #2471d1;
+  background: #2471d11f;
+}
+.folder-icon.palette-color-1 {
+  color: #2563eb;
+  background: #2563eb1f;
+}
+.folder-icon.palette-color-2 {
+  color: #7c3aed;
+  background: #7c3aed1f;
+}
+.folder-icon.palette-color-3 {
+  color: #9c6ade;
+  background: #9c6ade1f;
+}
+.folder-icon.palette-color-4 {
+  color: #c026d3;
+  background: #c026d31f;
+}
+.folder-icon.palette-color-5 {
+  color: #db2777;
+  background: #db27771f;
+}
+.folder-icon.palette-color-6 {
+  color: #dc2626;
+  background: #dc26261f;
+}
+.folder-icon.palette-color-7 {
+  color: #ea580c;
+  background: #ea580c1f;
+}
+.folder-icon.palette-color-8 {
+  color: #d97706;
+  background: #d977061f;
+}
+.folder-icon.palette-color-9 {
+  color: #ca8a04;
+  background: #ca8a041f;
+}
+.folder-icon.palette-color-10 {
+  color: #65a30d;
+  background: #65a30d1f;
+}
+.folder-icon.palette-color-11 {
+  color: #059669;
+  background: #0596691f;
+}
+.folder-icon.palette-color-12 {
+  color: #0f766e;
+  background: #0f766e1f;
+}
+.folder-icon.palette-color-13 {
+  color: #0891b2;
+  background: #0891b21f;
+}
+.folder-icon.palette-color-14 {
+  color: #475569;
+  background: #4755691f;
 }
 
 .folder-color.selected {

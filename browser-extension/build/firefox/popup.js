@@ -1,6 +1,12 @@
 // Caixa Forta - Popup Controller
 // Implements reactive state, Tauri design system integration, and secure vault communication.
 
+function replacePopupMarkup(element, markup) {
+  element.replaceChildren(
+    DOMPurify.sanitize(String(markup ?? ""), { RETURN_DOM_FRAGMENT: true }),
+  );
+}
+
 class PopupController {
   constructor() {
     this.state = {
@@ -95,6 +101,11 @@ class PopupController {
 
   // --- CONNECTION & VAULT STATUS ---
   async checkStatus() {
+    // Clear any poll timer started by renderLockedState.
+    if (this._unlockPollTimer) {
+      clearInterval(this._unlockPollTimer);
+      this._unlockPollTimer = null;
+    }
     return new Promise((resolve) => {
       chrome.runtime.sendMessage({ action: "getVaultInfo" }, async (res) => {
         const pill = document.getElementById("statusPill");
@@ -136,7 +147,7 @@ class PopupController {
 
     return new Promise((resolve) => {
       chrome.runtime.sendMessage(
-        { action: "fetchCredentials", site: "" },
+        { action: "listCredentials" },
         (res) => {
           if (res && res.success) {
             this.state.credentials = res.credentials || [];
@@ -144,6 +155,8 @@ class PopupController {
           } else if (res && res.unlocked === false) {
             this.state.unlocked = false;
             this.checkStatus();
+          } else if (/no està vinculat|not paired/i.test(res?.error || "")) {
+            this.renderPairRequiredState();
           }
           resolve();
         },
@@ -157,7 +170,7 @@ class PopupController {
     if (searchSection) searchSection.style.display = "none";
 
     const container = document.getElementById("vaultContent");
-    container.innerHTML = `
+    replacePopupMarkup(container, `
       <div class="state-box">
         <div class="state-icon red">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -176,7 +189,7 @@ class PopupController {
           Reintentar connexió
         </button>
       </div>
-    `;
+    `);
 
     document
       .getElementById("retryConnectBtn")
@@ -187,11 +200,14 @@ class PopupController {
   }
 
   renderLockedState() {
+    // F9 (Phase 2): The master password must NOT travel through the extension.
+    // The popup instructs the user to unlock from the desktop app; it polls
+    // getVaultInfo to detect when the vault has been unlocked.
     const searchSection = document.getElementById("searchSection");
     if (searchSection) searchSection.style.display = "none";
 
     const container = document.getElementById("vaultContent");
-    container.innerHTML = `
+    replacePopupMarkup(container, `
       <div class="state-box">
         <div class="state-icon amber">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -200,46 +216,51 @@ class PopupController {
           </svg>
         </div>
         <h3 class="state-title">Caixa Forta bloquejada</h3>
-        <p class="state-desc">Introdueix la teva contrasenya mestra per accedir als teus accessos:</p>
-        
-        <form id="unlockForm" style="width: 100%; display: flex; flex-direction: column; gap: 8px;">
-          <div class="input-with-action">
-            <input type="password" id="unlockPasswordInput" class="form-control" placeholder="Contrasenya mestra" required autofocus />
-            <button type="button" id="toggleUnlockReveal" class="btn btn-secondary" title="Mostrar contrasenya">👁️</button>
-          </div>
-          <button type="submit" class="btn btn-primary">
-            Desbloquejar
-          </button>
-        </form>
+        <p class="state-desc">Desbloqueja a l'aplicació Caixa Forta per accedir als teus accessos.</p>
+        <button type="button" id="retryUnlockBtn" class="btn btn-secondary" style="margin-top: 8px;">
+          Comprovar de nou
+        </button>
       </div>
-    `;
+    `);
 
-    const unlockForm = document.getElementById("unlockForm");
-    const pwdInput = document.getElementById("unlockPasswordInput");
-    const toggleReveal = document.getElementById("toggleUnlockReveal");
+    // Poll every 3 seconds so the popup updates automatically once the user
+    // unlocks from the desktop app.
+    const retryBtn = document.getElementById("retryUnlockBtn");
+    retryBtn?.addEventListener("click", () => this.checkStatus());
 
-    toggleReveal?.addEventListener("click", () => {
-      pwdInput.type = pwdInput.type === "password" ? "text" : "password";
+    this._unlockPollTimer = setInterval(() => {
+      this.checkStatus();
+    }, 3000);
+  }
+
+  renderPairRequiredState() {
+    const searchSection = document.getElementById("searchSection");
+    if (searchSection) searchSection.style.display = "none";
+    const container = document.getElementById("vaultContent");
+    replacePopupMarkup(container, `
+      <div class="state-box">
+        <div class="state-icon amber">${this.iconSvg("KeyRound", 24)}</div>
+        <h3 class="state-title">Vincula aquest navegador</h3>
+        <p class="state-desc">Per protegir la caixa, cada navegador s'ha d'aprovar des de l'app Caixa Forta.</p>
+        <button id="openPairSettingsBtn" class="btn btn-primary" style="margin-top: 6px">Obrir vinculació</button>
+      </div>
+    `);
+    document.getElementById("openPairSettingsBtn")?.addEventListener("click", () => {
+      this.switchTab("settings");
     });
+  }
 
-    unlockForm?.addEventListener("submit", (e) => {
-      e.preventDefault();
-      const pwd = pwdInput.value;
-      if (!pwd) return;
-
-      this.showToast("Desbloquejant...");
-      chrome.runtime.sendMessage(
-        { action: "unlockVault", masterPassword: pwd },
-        (res) => {
-          if (res && res.success) {
-            this.showToast("Caixa Forta desbloquejada!");
-            this.checkStatus();
-          } else {
-            this.showToast(res?.error || "Contrasenya incorrecta");
-          }
-        },
-      );
-    });
+  iconSvg(name, size = 16) {
+    const paths = {
+      KeyRound: '<circle cx="7.5" cy="15.5" r="5.5"></circle><path d="m21 2-9.6 9.6"></path><path d="m15.5 7.5 3 3L22 7l-3-3"></path>',
+      Globe: '<circle cx="12" cy="12" r="10"></circle><path d="M2 12h20"></path><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10Z"></path>',
+      Eye: '<path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7-10-7-10-7Z"></path><circle cx="12" cy="12" r="3"></circle>',
+      EyeOff: '<path d="m3 3 18 18"></path><path d="M10.6 10.6a2 2 0 0 0 2.8 2.8"></path><path d="M9.9 5.2A11 11 0 0 1 12 5c6.4 0 10 7 10 7a14 14 0 0 1-3.2 3.9"></path><path d="M6.6 6.6C3.7 8.3 2 12 2 12s3.6 7 10 7a10 10 0 0 0 3.2-.5"></path>',
+      UserRound: '<circle cx="12" cy="8" r="5"></circle><path d="M20 21a8 8 0 0 0-16 0"></path>',
+      Copy: '<rect x="8" y="8" width="14" height="14" rx="2"></rect><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"></path>',
+      Sparkles: '<path d="m12 3 1.9 5.8L20 11l-6.1 2.2L12 19l-1.9-5.8L4 11l6.1-2.2L12 3Z"></path><path d="m19 14 1.1 2.9L23 18l-2.9 1.1L19 22l-1.1-2.9L15 18l2.9-1.1L19 14Z"></path>',
+    };
+    return `<svg viewBox="0 0 24 24" width="${size}" height="${size}" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths[name] || ""}</svg>`;
   }
 
   renderCredentialsList() {
@@ -248,13 +269,13 @@ class PopupController {
 
     const container = document.getElementById("vaultContent");
     const query = (this.state.searchQuery || "").trim().toLowerCase();
-    const currentDomain = (this.state.domain || "").toLowerCase();
+    const currentDomain = this.normalizeHost(this.state.domain);
 
     let matched = [];
     let others = [];
 
     this.state.credentials.forEach((cred) => {
-      const site = (cred.site || "").toLowerCase();
+      const site = this.normalizeHost(cred.site);
       const user = (cred.username || "").toLowerCase();
 
       if (query) {
@@ -262,10 +283,7 @@ class PopupController {
           matched.push(cred);
         }
       } else {
-        if (
-          currentDomain &&
-          (site.includes(currentDomain) || currentDomain.includes(site))
-        ) {
+        if (currentDomain && this.hostMatches(site, currentDomain)) {
           matched.push(cred);
         } else {
           others.push(cred);
@@ -273,84 +291,81 @@ class PopupController {
       }
     });
 
-    if (!query && matched.length === 0) {
-      container.innerHTML = `
-        <div class="state-box" style="padding: 18px 14px;">
-          <div class="state-icon blue" style="width: 36px; height: 36px;">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <circle cx="12" cy="12" r="10"></circle>
-              <line x1="12" y1="8" x2="12" y2="12"></line>
-              <line x1="12" y1="16" x2="12.01" y2="16"></line>
-            </svg>
-          </div>
-          <h4 class="state-title" style="font-size: 0.875rem;">Cap accés per a aquest lloc</h4>
-          <p class="state-desc" style="font-size: 0.6875rem;">No tens cap credencial desada per a ${this.state.domain || "aquesta pàgina"}.</p>
-          <button id="quickSaveForSiteBtn" class="btn btn-primary" style="margin-top: 4px; font-size: 0.75rem;">
-            + Desar accés d'aquest lloc
-          </button>
-        </div>
-        ${
-          others.length > 0
-            ? `<div style="font-size: 0.6875rem; font-weight: 700; color: var(--text-muted); margin-top: 8px; text-transform: uppercase;">Altres accessos (${others.length})</div>
-               <div class="cred-list">${others.map((c) => this.renderCredCard(c)).join("")}</div>`
-            : ""
-        }
-      `;
-
-      document
-        .getElementById("quickSaveForSiteBtn")
-        ?.addEventListener("click", () => {
-          this.switchTab("save");
-        });
-    } else {
-      const itemsToRender = query ? matched : matched.concat(others);
-      if (itemsToRender.length === 0) {
-        container.innerHTML = `
-          <div class="state-box">
-            <p class="state-desc">Cap resultat per a "${this.state.searchQuery}"</p>
-          </div>
-        `;
+    if (query) {
+      if (matched.length === 0) {
+        replacePopupMarkup(container, `
+          <div class="state-box"><p class="state-desc">Cap resultat per a "${this.escapeHtml(this.state.searchQuery)}"</p></div>
+        `);
       } else {
-        container.innerHTML = `
-          <div class="cred-list">
-            ${itemsToRender.map((c) => this.renderCredCard(c)).join("")}
+        replacePopupMarkup(container, `
+          <div class="credential-section">
+            <h3 class="credential-section-title">Resultats (${matched.length})</h3>
+            <div class="cred-list">${matched.map((c) => this.renderCredCard(c)).join("")}</div>
           </div>
-        `;
+        `);
       }
+    } else {
+      const currentHeading = currentDomain
+        ? `Entrades guardades per a ${this.escapeHtml(this.state.domain)}`
+        : "Entrades guardades per a aquesta pàgina";
+      const currentSection = matched.length
+        ? `<section class="credential-section"><h3 class="credential-section-title">${currentHeading}</h3><div class="cred-list">${matched.map((c) => this.renderCredCard(c)).join("")}</div></section>`
+        : `<section class="credential-section"><h3 class="credential-section-title">${currentHeading}</h3><p class="credential-empty">No hi ha cap entrada desada per a aquesta pàgina.</p><button id="quickSaveForSiteBtn" class="btn btn-secondary">+ Desar accés d'aquest lloc</button></section>`;
+      const othersSection = others.length
+        ? `<section class="credential-section"><h3 class="credential-section-title">Altres entrades (${others.length})</h3><div class="cred-list">${others.map((c) => this.renderCredCard(c)).join("")}</div></section>`
+        : "";
+      replacePopupMarkup(container, `${currentSection}${othersSection}`);
+      document.getElementById("quickSaveForSiteBtn")?.addEventListener("click", () => {
+        this.switchTab("save");
+      });
     }
 
     this.attachCardActions();
   }
 
+  normalizeHost(value = "") {
+    const input = String(value).trim().toLowerCase();
+    if (!input) return "";
+    try {
+      return new URL(input.includes("://") ? input : `https://${input}`).hostname
+        .replace(/^www\./, "");
+    } catch {
+      return input.replace(/^www\./, "").split(/[/:]/, 1)[0];
+    }
+  }
+
+  hostMatches(savedHost, activeHost) {
+    return Boolean(
+      savedHost && activeHost &&
+      (savedHost === activeHost ||
+        activeHost.endsWith(`.${savedHost}`)),
+    );
+  }
+
   renderCredCard(cred) {
-    const initial = (cred.site || "W").charAt(0).toUpperCase();
+    const domainIcon = this.iconSvg("Globe", 18);
+    const autofillAllowed = this.hostMatches(
+      this.normalizeHost(cred.site),
+      this.normalizeHost(this.state.domain),
+    );
     return `
-      <div class="cred-card" data-id="${cred.id}">
+      <div class="cred-card" data-id="${this.escapeHtml(cred.id)}">
         <div class="cred-header">
-          <div class="cred-icon">${this.escapeHtml(initial)}</div>
+          <div class="cred-icon">${domainIcon}</div>
           <div class="cred-info">
             <div class="cred-title" title="${this.escapeHtml(cred.site)}">${this.escapeHtml(cred.site)}</div>
             <div class="cred-user" title="${this.escapeHtml(cred.username)}">${this.escapeHtml(cred.username || "Sense usuari")}</div>
           </div>
           <button class="btn btn-secondary action-copy-user" data-user="${this.escapeHtml(cred.username)}" title="Copiar usuari">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
-              <circle cx="12" cy="7" r="4"></circle>
-            </svg>
+            ${this.iconSvg("UserRound", 14)}
           </button>
-          <button class="btn btn-secondary action-copy-pass" data-pass="${this.escapeHtml(cred.password)}" title="Copiar contrasenya">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
-              <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
-            </svg>
+          <button class="btn btn-secondary action-copy-pass" data-id="${this.escapeHtml(cred.id)}" title="Copiar contrasenya">
+            ${this.iconSvg("Copy", 14)}
           </button>
         </div>
         <div class="cred-actions">
-          <button class="btn btn-primary action-fill" data-id="${cred.id}">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <polyline points="9 11 12 14 22 4"></polyline>
-              <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"></path>
-            </svg>
+          <button class="btn btn-primary action-fill" data-id="${this.escapeHtml(cred.id)}" ${autofillAllowed ? "" : "disabled title=\"L'ompliment només està disponible per a aquest lloc\""}>
+            ${this.iconSvg("Sparkles", 14)}
             Omplir formulari
           </button>
         </div>
@@ -373,11 +388,15 @@ class PopupController {
     document.querySelectorAll(".action-copy-pass").forEach((btn) => {
       btn.addEventListener("click", (e) => {
         e.stopPropagation();
-        const pass = btn.getAttribute("data-pass");
-        if (pass) {
-          navigator.clipboard.writeText(pass);
+        const id = btn.getAttribute("data-id");
+        const credential = this.state.credentials.find(
+          (item) => item.id === id,
+        );
+        if (credential) this.loadCredential(credential).then((full) => {
+          if (!full?.password) return this.showToast("No s'ha pogut obtenir la contrasenya");
+          navigator.clipboard.writeText(full.password);
           this.showToast("Contrasenya copiada!");
-        }
+        });
       });
     });
 
@@ -385,11 +404,16 @@ class PopupController {
       btn.addEventListener("click", () => {
         const id = btn.getAttribute("data-id");
         const cred = this.state.credentials.find((c) => c.id === id);
-        if (cred) {
-          this.autofillCredential(cred);
-        }
+        if (cred) this.loadCredential(cred, this.state.domain).then((full) => full && this.autofillCredential(full));
       });
     });
+  }
+
+  loadCredential(credential, domain = credential.site) {
+    return new Promise((resolve) => chrome.runtime.sendMessage(
+      { action: "fetchCredentials", site: this.normalizeHost(domain) },
+      (res) => resolve(res?.success ? (res.credentials || []).find((item) => item.id === credential.id) : null),
+    ));
   }
 
   autofillCredential(credential) {
@@ -418,17 +442,20 @@ class PopupController {
 
     slider?.addEventListener("input", (e) => {
       if (lengthVal) lengthVal.textContent = e.target.value;
-      this.runGenerator();
+      this.clearGeneratedPassword();
     });
 
     ["chkUpper", "chkLower", "chkNumbers", "chkSymbols"].forEach((id) => {
       document
         .getElementById(id)
-        ?.addEventListener("change", () => this.runGenerator());
+        ?.addEventListener("change", () => this.clearGeneratedPassword());
     });
 
     document
       .getElementById("regenBtn")
+      ?.addEventListener("click", () => this.runGenerator());
+    document
+      .getElementById("generatePasswordBtn")
       ?.addEventListener("click", () => this.runGenerator());
 
     document
@@ -484,10 +511,52 @@ class PopupController {
       );
     });
 
-    this.runGenerator();
+    this.clearGeneratedPassword();
+  }
+
+  clearGeneratedPassword() {
+    this.state.generatedPassword = "";
+    const outputEl = document.getElementById("genOutput");
+    if (outputEl) outputEl.textContent = "Tria les opcions i prem Generar";
+    const strengthBar = document.getElementById("strengthBar");
+    if (strengthBar) {
+      strengthBar.style.width = "0%";
+      strengthBar.style.background = "var(--border-subtle)";
+    }
+    const strengthLabel = document.getElementById("strengthLabel");
+    if (strengthLabel) {
+      strengthLabel.textContent = "Encara no s'ha generat";
+      strengthLabel.style.color = "var(--text-muted)";
+    }
+    ["regenBtn", "copyGenBtn", "copyGenAction", "fillGenAction", "saveGenAction"]
+      .forEach((id) => {
+        const button = document.getElementById(id);
+        if (button) button.disabled = true;
+      });
+    this.updateGenerateButtonState();
+  }
+
+  updateGenerateButtonState() {
+    const selected = ["chkUpper", "chkLower", "chkNumbers", "chkSymbols"]
+      .some((id) => document.getElementById(id)?.checked);
+    const button = document.getElementById("generatePasswordBtn");
+    if (button) button.disabled = !selected;
+    const hint = document.getElementById("generatorHint");
+    if (hint) {
+      hint.textContent = selected
+        ? "Tria les opcions que vulguis i genera quan estiguis a punt."
+        : "Selecciona com a mínim un tipus de caràcter.";
+    }
   }
 
   runGenerator() {
+    const selected = ["chkUpper", "chkLower", "chkNumbers", "chkSymbols"]
+      .some((id) => document.getElementById(id)?.checked);
+    if (!selected) {
+      this.clearGeneratedPassword();
+      return;
+    }
+
     const length = parseInt(
       document.getElementById("lengthSlider")?.value || 18,
       10,
@@ -508,10 +577,11 @@ class PopupController {
           const outputEl = document.getElementById("genOutput");
           if (outputEl) outputEl.textContent = res.password;
           this.updateStrength(res.password);
-          const savePassInput = document.getElementById("savePass");
-          if (savePassInput && !savePassInput.value) {
-            savePassInput.value = res.password;
-          }
+          ["regenBtn", "copyGenBtn", "copyGenAction", "fillGenAction", "saveGenAction"]
+            .forEach((id) => {
+              const button = document.getElementById(id);
+              if (button) button.disabled = false;
+            });
         }
       },
     );
@@ -563,6 +633,19 @@ class PopupController {
 
   // --- EVENT LISTENERS ---
   setupEventListeners() {
+    document.getElementById("pairBrowserBtn")?.addEventListener("click", () => {
+      const input = document.getElementById("pairingCodeInput");
+      const code = (input?.value || "").trim();
+      if (!/^\d{6}$/.test(code)) return this.showToast("Introdueix el codi de sis xifres");
+      chrome.runtime.sendMessage({ action: "pairBrowser", code }, (res) => {
+        if (res?.success) {
+          if (input) input.value = "";
+          this.showToast("Navegador vinculat correctament");
+          this.checkStatus();
+        } else this.showToast(res?.error || "No s'ha pogut vincular el navegador");
+      });
+    });
+
     // Search input
     document.getElementById("searchInput")?.addEventListener("input", (e) => {
       this.state.searchQuery = e.target.value;
@@ -617,17 +700,8 @@ class PopupController {
     });
 
     document.getElementById("genForSaveBtn")?.addEventListener("click", () => {
-      chrome.runtime.sendMessage(
-        { action: "generatePassword", options: { length: 18 } },
-        (res) => {
-          if (res && res.password) {
-            const passEl = document.getElementById("savePass");
-            if (passEl) passEl.value = res.password;
-            this.state.generatedPassword = res.password;
-            this.showToast("Contrasenya generada!");
-          }
-        },
-      );
+      this.switchTab("generator");
+      this.showToast("Tria les opcions i prem Generar");
     });
 
     document.getElementById("submitSaveBtn")?.addEventListener("click", () => {

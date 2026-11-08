@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import DOMPurify from "dompurify";
 import {
   normalizeImportedEntries,
   normalizeImportedFolders,
@@ -180,7 +181,6 @@ const state = {
   welcomeStep: 0,
   showFirstEntryGuide: false,
   firstEntryGuideStep: 1,
-  masterPassword: "",
   loading: false,
   entries: [],
   folders: [],
@@ -204,6 +204,8 @@ const state = {
   editingFolderId: null,
   returnToEntryForm: false,
   settings: savedSettings,
+  pairedBrowsers: [],
+  browserPairingCode: "",
   cloudConfig: { railwayUrl: "", vaultId: "", token: "", ...savedCloudConfig },
   showCloudLogin: false,
   cloudLoading: false,
@@ -231,22 +233,15 @@ const state = {
   },
   showAuthMethodSelection: false,
   authMethodSelected: "password",
-  gridSeed: null,
-  gridPattern: [],
-  gridCellSize: 4,
   showGridSetup: false,
-  gridSetupStep: 0,
-  gridSetupPattern: [],
   gridSetupError: "",
   imageAuthImage: "",
-  imageGridCellValues: [],
+  imageGridConfigured: false,
   imageGridPattern: [],
   imageGridBrushPath: [],
   imageUnlockBrushPath: [],
-  legacyImageAuthPattern: [],
   changingAuthMethod: false,
   showGridUnlock: false,
-  gridUnlockPattern: [],
   gridUnlockError: "",
   showChangeAuthModal: false,
   changeAuthSelected: "password",
@@ -259,10 +254,13 @@ let imageAuthRenderBitmap = null;
 const isTauriRuntime = () => Boolean(window.__TAURI_INTERNALS__);
 
 const icon = (name, size = 18) => {
-  const kebabName = name
+  const safeName = Object.prototype.hasOwnProperty.call(icons, name)
+    ? name
+    : "ShieldCheck";
+  const kebabName = safeName
     .replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`)
     .replace(/^-/, "");
-  return `<i data-lucide="${kebabName}" width="${size}" height="${size}"></i>`;
+  return `<i data-lucide="${escapeHtml(kebabName)}" width="${size}" height="${size}"></i>`;
 };
 
 const escapeHtml = (value = "") =>
@@ -277,6 +275,20 @@ const escapeHtml = (value = "") =>
         '"': "&quot;",
       })[char],
   );
+
+function sanitizedFragment(markup) {
+  return DOMPurify.sanitize(String(markup ?? ""), {
+    RETURN_DOM_FRAGMENT: true,
+  });
+}
+
+function replaceMarkup(element, markup) {
+  element.replaceChildren(sanitizedFragment(markup));
+}
+
+function appendMarkup(element, markup) {
+  element.append(sanitizedFragment(markup));
+}
 
 function formatDate(isoString) {
   if (!isoString) return "";
@@ -334,7 +346,6 @@ async function lockVault() {
   }
 
   state.locked = true;
-  state.masterPassword = "";
   state.entries = [];
   state.folders = [];
   state.history = [];
@@ -343,23 +354,17 @@ async function lockVault() {
   state.showChangeAuthModal = false;
   state.showGridSetup = false;
   state.gridUnlockError = "";
-  state.gridUnlockPattern = [];
+  state.imageGridConfigured = false;
   state.imageGridPattern = [];
   state.imageUnlockBrushPath = [];
-  state.imageGridCellValues = [];
-  state.legacyImageAuthPattern = [];
   state.imageAuthImage = "";
   state.showGridUnlock = false;
 
   try {
     const authData = await invoke("get_image_grid_auth");
-    if (authData?.type === "image_grid") {
+    if (authData?.type === "image_grid" && authData.version === 5) {
       state.imageAuthImage = authData.image_data || "";
-      state.imageGridCellValues = authData.cell_values || [];
-      state.showGridUnlock = true;
-    } else if (authData?.pattern) {
-      state.legacyImageAuthPattern = authData.pattern;
-      state.imageAuthImage = localStorage.getItem("image_auth_image") || "";
+      state.imageGridConfigured = true;
       state.showGridUnlock = true;
     }
   } catch {
@@ -382,18 +387,10 @@ async function initializeApp() {
     } else {
       const hasGridAuth = await checkGridAuth();
       if (hasGridAuth) {
-        state.gridUnlockPattern = [];
         state.imageGridPattern = [];
         const imageGrid = await invoke("get_image_grid_auth");
-        if (imageGrid?.type === "image_grid") {
-          state.imageAuthImage = imageGrid.image_data;
-          state.imageGridCellValues = imageGrid.cell_values || [];
-          state.legacyImageAuthPattern = [];
-        } else {
-          state.imageGridCellValues = [];
-          state.legacyImageAuthPattern = imageGrid?.pattern || [];
-          state.imageAuthImage = localStorage.getItem("image_auth_image") || "";
-        }
+        state.imageAuthImage = imageGrid.image_data;
+        state.imageGridConfigured = true;
         state.showGridUnlock = true;
       }
     }
@@ -483,10 +480,9 @@ async function cloudAuthSubmit(event) {
       localStorage.setItem("caixa-forta-cloud", JSON.stringify(updatedConfig));
       await invoke("set_railway_sync_config", rustCloudConfig(updatedConfig));
 
-      if (!state.locked && state.masterPassword) {
+      if (!state.locked) {
         try {
           await invoke("sync_upload_vault", {
-            masterPassword: state.masterPassword,
             config: rustCloudConfig(updatedConfig),
           });
           showToast("Compte creat i caixa forta sincronitzada a Railway!");
@@ -510,10 +506,11 @@ async function cloudAuthSubmit(event) {
   // Handle Login
   const isDownload = state.cloudActionContext === "download";
   const isSync = state.cloudActionContext === "sync";
-  const masterPassword =
-    document.querySelector("#auth-master-password")?.value || "";
+  const masterPassword = state.locked
+    ? document.querySelector("#auth-master-password")?.value || ""
+    : null;
 
-  if (isDownload && !masterPassword) {
+  if (isDownload && state.locked && !masterPassword) {
     state.cloudError =
       "Introdueix la contrasenya mestra de la caixa forta per desxifrar-la.";
     render();
@@ -569,17 +566,15 @@ async function cloudAuthSubmit(event) {
         type: item.kind,
         createdAt: item.created_at,
       }));
-      state.masterPassword = masterPassword;
       state.vaultExists = true;
       state.locked = false;
       state.view = "vault";
       state.showCloudLogin = false;
       showToast("Caixa forta descarregada de Railway i oberta correctament!");
     } else {
-      if (isSync && !state.locked && state.masterPassword) {
+      if (isSync && !state.locked) {
         try {
           const result = await invoke("sync_upload_vault", {
-            masterPassword: state.masterPassword,
             config: rustCloudConfig(updatedConfig),
           });
           showToast(result.message || "Canvis sincronitzats amb Railway!");
@@ -609,15 +604,9 @@ async function handleCloudSyncNow() {
     return;
   }
 
-  let pwd = state.masterPassword;
-  if (!pwd) {
-    try {
-      pwd = localStorage.getItem("caixa-forta-master-password");
-    } catch {}
-  }
-  if (!pwd) {
-    pwd = prompt("Introdueix la teva contrasenya mestra per sincronitzar:");
-    if (!pwd) return;
+  if (state.locked) {
+    showToast("Desbloqueja la caixa forta abans de sincronitzar-la.");
+    return;
   }
 
   state.cloudLoading = true;
@@ -625,7 +614,6 @@ async function handleCloudSyncNow() {
 
   try {
     const res = await invoke("sync_upload_vault", {
-      masterPassword: pwd,
       config: rustCloudConfig(state.cloudConfig),
     });
     showToast(res.message || "Caixa forta pujada correctament a Railway!");
@@ -645,17 +633,12 @@ async function handleCloudDownloadNow() {
     return;
   }
 
-  let pwd = state.masterPassword;
-  if (!pwd) {
-    try {
-      pwd = localStorage.getItem("caixa-forta-master-password");
-    } catch {}
-  }
-  if (!pwd) {
-    pwd = prompt(
+  let masterPassword = null;
+  if (state.locked) {
+    masterPassword = prompt(
       "Introdueix la contrasenya mestra per desxifrar la còpia de Railway:",
     );
-    if (!pwd) return;
+    if (!masterPassword) return;
   }
 
   if (
@@ -671,7 +654,7 @@ async function handleCloudDownloadNow() {
 
   try {
     const serialized = await invoke("sync_download_vault", {
-      masterPassword: pwd,
+      masterPassword,
       config: rustCloudConfig(state.cloudConfig),
     });
     const vault = JSON.parse(serialized);
@@ -694,7 +677,6 @@ async function handleCloudDownloadNow() {
       type: item.kind,
       createdAt: item.created_at,
     }));
-    state.masterPassword = pwd;
     state.vaultExists = true;
     state.locked = false;
     showToast("Caixa forta descarregada i sincronitzada de Railway!");
@@ -714,7 +696,22 @@ async function handleCloudLogout() {
   ) {
     return;
   }
-  state.cloudConfig = { railwayUrl: "", vaultId: "", token: "", authUser: "" };
+  const config = rustCloudConfig(state.cloudConfig);
+  try {
+    await invoke("revoke_official_cloud_session", {
+      railwayUrl: config.railway_url,
+      vaultId: config.vault_id,
+    });
+  } catch (error) {
+    showToast(`No s'ha pogut revocar la sessió cloud: ${error}`);
+    return;
+  }
+  state.cloudConfig = {
+    railwayUrl: "",
+    vaultId: "",
+    token: "",
+    authUser: "",
+  };
   localStorage.removeItem("caixa-forta-cloud");
   try {
     await invoke("set_railway_sync_config", {
@@ -741,7 +738,6 @@ async function confirmResetLocalVault() {
   state.showResetConfirm = false;
   try {
     await invoke("reset_vault");
-    localStorage.removeItem("caixa-forta-master-password");
     state.entries = [];
     state.folders = [];
     state.trash = [];
@@ -756,7 +752,6 @@ async function confirmResetLocalVault() {
   } catch (error) {
     showToast(`No s'han pogut eliminar les dades: ${error}`);
   }
-  state.masterPassword = "";
   render();
 }
 
@@ -765,22 +760,21 @@ function render() {
   if (!appContainer) return;
   document.documentElement.dataset.locked = String(state.locked);
 
-  if (state.locked) {
-    appContainer.innerHTML = lockScreen();
-  } else if (state.view === "generator") {
-    appContainer.innerHTML = generatorScreen();
-  } else if (state.view === "settings") {
-    appContainer.innerHTML = settingsScreen();
-  } else {
-    appContainer.innerHTML = vaultScreen();
-  }
+  const viewMarkup = state.locked
+    ? lockScreen()
+    : state.view === "generator"
+      ? generatorScreen()
+      : state.view === "settings"
+        ? settingsScreen()
+        : vaultScreen();
+  replaceMarkup(appContainer, viewMarkup);
 
   if (!state.locked && state.showCommandPalette) {
-    appContainer.insertAdjacentHTML("beforeend", commandPalette());
+    appendMarkup(appContainer, commandPalette());
   }
   if (!state.locked && state.toast) {
-    appContainer.insertAdjacentHTML(
-      "beforeend",
+    appendMarkup(
+      appContainer,
       `<div class="toast show">${escapeHtml(state.toast)}</div>`,
     );
   }
@@ -801,12 +795,12 @@ function applySettings() {
         : rawSize === "medium"
           ? 16
           : Number(rawSize) || 16;
-  state.settings.fontSize = String(numSize);
+  const clampedSize = Math.min(24, Math.max(12, numSize));
+  state.settings.fontSize = String(clampedSize);
 
   document.documentElement.dataset.theme = state.settings.theme || "auto";
   document.documentElement.dataset.accent = state.settings.accent || "blue";
-  document.documentElement.style.setProperty("--app-font-size", `${numSize}px`);
-  document.documentElement.style.fontSize = `${numSize}px`;
+  document.documentElement.dataset.fontSize = String(clampedSize);
 
   const themeSelect = document.querySelector("#theme-setting");
   const fontSizeInput = document.querySelector("#font-size-setting");
@@ -814,8 +808,8 @@ function applySettings() {
   const autoLockSelect = document.querySelector("#auto-lock");
 
   if (themeSelect) themeSelect.value = state.settings.theme || "auto";
-  if (fontSizeInput) fontSizeInput.value = String(numSize);
-  if (fontSizeOut) fontSizeOut.textContent = `${numSize} px`;
+  if (fontSizeInput) fontSizeInput.value = String(clampedSize);
+  if (fontSizeOut) fontSizeOut.textContent = `${clampedSize} px`;
   if (autoLockSelect) autoLockSelect.value = state.settings.autoLock || "15";
 
   document.querySelectorAll("[data-accent]").forEach((button) => {
@@ -836,7 +830,7 @@ function enhanceRenderedUi() {
 
   const emptyIcon = document.querySelector(".empty > svg");
   if (emptyIcon) {
-    emptyIcon.outerHTML = icon("Vault", 28);
+    emptyIcon.replaceWith(sanitizedFragment(icon("Vault", 28)));
     createIcons({ icons });
   }
 
@@ -854,14 +848,14 @@ function enhanceRenderedUi() {
     state.generatorType === "password" &&
     !output.querySelector("span")
   ) {
-    output.innerHTML = Array.from(output.textContent || "", (character) => {
+    replaceMarkup(output, Array.from(output.textContent || "", (character) => {
       const className = /[0-9]/.test(character)
         ? "generated-number"
         : /[^A-Za-z0-9]/.test(character)
           ? "generated-symbol"
           : "";
       return `<span class="${className}">${escapeHtml(character)}</span>`;
-    }).join("");
+    }).join(""));
   }
 
   const generatedCard = document.querySelector(".generated-card");
@@ -871,8 +865,8 @@ function enhanceRenderedUi() {
     !document.querySelector(".password-strength")
   ) {
     const strength = passwordStrength(state.generatedValue || generateValue());
-    generatedCard.insertAdjacentHTML(
-      "afterend",
+    generatedCard.after(
+      sanitizedFragment(
       `
       <div class="password-strength">
         <div class="strength-label">
@@ -880,11 +874,12 @@ function enhanceRenderedUi() {
           <strong class="strength-${strength.level}">${strength.label}</strong>
         </div>
         <div class="strength-track">
-          <span class="strength-fill strength-${strength.level}" style="width:${strength.percent}%"></span>
+          <span class="strength-fill strength-${strength.level} strength-width-${strength.percent}"></span>
         </div>
         <small>${strength.hint}</small>
       </div>
       `,
+      ),
     );
   }
 }
@@ -942,9 +937,13 @@ function folderItem(folder) {
   const count = state.entries.filter(
     (entry) => entry.folderId === folder.id,
   ).length;
+  const color = folderColors.includes(folder.color)
+    ? folder.color
+    : folderColors[0];
+  const colorIndex = folderColors.indexOf(color);
   return `
     <button class="folder ${state.activeFolderId === folder.id ? "active" : ""}" data-folder="${escapeHtml(folder.id)}">
-      <span class="folder-icon" style="color:${escapeHtml(folder.color)};background:${escapeHtml(folder.color)}1f">${icon(folder.icon, 17)}</span>
+      <span class="folder-icon palette-color-${colorIndex}">${icon(folder.icon, 17)}</span>
       <span>${escapeHtml(folder.name)}</span>
       <b class="count">${count}</b>
     </button>
@@ -953,7 +952,7 @@ function folderItem(folder) {
 
 function entryCard(entry) {
   return `
-    <article class="entry" data-view-entry="${entry.id}">
+    <article class="entry" data-view-entry="${escapeHtml(entry.id)}">
       <div class="site-badge">${icon("Globe", 22)}</div>
       <div class="entry-info">
         <strong>${escapeHtml(entry.site)}</strong>
@@ -963,10 +962,10 @@ function entryCard(entry) {
         <button class="icon-btn" title="Obrir lloc web" data-open="${escapeHtml(entry.site)}">
           ${icon("ExternalLink")}
         </button>
-        <button class="icon-btn copy-action" title="Copiar la contrasenya" data-copy="${entry.id}">
+        <button class="icon-btn copy-action" title="Copiar la contrasenya" data-copy="${escapeHtml(entry.id)}">
           ${icon("Copy")}
         </button>
-        <button class="icon-btn more" title="Detalls, editar o eliminar" data-view-action="${entry.id}">
+        <button class="icon-btn more" title="Detalls, editar o eliminar" data-view-action="${escapeHtml(entry.id)}">
           ${icon("MoreHorizontal")}
         </button>
       </div>
@@ -1199,14 +1198,14 @@ function imageAuthSetupModal() {
         <div class="modal-scroll">
           <div class="image-auth-instructions">
             <p>Puja una imatge i marca els punts fent clic o dibuixant-hi a sobre.</p>
-            <p class="hint">Selecciona almenys 5 punts; l'ordre forma la contrasenya.</p>
+            <p class="hint">Selecciona 12 punts diferents en ordre. La seqüència és la clau d'accés.</p>
           </div>
-          <div class="image-upload-area" id="image-upload-area" style="${state.imageAuthImage ? "display:none;" : ""}">
+          <div class="image-upload-area" id="image-upload-area" ${state.imageAuthImage ? "hidden" : ""}>
             <p>${icon("Camera", 40)}</p>
             <p>Fes clic per pujar la teva imatge</p>
-            <input type="file" accept="image/*" id="image-auth-upload" style="display:none;" />
+            <input type="file" accept="image/*" id="image-auth-upload" class="file-input-hidden" />
           </div>
-          <div class="image-auth-canvas-area" id="image-auth-canvas-area" style="${state.imageAuthImage ? "" : "display:none;"}">
+          <div class="image-auth-canvas-area" id="image-auth-canvas-area" ${state.imageAuthImage ? "" : "hidden"}>
             <canvas id="image-auth-canvas" width="500" height="400"></canvas>
             <p class="image-auth-status">Punts seleccionats: <strong id="image-auth-count">0</strong></p>
             <p class="image-auth-order">Ordre dels punts: <strong id="image-auth-order">cap</strong></p>
@@ -1236,7 +1235,7 @@ function imageAuthUnlockModal() {
         </header>
         <div class="modal-scroll">
           <div class="image-auth-instructions">
-            <p>Marca almenys 5 punts a la imatge, en el mateix ordre.</p>
+            <p>Marca els mateixos 12 punts, en el mateix ordre.</p>
           </div>
           <div class="image-auth-canvas-area">
             <canvas id="image-auth-unlock-canvas" class="${state.loading ? "is-unlocking" : ""}" width="500" height="400"></canvas>
@@ -1381,7 +1380,7 @@ function vaultScreen() {
             <h1>Les teves contrasenyes</h1>
             <p class="subtitle">Tot el que necessites, protegit i a mà.</p>
           </div>
-          <div style="display: flex; gap: 8px;">
+          <div class="header-actions">
             <button class="lock-button" id="refresh-vault" title="Actualitzar accessos">
               ${icon("RotateCw", 17)}
             </button>
@@ -1578,6 +1577,36 @@ function settingsScreen() {
 
         <section class="settings-section">
           <div class="settings-section-title">
+            ${icon("Globe", 19)}
+            <h2>Browsers vinculats</h2>
+          </div>
+          <p class="helper">
+            Cada navegador necessita una vinculació puntual. L'extensió signa els reptes amb una clau pròpia; el codi només és vàlid durant dos minuts i s'utilitza una sola vegada.
+          </p>
+          <button class="setting-action" id="generate-browser-pairing-code">
+            ${icon("KeyRound", 18)} Generar codi per vincular un navegador
+          </button>
+          ${state.browserPairingCode ? `
+            <div class="cloud-status-card browser-pairing-code" role="status">
+              <strong>${escapeHtml(state.browserPairingCode)}</strong>
+              <small>Introdueix aquest codi a l'extensió. Caduca al cap de dos minuts.</small>
+            </div>
+          ` : ""}
+          <div class="paired-browser-list">
+            ${state.pairedBrowsers.length ? state.pairedBrowsers.map((client) => `
+              <div class="setting-row paired-browser-row">
+                <span>
+                  <strong>${escapeHtml(client.label || "Navegador")}</strong>
+                  <small>${escapeHtml(client.browser || "Browser")} · Vinculat ${escapeHtml(client.created_at || "")}</small>
+                </span>
+                <button type="button" class="secondary danger" data-revoke-paired-browser="${escapeHtml(client.id)}">Revocar</button>
+              </div>
+            `).join("") : `<p class="helper">Encara no hi ha cap navegador vinculat.</p>`}
+          </div>
+        </section>
+
+        <section class="settings-section">
+          <div class="settings-section-title">
             ${icon("Vault", 19)}
             <h2>Opcions de la caixa forta</h2>
           </div>
@@ -1612,11 +1641,11 @@ function settingsScreen() {
                   <span class="cloud-badge-dot"></span>
                   Sessió activa a Railway com a <strong>${escapeHtml(state.cloudConfig.authUser)}</strong>
                 </span>
-                <span style="font-size: 0.75rem; color: var(--text-folder, #94a3b8); font-weight: 600;">
+                <span class="cloud-status-provider">
                   ${state.cloudConfig.railwayUrl ? "Servidor propi" : "Núvol oficial"}
                 </span>
               </div>
-              <p class="helper" style="margin-top: 8px;">
+              <p class="helper helper-top">
                 Còpia de seguretat xifrada al núvol oficial de Railway. El servidor només guarda les teves credencials i la caixa forta xifrada (AES-256-GCM).
               </p>
               <div class="cloud-actions-row">
@@ -1698,6 +1727,14 @@ function settingsScreen() {
     ${state.showResetConfirm ? resetConfirmModal() : ""}
     ${state.showCloudLogin ? cloudLoginModal() : ""}
   `;
+}
+
+async function refreshPairedBrowsers() {
+  try {
+    state.pairedBrowsers = await invoke("list_paired_clients");
+  } catch {
+    state.pairedBrowsers = [];
+  }
 }
 
 function entryDetailsModal() {
@@ -1880,7 +1917,7 @@ function entryFormModal() {
               />
 
               <label class="form-label" for="entry-password">Contrasenya <b>*</b></label>
-              <div class="input-with-actions">
+              <div class="input-with-actions ${values.password ? "has-password" : ""}">
                 <input
                   class="form-input"
                   id="entry-password"
@@ -1893,13 +1930,14 @@ function entryFormModal() {
                 <button type="button" class="field-action" id="entry-password-reveal" title="Mostrar contrasenya">
                   ${icon("Eye", 18)}
                 </button>
-                <button type="button" class="field-action ${state.showFirstEntryGuide && state.firstEntryGuideStep === 3 ? "guide-highlight" : ""}" id="generate-password" title="Generar contrasenya">
+                <button type="button" class="field-action ${state.showFirstEntryGuide && state.firstEntryGuideStep === 3 ? "guide-highlight" : ""}" id="generate-password" title="Obrir el generador" aria-label="Obrir el generador de contrasenyes">
                   ${icon("RefreshCw", 18)}
+                  <span class="field-action-text">Generar</span>
                 </button>
               </div>
               <div class="inline-password-strength" id="entry-password-strength" ${values.password ? "" : "hidden"}>
                 <div class="strength-label"><span>Força</span><strong>${values.password ? passwordStrength(values.password).label : ""}</strong></div>
-                <div class="strength-track"><span class="strength-fill strength-${values.password ? passwordStrength(values.password).level : "weak"}" style="width:${values.password ? passwordStrength(values.password).percent : 0}%"></span></div>
+                <div class="strength-track"><span class="strength-fill strength-${values.password ? passwordStrength(values.password).level : "weak"} strength-width-${values.password ? passwordStrength(values.password).percent : 0}"></span></div>
                 <small>${values.password ? passwordStrength(values.password).hint : ""}</small>
               </div>
               <small class="helper">
@@ -1953,7 +1991,7 @@ function trashModal() {
           ${
             state.trash.length
               ? `
-              <button class="danger-btn" id="empty-trash-btn" style="height:32px;padding:0 10px;font-size:0.75rem">
+              <button class="danger-btn compact-danger" id="empty-trash-btn">
                 ${icon("Trash2", 15)} Buidar
               </button>
               `
@@ -2023,7 +2061,7 @@ function cloudLoginModal() {
             <button class="modal-icon" id="cancel-cloud-login" title="Tancar">${icon("X", 20)}</button>
             <div>
               <h2 id="cloud-login-title">${icon("Cloud", 20)} Connexió amb Railway</h2>
-              <p class="modal-subtitle" style="font-size: 0.8125rem; color: var(--text-folder, #94a3b8); margin-top: 2px;">
+              <p class="modal-subtitle">
                 Estat de la sincronització al núvol oficial
               </p>
             </div>
@@ -2035,11 +2073,11 @@ function cloudLoginModal() {
                   <span class="cloud-badge-dot"></span>
                   Sessió activa a Railway
                 </span>
-                <span style="font-size: 0.75rem; color: var(--text-folder, #94a3b8); font-weight: 600;">
+                <span class="cloud-status-provider">
                   ${config.railwayUrl ? "Servidor personalitzat" : "Núvol oficial"}
                 </span>
               </div>
-              <div class="cloud-user-meta" style="margin-top: 8px;">
+              <div class="cloud-user-meta cloud-user-meta-spaced">
                 <span><strong>Usuari:</strong> ${escapeHtml(config.authUser)}</span>
                 <span><strong>Identificador:</strong> ${config.vaultId ? escapeHtml(config.vaultId) : "Sincronitzat"}</span>
               </div>
@@ -2052,7 +2090,7 @@ function cloudLoginModal() {
               </span>
             </div>
 
-            <div class="form-section" style="display: flex; flex-direction: column; gap: 10px; margin-top: 14px;">
+            <div class="form-section cloud-actions-form">
               <button type="button" class="primary full" id="btn-cloud-sync-modal" ${state.cloudLoading ? "disabled" : ""}>
                 ${icon("RefreshCw", 16)} Sincronitzar ara (Pujar canvis)
               </button>
@@ -2079,7 +2117,7 @@ function cloudLoginModal() {
           <button class="modal-icon" id="cancel-cloud-login" title="Tancar">${icon("X", 20)}</button>
           <div>
             <h2 id="cloud-login-title">${icon("Cloud", 20)} Connexió amb Railway</h2>
-            <p class="modal-subtitle" style="font-size: 0.8125rem; color: var(--text-folder, #94a3b8); margin-top: 2px;">
+            <p class="modal-subtitle">
               ${isDownloadContext ? "Restaura la teva caixa forta des del núvol oficial" : "Sincronització segura al núvol de Railway"}
             </p>
           </div>
@@ -2135,7 +2173,7 @@ function cloudLoginModal() {
             <!-- Common Password -->
             <div class="form-section">
               <label class="form-label" for="auth-password">Contrasenya de Railway:</label>
-              <div class="password-input-wrapper" style="position: relative; display: flex; align-items: center;">
+              <div class="password-input-wrapper">
                 <input
                   class="form-input"
                   id="auth-password"
@@ -2144,9 +2182,9 @@ function cloudLoginModal() {
                   required
                   minlength="${activeTab === "register" ? "8" : "1"}"
                   placeholder="${activeTab === "register" ? "Mínim 8 caràcters" : "La teva contrasenya de Railway"}"
-                  style="width: 100%; padding-right: 40px;"
+                  class="form-input cloud-password-input"
                 />
-                <button type="button" class="reveal" id="reveal-cloud-password" title="Mostrar/Amagar" style="position: absolute; right: 10px; background: none; border: none; cursor: pointer; color: var(--text-folder);">
+                <button type="button" class="reveal cloud-password-reveal" id="reveal-cloud-password" title="Mostrar/Amagar">
                   ${icon("Eye", 16)}
                 </button>
               </div>
@@ -2170,10 +2208,10 @@ function cloudLoginModal() {
               </div>
 
               <!-- Register: Privacy Policy -->
-              <div class="form-section privacy-section" style="margin-top: 10px;">
-                <label class="form-checkbox" for="privacy-accepted" style="display: flex; align-items: center; gap: 8px; font-size: 0.8125rem; color: var(--text-folder); cursor: pointer;">
+              <div class="form-section privacy-section">
+                <label class="form-checkbox privacy-checkbox" for="privacy-accepted">
                   <input type="checkbox" id="privacy-accepted" name="privacyAccepted" required />
-                  <span>He llegit i accepto la <a href="PRIVACY_POLICY.md" target="_blank" class="policy-link" style="color: var(--accent-primary, #3b82f6);">Política de Privacitat</a></span>
+                  <span>He llegit i accepto la <a href="PRIVACY_POLICY.md" target="_blank" class="policy-link">Política de Privacitat</a></span>
                 </label>
               </div>
             `
@@ -2184,7 +2222,7 @@ function cloudLoginModal() {
               isDownloadContext && activeTab === "login"
                 ? `
               <!-- Download context: Master Password -->
-              <div class="form-section master-password-section" style="margin-top: 14px; padding-top: 12px; border-top: 1px dashed var(--border-section);">
+              <div class="form-section master-password-section download-master-password">
                 <label class="form-label" for="auth-master-password">
                   ${icon("KeyRound", 14)} Contrasenya mestra de la caixa forta:
                 </label>
@@ -2196,7 +2234,7 @@ function cloudLoginModal() {
                   placeholder="Contrasenya per desxifrar la caixa forta descarregada"
                   required
                 />
-                <p class="helper" style="font-size: 0.75rem; color: var(--text-folder); margin-top: 4px;">
+                <p class="helper helper-small helper-top-small">
                   Necessària per desxifrar la còpia de seguretat un cop descarregada de Railway.
                 </p>
               </div>
@@ -2205,7 +2243,7 @@ function cloudLoginModal() {
             }
 
             <!-- Advanced / Custom Server Toggle -->
-            <div style="margin-top: 14px;">
+            <div class="cloud-advanced-toggle-wrap">
               <button type="button" class="cloud-advanced-toggle" id="toggle-cloud-advanced">
                 ${icon(state.cloudShowAdvanced ? "ChevronDown" : "ChevronRight", 14)}
                 Opcions avançades (Servidor personalitzat)
@@ -2224,11 +2262,11 @@ function cloudLoginModal() {
                       placeholder="https://password-manager-cloud-production.up.railway.app"
                       value="${escapeHtml(config.railwayUrl || "")}"
                     />
-                    <small class="helper" style="font-size: 0.75rem; color: var(--text-folder);">
+                    <small class="helper helper-small">
                       Deixa buit per defecte per utilitzar el servidor oficial de Railway.
                     </small>
                   </div>
-                  <div class="form-section" style="margin-top: 10px;">
+                  <div class="form-section form-section-spaced">
                     <label class="form-label" for="cloud-vault-id">Identificador de caixa forta (opcional):</label>
                     <input
                       class="form-input"
@@ -2239,6 +2277,7 @@ function cloudLoginModal() {
                       value="${escapeHtml(config.vaultId || "")}"
                     />
                   </div>
+                  <p class="helper">Fes servir una contrasenya diferent de la contrasenya mestra de la caixa forta.</p>
                 </div>
               `
                   : ""
@@ -2296,7 +2335,7 @@ function folderModal() {
 
               <label class="form-label">Color</label>
               <div class="folder-picker" role="group" aria-label="Color de la carpeta">
-                ${folderColors.map((color) => `<button class="folder-color ${folder.color === color ? "selected" : ""}" type="button" data-folder-color="${color}" style="--folder-color:${color}" title="${color}"></button>`).join("")}
+                ${folderColors.map((color, index) => `<button class="folder-color folder-swatch-${index} ${folder.color === color ? "selected" : ""}" type="button" data-folder-color="${color}" title="${color}"></button>`).join("")}
               </div>
               <input type="hidden" id="folder-color" name="color" value="${escapeHtml(folder.color)}" />
               ${state.folderFormError ? `<p class="error form-error">${escapeHtml(state.folderFormError)}</p>` : ""}
@@ -2321,10 +2360,10 @@ function trashCard(item) {
         <span>${escapeHtml(item.username || "Sense nom d'usuari")}</span>
       </div>
       <div class="trash-actions">
-        <button class="btn-restore" data-restore-trash="${item.id}" title="Restaurar l'accés">
+        <button class="btn-restore" data-restore-trash="${escapeHtml(item.id)}" title="Restaurar l'accés">
           ${icon("RotateCcw", 14)} Restaura
         </button>
-        <button class="btn-delete-perm" data-delete-perm="${item.id}" title="Eliminar definitivament">
+        <button class="btn-delete-perm" data-delete-perm="${escapeHtml(item.id)}" title="Eliminar definitivament">
           ${icon("Trash2", 14)}
         </button>
       </div>
@@ -2762,9 +2801,8 @@ function updateEntryStrength(password) {
   if (!password) return;
   const strength = passwordStrength(password);
   meter.dataset.strength = strength.level;
-  meter.querySelector(".strength-fill").style.width = `${strength.percent}%`;
   meter.querySelector(".strength-fill").className =
-    `strength-fill strength-${strength.level}`;
+    `strength-fill strength-${strength.level} strength-width-${strength.percent}`;
   meter.querySelector("strong").textContent = strength.label;
   meter.querySelector("small").textContent = strength.hint;
 }
@@ -2778,13 +2816,15 @@ async function unlock(event) {
     return;
   }
   const input = document.querySelector("#master-password");
-  const masterPassword = input.value;
+  let masterPassword = input.value;
   state.error = "";
   state.loading = true;
   render();
   try {
     const result = await invoke("unlock_vault", { masterPassword });
-    state.masterPassword = masterPassword;
+    masterPassword = "";
+    if (input) input.value = "";
+    document.querySelector("#master-password")?.setAttribute("value", "");
     state.entries = (result.entries || []).map((entry) => ({
       ...entry,
       folderId: entry.folder_id || entry.folderId || null,
@@ -2811,14 +2851,17 @@ async function unlock(event) {
         { id: "social", name: "Social", icon: "Heart", color: "#ec4899" },
       ];
       state.folders = defaultFolders;
-      await saveVault(masterPassword, true);
+      await saveVault(true);
       state.showFirstEntryGuide = true;
     }
   } catch (error) {
     state.error = String(error);
   } finally {
+    masterPassword = "";
+    if (input) input.value = "";
     state.loading = false;
     render();
+    document.querySelector("#master-password")?.setAttribute("value", "");
   }
 }
 
@@ -2831,7 +2874,7 @@ async function checkGridAuth() {
   }
 }
 
-async function saveVault(masterPassword = null, syncToRailway = false) {
+async function saveVault(syncToRailway = false, backupExisting = false) {
   const entries = state.entries.map((e) => ({
     id: e.id,
     site: e.site,
@@ -2871,57 +2914,48 @@ async function saveVault(masterPassword = null, syncToRailway = false) {
     created_at: h.createdAt,
   }));
 
-  let password = masterPassword || state.masterPassword;
-  if (!password) {
-    try {
-      const stored = localStorage.getItem("caixa-forta-master-password");
-      password = stored ? stored : prompt("Please enter your master password:");
-    } catch (e) {
-      showToast("Cannot access secure storage. Please re-enter password.");
-      throw new Error("Secure storage not available");
-    }
-  }
-
-  if (!password || password.length < 12) {
-    showToast("Master password is too short");
-    throw new Error("Master password must be at least 12 characters");
-  }
-
   try {
     await invoke("save_vault", {
-      masterPassword: password,
       entries,
       history,
       trash,
       folders,
       syncToRailway,
+      backupExisting,
     });
-    if (masterPassword === null) {
-      try {
-        localStorage.setItem("caixa-forta-master-password", password);
-      } catch (e) {}
-    }
   } catch (error) {
     showToast(`Error saving vault: ${error}`);
     throw error;
   }
 }
 
-async function persistImportedVault(
-  entries,
-  history,
-  trash,
-  folders,
-  masterPassword,
-) {
-  if (masterPassword) {
-    await saveVault(masterPassword);
-  } else {
-    await invoke("save_vault", { entries, history, trash, folders });
+async function persistImportedVault(entries, history, trash, folders) {
+  const previous = {
+    entries: state.entries,
+    history: state.history,
+    trash: state.trash,
+    folders: state.folders,
+  };
+  state.entries = entries;
+  state.history = history;
+  state.trash = trash;
+  state.folders = folders;
+  try {
+    await saveVault(false, true);
+  } catch (error) {
+    Object.assign(state, previous);
+    throw error;
   }
 }
 
 function exportVault() {
+  if (
+    !confirm(
+      "L'export conté les contrasenyes en text pla. Desa'l només en un lloc segur. Vols continuar?",
+    )
+  ) {
+    return;
+  }
   const payload = JSON.stringify(
     {
       version: 1,
@@ -2947,6 +2981,13 @@ async function importVault(event) {
   const file = event.target.files?.[0];
   if (!file) return;
   try {
+    if (
+      !confirm(
+        "La importació substituirà les dades actuals. Es crearà una còpia xifrada de la caixa abans de desar. Vols continuar?",
+      )
+    ) {
+      return;
+    }
     if (file.size > 5 * 1024 * 1024)
       throw new Error("El fitxer és massa gran (màxim 5 MB).");
     const text = await file.text();
@@ -2971,10 +3012,6 @@ async function importVault(event) {
       if (!folderIds.has(entry.folderId)) entry.folderId = "";
     });
     await persistImportedVault(entries, history, trash, folders);
-    state.entries = entries;
-    state.history = history;
-    state.trash = trash;
-    state.folders = folders;
     state.activeFolderId = "";
     state.view = "vault";
     showToast(
@@ -3001,6 +3038,8 @@ function closeViewEntry() {
 function openNewEntry() {
   state.viewingEntryId = null;
   state.editingEntryId = null;
+  state.entryFormDraft = null;
+  state.returnToEntryForm = false;
   state.showEntryForm = true;
   state.formError = "";
   render();
@@ -3010,6 +3049,8 @@ function openNewEntry() {
 function openEditEntry(id) {
   state.viewingEntryId = null;
   state.editingEntryId = id;
+  state.entryFormDraft = null;
+  state.returnToEntryForm = false;
   state.showEntryForm = true;
   state.formError = "";
   render();
@@ -3020,6 +3061,8 @@ function closeEntryForm() {
   if (!state.saving) {
     state.showEntryForm = false;
     state.editingEntryId = null;
+    state.entryFormDraft = null;
+    state.returnToEntryForm = false;
     state.formError = "";
     render();
   }
@@ -3110,7 +3153,7 @@ async function saveEntry(event) {
     );
     if (existingIndex !== -1) {
       try {
-        await invoke("update_entry", {
+        const updatedEntry = await invoke("update_entry", {
           entryId: state.editingEntryId,
           site: name,
           username,
@@ -3118,10 +3161,18 @@ async function saveEntry(event) {
           notes: url ? `URL: ${url}${notes ? `\n${notes}` : ""}` : notes,
           folderId: folderId || null,
         });
+        state.entries[existingIndex] = {
+          ...state.entries[existingIndex],
+          site: name,
+          username,
+          password,
+          notes: url ? `URL: ${url}${notes ? `\n${notes}` : ""}` : notes,
+          folderId: folderId || "",
+          updatedAt: updatedEntry.updated_at || now,
+        };
         state.showEntryForm = false;
         state.editingEntryId = null;
         state.saving = false;
-        await saveVault(); // Save encrypted vault after update
         render();
         showToast("Accés actualitzat correctament.");
         return;
@@ -3237,7 +3288,23 @@ async function emptyTrash() {
   }
 }
 
+function captureEntryFormDraft() {
+  const form = document.querySelector("#entry-form");
+  if (!form) return state.entryFormDraft || {};
+
+  const formData = new FormData(form);
+  return {
+    site: String(formData.get("name") || ""),
+    folderId: String(formData.get("folder") || ""),
+    username: String(formData.get("username") || ""),
+    password: String(formData.get("password") || ""),
+    url: String(formData.get("url") || ""),
+    notes: String(formData.get("notes") || ""),
+  };
+}
+
 function openPasswordGenerator() {
+  state.entryFormDraft = captureEntryFormDraft();
   state.showEntryForm = false;
   state.returnToEntryForm = true;
   if (state.showFirstEntryGuide) state.firstEntryGuideStep = 4;
@@ -3248,6 +3315,10 @@ function openPasswordGenerator() {
 }
 
 function useGeneratedPassword() {
+  state.entryFormDraft = {
+    ...(state.entryFormDraft || {}),
+    password: state.generatedValue,
+  };
   state.showEntryForm = true;
   state.returnToEntryForm = false;
   if (state.showFirstEntryGuide) state.firstEntryGuideStep = 5;
@@ -3256,6 +3327,7 @@ function useGeneratedPassword() {
   const input = document.querySelector("#entry-password");
   if (input) {
     input.value = state.generatedValue;
+    input.closest(".input-with-actions")?.classList.add("has-password");
     input.focus();
     updateEntryStrength(input.value);
   }
@@ -3296,62 +3368,14 @@ function bindEvents() {
       } else if (state.authMethodSelected === "image") {
         state.showGridSetup = true;
         state.changingAuthMethod = false;
-        state.gridSetupPattern = [];
         state.imageGridPattern = [];
         state.imageGridBrushPath = [];
-        state.imageGridCellValues = generateGridFragments();
         state.gridSetupError = "";
         state.imageAuthImage = "";
         imageAuthRenderSource = "";
         localStorage.removeItem("image_auth_image");
         render();
       }
-    });
-  document.querySelectorAll("[data-grid-cell]").forEach((cell) => {
-    cell.addEventListener("click", () => {
-      const cellIndex = Number(cell.dataset.gridCell);
-      if (cell.classList.contains("selected")) {
-        // Remove from pattern
-
-        state.gridSetupPattern = state.gridSetupPattern.filter(
-          (i) => i !== cellIndex,
-        );
-      } else {
-        // Add to pattern
-
-        state.gridSetupPattern.push(cellIndex);
-      }
-      render();
-    });
-  });
-  document
-    .querySelector("#save-grid-setup")
-    ?.addEventListener("click", async () => {
-      if (state.gridSetupPattern.length !== state.gridCellSize) {
-        state.gridSetupError = `Has de seleccionar ${state.gridCellSize} cèl·lules.`;
-        render();
-        return;
-      }
-      state.showGridSetup = false;
-      state.showAuthMethodSelection = false;
-      try {
-        await invoke("set_grid_auth", {
-          pattern: state.gridSetupPattern,
-        });
-        state.masterPassword = "";
-        showToast("Grid de seguretat configurat correctament.");
-        render();
-      } catch (error) {
-        state.gridSetupError = String(error);
-        render();
-      }
-    });
-  document
-    .querySelector("#cancel-grid-setup")
-    ?.addEventListener("click", () => {
-      state.showGridSetup = false;
-      state.gridSetupError = "";
-      render();
     });
   document
     .querySelector("#image-upload-area")
@@ -3370,8 +3394,8 @@ function bindEvents() {
           state.imageGridPattern = [];
           state.imageGridBrushPath = [];
           imageAuthRenderSource = "";
-          document.querySelector("#image-upload-area").style.display = "none";
-          document.querySelector("#image-auth-canvas-area").style.display = "";
+          document.querySelector("#image-upload-area").hidden = true;
+          document.querySelector("#image-auth-canvas-area").hidden = false;
           renderImageOnCanvas();
         };
         reader.readAsDataURL(file);
@@ -3381,8 +3405,8 @@ function bindEvents() {
   if (state.showGridSetup && state.imageAuthImage) {
     const uploadArea = document.querySelector("#image-upload-area");
     const canvasArea = document.querySelector("#image-auth-canvas-area");
-    if (uploadArea) uploadArea.style.display = "none";
-    if (canvasArea) canvasArea.style.display = "";
+    if (uploadArea) uploadArea.hidden = true;
+    if (canvasArea) canvasArea.hidden = false;
     renderImageOnCanvas();
     updateImageAuthOrder(
       "image-auth-count",
@@ -3452,26 +3476,21 @@ function bindEvents() {
   document
     .querySelector("#save-image-auth-setup")
     ?.addEventListener("click", async () => {
-      if (!state.imageAuthImage || state.imageGridCellValues.length !== 25) {
+      if (!state.imageAuthImage) {
         state.gridSetupError = "Puja una imatge abans de desar la graella.";
         render();
         return;
       }
-      if (state.imageGridPattern.length < 5) {
-        state.gridSetupError = "Has de seleccionar almenys 5 punts.";
+      if (state.imageGridPattern.length < 12) {
+        state.gridSetupError = "Has de seleccionar almenys 12 punts.";
         render();
         return;
       }
       try {
-        const masterPassword = state.imageGridPattern
-          .map((cell) => state.imageGridCellValues[cell])
-          .join("");
         if (state.changingAuthMethod) {
           const result = await invoke("change_vault_to_image_grid", {
-            currentPassword: state.masterPassword,
             selectedCells: state.imageGridPattern,
             imageData: state.imageAuthImage,
-            cellValues: state.imageGridCellValues,
           });
           state.entries = (result.entries || []).map((entry) => ({
             ...entry,
@@ -3490,12 +3509,14 @@ function bindEvents() {
         } else {
           await invoke("set_image_grid_auth", {
             imageData: state.imageAuthImage,
-            cellValues: state.imageGridCellValues,
+            selectedCells: state.imageGridPattern,
           });
-          await invoke("init_empty_vault", { password: masterPassword });
+          await invoke("init_empty_grid_vault", {
+            selectedCells: state.imageGridPattern,
+          });
         }
         localStorage.removeItem("image_auth_image");
-        state.masterPassword = masterPassword;
+        state.imageGridConfigured = true;
         state.locked = false;
         state.changingAuthMethod = false;
         state.showGridSetup = false;
@@ -3514,10 +3535,9 @@ function bindEvents() {
       const returningToChangeAuth = state.changingAuthMethod;
       state.showGridSetup = false;
       state.gridSetupError = "";
-      state.gridSetupPattern = [];
       state.imageGridPattern = [];
       state.imageAuthImage = "";
-      state.imageGridCellValues = [];
+      state.imageGridConfigured = false;
       state.showChangeAuthModal = returningToChangeAuth;
       state.changingAuthMethod = false;
       imageAuthRenderSource = "";
@@ -3534,7 +3554,6 @@ function bindEvents() {
       state.gridSetupError = "";
       state.imageGridPattern = [];
       state.imageAuthImage = "";
-      state.imageGridCellValues = [];
       state.showChangeAuthModal = state.changingAuthMethod;
       state.changingAuthMethod = false;
       imageAuthRenderSource = "";
@@ -3546,7 +3565,6 @@ function bindEvents() {
     ?.addEventListener("click", () => {
       state.showGridUnlock = false;
       state.gridUnlockError = "";
-      state.gridUnlockPattern = [];
       state.imageGridPattern = [];
       state.imageUnlockBrushPath = [];
       render();
@@ -3557,7 +3575,6 @@ function bindEvents() {
     ?.addEventListener("click", () => {
       state.showGridUnlock = false;
       state.gridUnlockError = "";
-      state.gridUnlockPattern = [];
       state.imageGridPattern = [];
       state.imageUnlockBrushPath = [];
       render();
@@ -3565,54 +3582,24 @@ function bindEvents() {
 
   const unlockCanvas = document.querySelector("#image-auth-unlock-canvas");
   if (unlockCanvas) {
-    const persistedImage =
-      state.imageAuthImage || localStorage.getItem("image_auth_image");
-    console.log(
-      "Unlock canvas found, persisted image:",
-      persistedImage ? "yes" : "no",
-    );
+    const persistedImage = state.imageAuthImage;
     if (persistedImage) {
       const img = new Image();
       img.onload = () => {
-        console.log("Image loaded, drawing to canvas");
         drawImageAuthBackground(unlockCanvas, img);
-        if (state.imageGridCellValues.length === 25) {
-          drawImageAuthGrid(
-            unlockCanvas,
-            state.imageGridPattern,
-            state.imageUnlockBrushPath,
-          );
-        } else {
-          drawLegacyImagePoints(unlockCanvas, state.gridUnlockPattern);
-        }
-      };
-      img.onerror = () => {
-        console.log("Error loading image");
+        drawImageAuthGrid(
+          unlockCanvas,
+          state.imageGridPattern,
+          state.imageUnlockBrushPath,
+        );
       };
       img.src = persistedImage;
     }
   }
 
-  document
-    .querySelector("#image-auth-unlock-canvas")
-    ?.addEventListener("click", (event) => {
-      if (state.imageGridCellValues.length === 25) return;
-      const canvas = event.target;
-      const rect = canvas.getBoundingClientRect();
-      const x = ((event.clientX - rect.left) / rect.width) * 100;
-      const y = ((event.clientY - rect.top) / rect.height) * 100;
-      state.gridUnlockPattern.push({ x, y });
-      drawLegacyImagePoints(canvas, state.gridUnlockPattern);
-      updateImageAuthOrder(
-        "image-auth-unlock-count",
-        "image-auth-unlock-order",
-        state.gridUnlockPattern,
-      );
-    });
-
   const imageUnlockCanvas = document.querySelector("#image-auth-unlock-canvas");
   imageUnlockCanvas?.addEventListener("pointerdown", (event) => {
-    if (state.imageGridCellValues.length !== 25) return;
+    if (!state.imageGridConfigured) return;
     state.imageGridPointerActive = true;
     if (state.imageUnlockBrushPath.length) {
       state.imageUnlockBrushPath.push(null);
@@ -3627,10 +3614,7 @@ function bindEvents() {
     );
   });
   imageUnlockCanvas?.addEventListener("pointermove", (event) => {
-    if (
-      state.imageGridCellValues.length === 25 &&
-      state.imageGridPointerActive
-    ) {
+    if (state.imageGridConfigured && state.imageGridPointerActive) {
       selectImageGridCell(
         event,
         state.imageGridPattern,
@@ -3650,7 +3634,6 @@ function bindEvents() {
   document
     .querySelector("#undo-image-auth-unlock-point")
     ?.addEventListener("click", () => {
-      state.gridUnlockPattern.pop();
       state.imageGridPattern.pop();
       redrawImageAuthGridCanvas(
         "image-auth-unlock-canvas",
@@ -3664,7 +3647,6 @@ function bindEvents() {
   document
     .querySelector("#clear-image-auth-unlock-points")
     ?.addEventListener("click", () => {
-      state.gridUnlockPattern = [];
       state.imageGridPattern = [];
       state.imageUnlockBrushPath = [];
       redrawImageAuthGridCanvas(
@@ -3679,35 +3661,18 @@ function bindEvents() {
   document
     .querySelector("#verify-image-auth-unlock")
     ?.addEventListener("click", async () => {
-      const selectedCells =
-        state.imageGridCellValues.length === 25
-          ? state.imageGridPattern
-          : state.gridUnlockPattern;
-      if (selectedCells.length === 0) {
-        state.gridUnlockError = "Selecciona els punts del teu patró.";
+      const selectedCells = state.imageGridPattern;
+      if (selectedCells.length < 12) {
+        state.gridUnlockError = "Selecciona els 12 punts en el mateix ordre.";
         render();
         return;
       }
       state.loading = true;
       render();
       try {
-        const pattern =
-          state.imageGridCellValues.length === 25
-            ? state.imageGridPattern.slice()
-            : encodeImageAuthPattern(state.gridUnlockPattern);
-        const masterPassword =
-          state.imageGridCellValues.length === 25
-            ? pattern.map((cell) => state.imageGridCellValues[cell]).join("")
-            : (state.legacyImageAuthPattern.length
-                ? state.legacyImageAuthPattern
-                : pattern
-              )
-                .map((byte) => String(byte))
-                .join("-");
         const result = await invoke("unlock_vault_grid", {
-          pattern,
+          pattern: selectedCells.slice(),
         });
-        state.masterPassword = masterPassword;
         state.entries = (result.entries || []).map((entry) => ({
           ...entry,
           folderId: entry.folder_id || null,
@@ -3720,28 +3685,16 @@ function bindEvents() {
         state.activeFolderId = "";
         state.locked = false;
         state.showGridUnlock = false;
-        state.gridUnlockPattern = [];
         state.imageGridPattern = [];
         resetAutoLock();
       } catch (error) {
         state.gridUnlockError = String(error);
-        state.gridUnlockPattern = [];
         state.imageGridPattern = [];
       } finally {
         state.loading = false;
         render();
       }
     });
-
-  function encodeImageAuthPattern(points) {
-    return points
-      .map((p) => {
-        const xByte = Math.floor(p.x);
-        const yByte = Math.floor(p.y);
-        return [xByte, yByte];
-      })
-      .flat();
-  }
 
   function drawImageAuthBackground(canvas, image) {
     const bitmapScale = Math.min(
@@ -3766,8 +3719,7 @@ function bindEvents() {
   }
 
   function withImageAuthBackground(canvas, drawOverlay) {
-    const source =
-      state.imageAuthImage || localStorage.getItem("image_auth_image") || "";
+    const source = state.imageAuthImage;
     if (!source) return;
     const draw = (image) => {
       drawImageAuthBackground(canvas, image);
@@ -3871,28 +3823,6 @@ function bindEvents() {
     ctx.restore();
   }
 
-  function drawLegacyImagePoints(canvas, points) {
-    withImageAuthBackground(canvas, (ctx) => {
-      const displayScale = canvasDisplayScale(canvas);
-      points.forEach((point, index) => {
-        const x = (point.x * canvas.width) / 100;
-        const y = (point.y * canvas.height) / 100;
-        ctx.beginPath();
-        ctx.arc(x, y, 19 * displayScale, 0, 2 * Math.PI);
-        ctx.fillStyle = "#2471d1";
-        ctx.fill();
-        ctx.strokeStyle = "#ffffff";
-        ctx.lineWidth = 3 * displayScale;
-        ctx.stroke();
-        ctx.fillStyle = "#ffffff";
-        ctx.font = `700 ${15 * displayScale}px 'DM Sans', sans-serif`;
-        ctx.textAlign = "center";
-        ctx.textBaseline = "middle";
-        ctx.fillText(String(index + 1), x, y);
-      });
-    });
-  }
-
   function updateImageAuthOrder(countId, orderId, selectedCells) {
     document.getElementById(countId).textContent = selectedCells.length;
     document.getElementById(orderId).textContent = !selectedCells.length
@@ -3907,7 +3837,6 @@ function bindEvents() {
     orderId,
     brushPath = [],
   ) {
-    if (state.imageGridCellValues.length !== 25) return;
     const rect = event.currentTarget.getBoundingClientRect();
     const x = (event.clientX - rect.left) / rect.width;
     const y = (event.clientY - rect.top) / rect.height;
@@ -3925,8 +3854,8 @@ function bindEvents() {
     if (isNewCell) selectedCells.push(cell);
     if (
       countId === "image-auth-count" &&
-      selectedCells.length >= 5 &&
-      state.gridSetupError.startsWith("Has de seleccionar almenys 5")
+      selectedCells.length >= 12 &&
+      state.gridSetupError.startsWith("Has de seleccionar almenys 12")
     ) {
       state.gridSetupError = "";
       document.getElementById("image-auth-setup-error")?.remove();
@@ -3964,56 +3893,8 @@ function bindEvents() {
   ) {
     const canvas = document.getElementById(canvasId);
     if (!canvas) return;
-    if (state.imageGridCellValues.length === 25) {
-      drawImageAuthGrid(canvas, selectedCells, brushPath);
-      updateImageAuthOrder(countId, orderId, selectedCells);
-    } else {
-      drawLegacyImagePoints(canvas, state.gridUnlockPattern);
-      document.getElementById(countId).textContent =
-        state.gridUnlockPattern.length;
-      document.getElementById(orderId).textContent =
-        state.gridUnlockPattern
-          .map((_, index) => String(index + 1))
-          .join(" → ") || "cap";
-    }
-  }
-
-  function generateGridFragments() {
-    const characterSets = [
-      "ABCDEFGHIJKLMNOPQRSTUVWXYZ",
-      "abcdefghijklmnopqrstuvwxyz",
-      "0123456789",
-      "!@#$%^&*()-_=+[]{}",
-    ];
-    const fragments = [];
-    const uniqueFragments = new Set();
-    while (fragments.length < 25) {
-      const characters = characterSets.map(
-        (set) => set[secureRandomIndex(set.length)],
-      );
-      for (let index = characters.length - 1; index > 0; index -= 1) {
-        const swapIndex = secureRandomIndex(index + 1);
-        [characters[index], characters[swapIndex]] = [
-          characters[swapIndex],
-          characters[index],
-        ];
-      }
-      const fragment = characters.join("");
-      if (uniqueFragments.has(fragment)) continue;
-      uniqueFragments.add(fragment);
-      fragments.push(fragment);
-    }
-    return fragments;
-  }
-
-  function secureRandomIndex(limit) {
-    const range = 0x100000000;
-    const cutoff = range - (range % limit);
-    const value = new Uint32Array(1);
-    do {
-      crypto.getRandomValues(value);
-    } while (value[0] >= cutoff);
-    return value[0] % limit;
+    drawImageAuthGrid(canvas, selectedCells, brushPath);
+    updateImageAuthOrder(countId, orderId, selectedCells);
   }
 
   function renderImageOnCanvas() {
@@ -4051,10 +3932,8 @@ function bindEvents() {
     ?.addEventListener("click", async () => {
       if (state.changeAuthSelected === "image") {
         state.showGridSetup = true;
-        state.gridSetupPattern = [];
         state.imageGridPattern = [];
         state.imageGridBrushPath = [];
-        state.imageGridCellValues = generateGridFragments();
         state.gridSetupError = "";
         state.imageAuthImage = "";
         state.changingAuthMethod = true;
@@ -4092,10 +3971,8 @@ function bindEvents() {
       }
       try {
         await invoke("change_vault_to_password", {
-          currentPassword: state.masterPassword,
           newPassword,
         });
-        state.masterPassword = newPassword;
         state.showChangeAuthModal = false;
         state.changeAuthError = "";
         state.changeAuthSelected = "password";
@@ -4222,6 +4099,32 @@ function bindEvents() {
     .querySelector("#reset-vault")
     ?.addEventListener("click", resetLocalVault);
 
+  document.querySelector("#generate-browser-pairing-code")?.addEventListener("click", async () => {
+    try {
+      state.browserPairingCode = await invoke("generate_pairing_code");
+      render();
+      showToast("Codi de vinculació creat.");
+    } catch (error) {
+      showToast(error?.toString?.() || "No s'ha pogut crear el codi.");
+    }
+  });
+
+  document.querySelectorAll("[data-revoke-paired-browser]").forEach((button) =>
+    button.addEventListener("click", async () => {
+      try {
+        await invoke("revoke_paired_client", {
+          clientId: button.dataset.revokePairedBrowser,
+        });
+        state.browserPairingCode = "";
+        await refreshPairedBrowsers();
+        render();
+        showToast("Navegador revocat.");
+      } catch (error) {
+        showToast(error?.toString?.() || "No s'ha pogut revocar el navegador.");
+      }
+    }),
+  );
+
   document.querySelector("#search")?.addEventListener("input", (event) => {
     state.query = event.target.value.toLowerCase();
     render();
@@ -4302,11 +4205,18 @@ function bindEvents() {
   );
 
   document.querySelector("#nav-vault")?.addEventListener("click", () => {
+    if (state.returnToEntryForm) {
+      state.returnToEntryForm = false;
+      state.showEntryForm = true;
+    }
     state.view = "vault";
     render();
   });
   document.querySelector("#nav-settings")?.addEventListener("click", () => {
     state.view = "settings";
+    refreshPairedBrowsers().then(() => {
+      if (state.view === "settings") render();
+    });
     render();
   });
   document.querySelector("#nav-generator")?.addEventListener("click", () => {
@@ -4328,8 +4238,7 @@ function bindEvents() {
     fontSlider.addEventListener("input", (event) => {
       const val = Number(event.target.value) || 16;
       state.settings.fontSize = String(val);
-      document.documentElement.style.setProperty("--app-font-size", `${val}px`);
-      document.documentElement.style.fontSize = `${val}px`;
+      document.documentElement.dataset.fontSize = String(val);
       const out = document.querySelector("#font-size-value");
       if (out) out.textContent = `${val} px`;
       localStorage.setItem(
@@ -4572,6 +4481,14 @@ function bindEvents() {
   document
     .querySelector("#generate-password")
     ?.addEventListener("click", openPasswordGenerator);
+  document
+    .querySelector("#entry-password")
+    ?.addEventListener("input", (event) => {
+      updateEntryStrength(event.target.value);
+      event.target
+        .closest(".input-with-actions")
+        ?.classList.toggle("has-password", Boolean(event.target.value));
+    });
 
   document.querySelectorAll("[data-copy]").forEach((button) =>
     button.addEventListener("click", (e) => {
@@ -4649,12 +4566,6 @@ window.addEventListener("keydown", (event) => {
     selectPaletteEntry(results[state.paletteIndex].dataset.paletteEntry);
   }
 });
-document
-  .querySelector("#entry-password")
-  ?.addEventListener("input", (event) => {
-    updateEntryStrength(event.target.value);
-  });
-
 async function reloadVaultEntries() {
   if (state.locked) return;
   try {

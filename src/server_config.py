@@ -23,7 +23,11 @@ SERVER_CERT_PATH = CERT_DIR / "server.crt"
 SERVER_KEY_PATH = CERT_DIR / "server.key"
 
 # Vault file path
-VAULT_PATH = Path.home() / ".password_manager" / "vault.json"
+VAULT_PATH = Path(
+    os.path.expanduser(
+        os.environ.get("VAULT_PATH", str(Path.home() / ".password_manager" / "vault.json"))
+    )
+).resolve()
 
 # API endpoints
 API_BASE = "/api/v1"

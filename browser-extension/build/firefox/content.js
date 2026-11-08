@@ -33,55 +33,101 @@ function setNativeInputValue(element, value) {
   }, 1200);
 }
 
-function findFormFields() {
-  const passwordInputs = Array.from(
-    document.querySelectorAll(
-      'input[type="password"]:not([disabled]):not([readonly])',
-    ),
-  ).filter((el) => el.offsetParent !== null);
+function inputAttributes(input) {
+  return [
+    input.name,
+    input.id,
+    input.placeholder,
+    input.getAttribute?.("aria-label"),
+    input.getAttribute?.("autocomplete"),
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+}
 
-  const passwordEl = passwordInputs[0] || null;
-
-  // Look for username/email fields
-  const usernameSelectors = [
-    'input[type="email"]:not([disabled]):not([readonly])',
-    'input[name*="user" i]:not([disabled]):not([readonly])',
-    'input[name*="login" i]:not([disabled]):not([readonly])',
-    'input[name*="mail" i]:not([disabled]):not([readonly])',
-    'input[id*="user" i]:not([disabled]):not([readonly])',
-    'input[id*="email" i]:not([disabled]):not([readonly])',
-    'input[autocomplete*="username" i]',
-    'input[autocomplete*="email" i]',
-    'input[type="text"]:not([disabled]):not([readonly])',
-  ];
-
-  let usernameEl = null;
-
-  // Search within the same form first
-  if (passwordEl && passwordEl.form) {
-    for (const selector of usernameSelectors) {
-      const match = passwordEl.form.querySelector(selector);
-      if (match && match !== passwordEl && match.offsetParent !== null) {
-        usernameEl = match;
-        break;
-      }
-    }
+function isUsableInput(input) {
+  if (input.tagName !== "INPUT" || input.disabled || input.readOnly) return false;
+  if (["hidden", "submit", "button", "reset", "image"].includes(input.type)) {
+    return false;
   }
-
-  // Fallback to searching the whole document
-  if (!usernameEl) {
-    for (const selector of usernameSelectors) {
-      const candidates = Array.from(document.querySelectorAll(selector)).filter(
-        (el) => el !== passwordEl && el.offsetParent !== null,
-      );
-      if (candidates.length > 0) {
-        usernameEl = candidates[0];
-        break;
-      }
-    }
+  if (typeof input.getClientRects === "function") {
+    return input.getClientRects().length > 0;
   }
+  return input.offsetParent !== null;
+}
 
-  return { usernameEl, passwordEl };
+function scoreUsernameInput(input) {
+  const autocomplete = (input.autocomplete || "").toLowerCase();
+  const hints = inputAttributes(input);
+  let score = 0;
+
+  if (autocomplete === "username") score += 120;
+  if (autocomplete === "email") score += 90;
+  if (input.type === "email") score += 70;
+  if (/user(name)?|login|account|email|mail|identifier/.test(hints)) score += 40;
+  if (input.type === "text") score += 5;
+
+  return score;
+}
+
+function findFormFields(root = document, { includeNewPassword = false } = {}) {
+  const inputs = Array.from(root.querySelectorAll("input")).filter(isUsableInput);
+  const passwordInputs = inputs.filter((input) => input.type === "password");
+  const signupOnly = !includeNewPassword && passwordInputs.length > 0 &&
+    passwordInputs.every((input) => (input.autocomplete || "").toLowerCase() === "new-password");
+  if (signupOnly) return { usernameEl: null, passwordEl: null };
+  const passwordEl =
+    passwordInputs
+      .filter((input) => {
+        const autocomplete = (input.autocomplete || "").toLowerCase();
+        return includeNewPassword || autocomplete !== "new-password";
+      })
+      .map((input) => {
+        const autocomplete = (input.autocomplete || "").toLowerCase();
+        const hints = inputAttributes(input);
+        const sameFormHasUsername = inputs.some(
+          (candidate) =>
+            candidate !== input &&
+            candidate.form === input.form &&
+            candidate.type !== "password" &&
+            scoreUsernameInput(candidate) > 5,
+        );
+        return {
+          input,
+          score:
+            10 +
+            (autocomplete === "current-password" ? 120 : 0) +
+            (/pass|password/.test(hints) ? 30 : 0) +
+            (sameFormHasUsername ? 35 : 0),
+        };
+      })
+      .sort((left, right) => right.score - left.score)[0]?.input || null;
+
+  const usernameCandidates = inputs
+    .filter(
+      (input) =>
+        input !== passwordEl &&
+        input.type !== "password" &&
+        scoreUsernameInput(input) > 5,
+    )
+    .filter((input) => !passwordEl?.form || input.form === passwordEl.form)
+    .map((input) => ({ input, score: scoreUsernameInput(input) }))
+    .sort((left, right) => right.score - left.score);
+
+  // On two-step sign-in pages, the username field is the only login field.
+  const fallbackCandidates = usernameCandidates.length
+    ? usernameCandidates
+    : inputs
+        .filter((input) => input !== passwordEl && input.type !== "password")
+        .map((input) => ({ input, score: scoreUsernameInput(input) }))
+        .filter(({ score }) => score > 5)
+        .sort((left, right) => right.score - left.score);
+
+  return {
+    usernameEl: fallbackCandidates[0]?.input || null,
+    passwordEl,
+  };
 }
 
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
@@ -130,7 +176,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === "fillGeneratedPassword") {
     let target = document.activeElement;
     if (!target || target.tagName !== "INPUT" || target.type !== "password") {
-      const { passwordEl } = findFormFields();
+      const { passwordEl } = findFormFields(document, { includeNewPassword: true });
       target = passwordEl;
     }
     if (target) {
@@ -175,14 +221,31 @@ function showSavePrompt({ site, username, password }) {
   prompt.className = "caixa-forta-save-prompt";
 
   const cleanSite = site.replace(/^www\./, "");
-  const userText = username ? ` (${username})` : "";
+  const title = document.createElement("span");
+  title.style.fontWeight = "600";
+  title.textContent = "Caixa Forta:";
 
-  prompt.innerHTML = `
-    <span style="font-weight: 600;">🔒 Caixa Forta:</span>
-    <span>Desar contrasenya per a <strong>${cleanSite}</strong>${userText}?</span>
-    <button type="button" class="cf-btn-save">Desar a Caixa Forta</button>
-    <button type="button" class="cf-btn-close" title="Tancar">✕</button>
-  `;
+  const message = document.createElement("span");
+  message.append("Desar contrasenya per a ");
+  const siteName = document.createElement("strong");
+  siteName.textContent = cleanSite;
+  message.append(siteName);
+  if (username) {
+    message.append(` (${username})`);
+  }
+  message.append("?");
+
+  const saveButton = document.createElement("button");
+  saveButton.type = "button";
+  saveButton.className = "cf-btn-save";
+  saveButton.textContent = "Desar a Caixa Forta";
+
+  const closeButton = document.createElement("button");
+  closeButton.type = "button";
+  closeButton.className = "cf-btn-close";
+  closeButton.title = "Tancar";
+  closeButton.textContent = "X";
+  prompt.replaceChildren(title, message, saveButton, closeButton);
 
   prompt.querySelector(".cf-btn-close")?.addEventListener("click", () => {
     prompt.remove();
@@ -201,10 +264,19 @@ function showSavePrompt({ site, username, password }) {
       },
       (res) => {
         if (res && res.success) {
-          prompt.innerHTML = `<span style="font-weight: 600; color: #4ade80;">✓ Accés desat a Caixa Forta!</span>`;
+          // Use textContent to avoid XSS from server-provided strings (F15)
+          const okSpan = document.createElement("span");
+          okSpan.style.fontWeight = "600";
+          okSpan.style.color = "#4ade80";
+          okSpan.textContent = "✓ Accés desat a Caixa Forta!";
+          prompt.replaceChildren(okSpan);
           setTimeout(() => prompt.remove(), 2500);
         } else {
-          prompt.innerHTML = `<span style="color: #f87171;">Error: ${res?.error || "No s'ha pogut desar"}</span>`;
+          const errSpan = document.createElement("span");
+          errSpan.style.color = "#f87171";
+          errSpan.textContent =
+            "Error: " + (res?.error || "No s'ha pogut desar");
+          prompt.replaceChildren(errSpan);
           setTimeout(() => prompt.remove(), 3500);
         }
       },

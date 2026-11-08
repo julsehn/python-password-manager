@@ -65,10 +65,10 @@ Future AI agents should treat this project as a security-sensitive app. Keep cha
 
 ### Image-grid authentication invariants
 
-- Image-grid auth stores the display image and per-cell password fragments in `~/.password_manager/grid_auth.json` so they can be shown before unlock. Keep this file and its parent directory restricted to the current user. Do not persist the selected cell sequence; ordered selections are the secret.
+- Store only the public image in `~/.password_manager/grid_auth.json`; generate fragments in Rust and keep them in the OS credential store. Keep the metadata file and parent directory restricted to the current user. Never persist the selected cell sequence; ordered selections are the secret.
 - New fragments must include uppercase, lowercase, digits, and symbols. Setup, unlock, and auth-method migration must derive exactly the same password from the selected cell indices in order.
-- Preserve compatibility with existing two-character and earlier uppercase-only fragment formats. For legacy coordinate auth, tolerance may validate a click, but key derivation must use the saved exact legacy pattern or AES-GCM decryption will fail.
-- The image-auth UI uses an invisible 5x5 hit grid over the image, numbered markers and a visible brush path, with a five-cell minimum. Do not show cell fragments or the concatenated password in the UI.
+- Accept only the current image-grid format. Legacy fragment and coordinate formats are intentionally unsupported because this app has not shipped publicly.
+- The image-auth UI uses an invisible 5x5 hit grid over the image, numbered markers and a visible brush path, with a twelve-cell minimum. Do not show cell fragments or the concatenated password in the UI.
 - When migrating auth methods, re-encrypt the existing vault and preserve its contents; do not initialize an empty vault over an existing one.
 
 ### Generator invariants

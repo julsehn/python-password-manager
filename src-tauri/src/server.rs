@@ -7,12 +7,15 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
+use zeroize::Zeroizing;
 
 use crate::security;
-use crate::{Entry, Folder, HistoryItem, TrashedEntry, VaultData};
+use crate::{
+    atomic_write, config_dir, vault_path, Entry, Folder, HistoryItem, TrashedEntry, VaultData,
+};
 
 pub struct UnlockedVault {
-    pub master_password: String,
+    pub master_password: Zeroizing<String>,
     pub entries: Vec<Entry>,
     pub folders: Vec<Folder>,
     pub trash: Vec<TrashedEntry>,
@@ -50,8 +53,6 @@ pub struct ServerState {
     pub shared_secret: Mutex<String>,
     pub write_semaphore: Arc<tokio::sync::Semaphore>,
     pub app_handle: Mutex<Option<tauri::AppHandle>>,
-    pub last_auth_fail: Mutex<i64>,
-    pub auth_fail_count: Mutex<u32>,
     pub pairing_code: Mutex<Option<PairingCode>>,
     pub pending_challenges: Mutex<HashMap<String, (String, i64)>>, // client_id -> (nonce_hex, expires_at)
     pub authorized_clients: Mutex<HashSet<String>>, // client_id authorized in current session
@@ -76,8 +77,6 @@ impl ServerState {
             shared_secret: Mutex::new(secret),
             write_semaphore: semaphore,
             app_handle: Mutex::new(None),
-            last_auth_fail: Mutex::new(0),
-            auth_fail_count: Mutex::new(0),
             pairing_code: Mutex::new(None),
             pending_challenges: Mutex::new(HashMap::new()),
             authorized_clients: Mutex::new(HashSet::new()),
@@ -101,30 +100,12 @@ impl ServerState {
     ) {
         let mut data = self.unlocked_data.lock().unwrap();
         *data = Some(UnlockedVault {
-            master_password,
+            master_password: Zeroizing::new(master_password),
             entries,
             folders,
             trash,
             history,
         });
-    }
-
-    pub fn record_auth_fail(&self) {
-        let now = Utc::now().timestamp();
-        let mut fail_count = self.auth_fail_count.lock().unwrap();
-        let mut last_fail = self.last_auth_fail.lock().unwrap();
-        if now - *last_fail > 300 {
-            *fail_count = 0;
-        }
-        *fail_count += 1;
-        *last_fail = now;
-    }
-
-    pub fn is_rate_limited(&self) -> bool {
-        let now = Utc::now().timestamp();
-        let fail_count = self.auth_fail_count.lock().unwrap();
-        let last_fail = self.last_auth_fail.lock().unwrap();
-        *fail_count >= 5 && (now - *last_fail) < 300
     }
 
     pub fn lock(&self) {
@@ -251,15 +232,11 @@ impl ServerState {
     }
 }
 
-
 pub fn get_paired_clients_path() -> PathBuf {
     if let Ok(p) = std::env::var("CAIXA_PAIRED_CLIENTS_PATH") {
         return PathBuf::from(p);
     }
-    std::env::var("HOME")
-        .ok()
-        .map(|h| PathBuf::from(format!("{}/.password_manager/paired_clients.json", h)))
-        .unwrap_or_else(|| PathBuf::from("./paired_clients.json"))
+    config_dir().join("paired_clients.json")
 }
 
 pub fn load_paired_clients() -> Vec<PairedClient> {
@@ -327,7 +304,9 @@ pub fn verify_ecdsa_p256_signature(
         &public_key_bytes,
     );
 
-    peer_public_key.verify(message_bytes, &signature_bytes).is_ok()
+    peer_public_key
+        .verify(message_bytes, &signature_bytes)
+        .is_ok()
 }
 
 // ── Domain matching ──────────────────────────────────────────────────────────
@@ -351,15 +330,14 @@ pub fn matches_domain(entry_site: &str, query_domain: &str) -> bool {
         return true;
     }
 
-    // Subdomain matching: accounts.google.com matches google.com
-    if clean_q.ends_with(&format!(".{}", clean_e)) {
-        return true;
-    }
-    if clean_e.ends_with(&format!(".{}", clean_q)) {
-        return true;
+    let Some(entry_domain) = psl::domain_str(&clean_e) else {
+        return false;
+    };
+    if psl::domain_str(&clean_q) != Some(entry_domain) {
+        return false;
     }
 
-    false
+    clean_q.ends_with(&format!(".{}", clean_e))
 }
 
 fn clean_host(input: &str) -> String {
@@ -380,20 +358,18 @@ fn clean_host(input: &str) -> String {
 
 // ── Vault persistence helpers ────────────────────────────────────────────────
 
-fn get_vault_path() -> PathBuf {
-    std::env::var("HOME")
-        .ok()
-        .map(|h| PathBuf::from(format!("{}/.password_manager/vault.json", h)))
-        .unwrap_or_else(|| PathBuf::from("./vault.json"))
-}
-
 fn load_or_generate_secret() -> String {
-    let secret_path = std::env::var("HOME")
-        .ok()
-        .map(|h| PathBuf::from(format!("{}/.password_manager/extension_secret.key", h)))
-        .unwrap_or_else(|| PathBuf::from("./extension_secret.key"));
+    let secret_path = config_dir().join("extension_secret.key");
 
     if secret_path.exists() {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            if let Some(parent) = secret_path.parent() {
+                let _ = std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700));
+            }
+            let _ = std::fs::set_permissions(&secret_path, std::fs::Permissions::from_mode(0o600));
+        }
         if let Ok(secret) = std::fs::read_to_string(&secret_path) {
             let trimmed = secret.trim().to_string();
             if !trimmed.is_empty() {
@@ -406,10 +382,7 @@ fn load_or_generate_secret() -> String {
     rand::thread_rng().fill_bytes(&mut bytes);
     let secret = hex::encode(bytes);
 
-    if let Some(parent) = secret_path.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-    let _ = std::fs::write(&secret_path, &secret);
+    let _ = atomic_write(&secret_path, secret.as_bytes());
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -435,7 +408,7 @@ pub fn save_vault_data(master_password: &str, vault_data: &VaultData) -> Result<
     let ciphertext = security::encrypt_aes_gcm(&key, &nonce_bytes, &data.into_bytes())
         .map_err(|e| format!("Failed to encrypt: {}", e))?;
 
-    let vault_path = get_vault_path();
+    let vault_path = vault_path();
     let payload = serde_json::json!({
         "salt": base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &salt),
         "nonce": base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &nonce_bytes),
@@ -443,27 +416,12 @@ pub fn save_vault_data(master_password: &str, vault_data: &VaultData) -> Result<
         "version": "1"
     });
 
-    if let Some(parent) = vault_path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| format!("Failed to create directory: {}", e))?;
-    }
-
     let mut last_error = String::new();
     for attempt in 0..3 {
-        match std::fs::write(&vault_path, payload.to_string()) {
-            Ok(_) => {
-                #[cfg(unix)]
-                {
-                    use std::os::unix::fs::PermissionsExt;
-                    let _ = std::fs::set_permissions(
-                        &vault_path,
-                        std::fs::Permissions::from_mode(0o600),
-                    );
-                }
-                return Ok(());
-            }
-            Err(e) => {
-                last_error = e.to_string();
+        match atomic_write(&vault_path, payload.to_string().as_bytes()) {
+            Ok(()) => return Ok(()),
+            Err(error) => {
+                last_error = error;
                 if attempt < 2 {
                     std::thread::sleep(std::time::Duration::from_millis(100 * (attempt + 1)));
                 }
@@ -478,7 +436,7 @@ pub fn save_vault_data(master_password: &str, vault_data: &VaultData) -> Result<
 }
 
 pub fn decrypt_vault_from_disk(master_password: &str) -> Result<VaultData, String> {
-    let vault_path = get_vault_path();
+    let vault_path = vault_path();
     if !vault_path.exists() {
         return Ok(VaultData {
             entries: vec![],
@@ -520,15 +478,29 @@ pub fn decrypt_vault_from_disk(master_password: &str) -> Result<VaultData, Strin
 // ── HTTP Server Implementation ───────────────────────────────────────────────
 
 pub async fn start_server(state: Arc<ServerState>, port: u16) -> Result<(), String> {
-    let addr = format!("127.0.0.1:{}", port);
-    let listener = match TcpListener::bind(&addr).await {
-        Ok(l) => l,
-        Err(e) => {
-            let err_msg = format!("Failed to bind to {}: {}", addr, e);
-            *state.server_error.lock().unwrap() = Some(err_msg.clone());
-            return Err(err_msg);
-        }
+    let requested_addr = format!("127.0.0.1:{}", port);
+    let listener = match TcpListener::bind(&requested_addr).await {
+        Ok(listener) => listener,
+        Err(bind_error) => TcpListener::bind("127.0.0.1:0")
+            .await
+            .map_err(|fallback_error| {
+                let message = format!(
+                    "Failed to bind to {} ({}), including an available loopback port ({})",
+                    requested_addr, bind_error, fallback_error
+                );
+                *state.server_error.lock().unwrap() = Some(message.clone());
+                message
+            })?,
     };
+    let actual_port = listener
+        .local_addr()
+        .map_err(|error| format!("Failed to inspect local server port: {}", error))?
+        .port();
+    atomic_write(
+        &config_dir().join("extension_port"),
+        actual_port.to_string().as_bytes(),
+    )?;
+    let addr = format!("127.0.0.1:{}", actual_port);
 
     println!("Caixa Forta Extension Server listening on http://{}", addr);
 
@@ -554,52 +526,25 @@ async fn handle_connection(mut stream: TcpStream, peer_addr: SocketAddr, state: 
         return;
     }
 
-    let mut buffer = [0u8; 16384];
-    let n = match stream.read(&mut buffer).await {
-        Ok(n) if n > 0 => n,
-        _ => return,
+    let (method, full_path, headers, body) = match read_bounded_request(&mut stream).await {
+        Ok(request) => request,
+        Err((status, message)) => {
+            let body = serde_json::json!({"error": message}).to_string();
+            let response = build_response(status, "application/json", &body);
+            let _ = stream.write_all(response.as_bytes()).await;
+            return;
+        }
     };
-
-    let request_str = String::from_utf8_lossy(&buffer[..n]);
-    let mut lines = request_str.split("\r\n");
-
-    let request_line = match lines.next() {
-        Some(line) if !line.is_empty() => line,
-        _ => return,
-    };
-
-    let parts: Vec<&str> = request_line.split_whitespace().collect();
-    if parts.len() < 2 {
-        return;
-    }
-
-    let method = parts[0];
-    let full_path = parts[1];
-
-    let mut headers = HashMap::new();
-    let mut body_start = false;
-    let mut body = String::new();
-
-    for line in lines {
-        if body_start {
-            body.push_str(line);
-            body.push_str("\r\n");
-            continue;
-        }
-        if line.is_empty() {
-            body_start = true;
-            continue;
-        }
-        if let Some((k, v)) = line.split_once(':') {
-            headers.insert(k.trim().to_lowercase(), v.trim().to_string());
-        }
-    }
 
     // Host header check: only loopback host accepted (hardened loopback)
     let host = headers.get("host").cloned().unwrap_or_default();
     let host_domain = host.split(':').next().unwrap_or("");
     if host_domain != "127.0.0.1" && host_domain != "localhost" {
-        let res = build_response(400, "application/json", r#"{"error":"Invalid Host header"}"#);
+        let res = build_response(
+            400,
+            "application/json",
+            r#"{"error":"Invalid Host header"}"#,
+        );
         let _ = stream.write_all(res.as_bytes()).await;
         return;
     }
@@ -612,13 +557,105 @@ async fn handle_connection(mut stream: TcpStream, peer_addr: SocketAddr, state: 
 
     let (path, query) = match full_path.split_once('?') {
         Some((p, q)) => (p, q),
-        None => (full_path, ""),
+        None => (full_path.as_str(), ""),
     };
 
-    let (status, res_body) = route_request(method, path, query, &headers, &body, &state).await;
+    let (status, res_body) = route_request(&method, path, query, &headers, &body, &state).await;
 
     let res = build_response(status, "application/json", &res_body);
     let _ = stream.write_all(res.as_bytes()).await;
+}
+
+async fn read_bounded_request(
+    stream: &mut TcpStream,
+) -> Result<(String, String, HashMap<String, String>, String), (u16, &'static str)> {
+    const MAX_HEADER_BYTES: usize = 16 * 1024;
+    const MAX_BODY_BYTES: usize = 1024 * 1024;
+    let mut request = Vec::with_capacity(4096);
+    let header_end = loop {
+        if let Some(position) = request.windows(4).position(|bytes| bytes == b"\r\n\r\n") {
+            break position;
+        }
+        if request.len() >= MAX_HEADER_BYTES {
+            return Err((431, "Request headers are too large"));
+        }
+        let mut chunk = [0u8; 4096];
+        let read = stream
+            .read(&mut chunk)
+            .await
+            .map_err(|_| (400, "Failed to read request"))?;
+        if read == 0 {
+            return Err((400, "Incomplete request headers"));
+        }
+        request.extend_from_slice(&chunk[..read]);
+    };
+
+    if header_end > MAX_HEADER_BYTES {
+        return Err((431, "Request headers are too large"));
+    }
+    let header = std::str::from_utf8(&request[..header_end])
+        .map_err(|_| (400, "Request headers are not valid UTF-8"))?;
+    let mut lines = header.split("\r\n");
+    let request_line = lines.next().ok_or((400, "Missing request line"))?;
+    let parts: Vec<_> = request_line.split_whitespace().collect();
+    if parts.len() != 3 || !parts[2].starts_with("HTTP/1.") {
+        return Err((400, "Invalid request line"));
+    }
+    let method = parts[0].to_string();
+    let full_path = parts[1].to_string();
+
+    let mut headers = HashMap::new();
+    for line in lines {
+        let (name, value) = line
+            .split_once(':')
+            .ok_or((400, "Invalid request header"))?;
+        let name = name.trim().to_ascii_lowercase();
+        if headers.insert(name, value.trim().to_string()).is_some() {
+            return Err((400, "Duplicate request header"));
+        }
+    }
+    if headers.contains_key("transfer-encoding") {
+        return Err((400, "Transfer-Encoding is not supported"));
+    }
+
+    let content_length = headers
+        .get("content-length")
+        .map(|value| {
+            value
+                .parse::<usize>()
+                .map_err(|_| (400, "Invalid Content-Length"))
+        })
+        .transpose()?
+        .unwrap_or(0);
+    if content_length > MAX_BODY_BYTES {
+        return Err((413, "Request body is too large"));
+    }
+    if matches!(method.as_str(), "POST" | "PUT" | "PATCH")
+        && !headers.contains_key("content-length")
+    {
+        return Err((411, "Content-Length is required"));
+    }
+
+    let body_start = header_end + 4;
+    let request_end = body_start
+        .checked_add(content_length)
+        .ok_or((413, "Request body is too large"))?;
+    while request.len() < request_end {
+        let mut chunk = [0u8; 4096];
+        let read = stream
+            .read(&mut chunk)
+            .await
+            .map_err(|_| (400, "Failed to read request body"))?;
+        if read == 0 {
+            return Err((400, "Incomplete request body"));
+        }
+        request.extend_from_slice(&chunk[..read]);
+    }
+    let body = std::str::from_utf8(&request[body_start..request_end])
+        .map_err(|_| (400, "Request body is not valid UTF-8"))?
+        .to_string();
+
+    Ok((method, full_path, headers, body))
 }
 
 pub async fn route_request(
@@ -665,7 +702,10 @@ pub async fn route_request(
         let public_key = parsed["public_key"].as_str().unwrap_or("").trim();
 
         if public_key.is_empty() {
-            return (400, r#"{"success":false,"error":"Missing public_key"}"#.to_string());
+            return (
+                400,
+                r#"{"success":false,"error":"Missing public_key"}"#.to_string(),
+            );
         }
 
         let now = Utc::now().timestamp();
@@ -692,7 +732,8 @@ pub async fn route_request(
             *pc_guard = None;
             return (
                 400,
-                r#"{"success":false,"error":"Too many attempts. Pairing code locked."}"#.to_string(),
+                r#"{"success":false,"error":"Too many attempts. Pairing code locked."}"#
+                    .to_string(),
             );
         }
 
@@ -702,7 +743,8 @@ pub async fn route_request(
                 *pc_guard = None;
                 return (
                     401,
-                    r#"{"success":false,"error":"Too many attempts. Pairing code locked."}"#.to_string(),
+                    r#"{"success":false,"error":"Too many attempts. Pairing code locked."}"#
+                        .to_string(),
                 );
             }
             return (
@@ -727,10 +769,17 @@ pub async fn route_request(
         let mut clients = load_paired_clients();
         clients.push(new_client);
         if let Err(e) = save_paired_clients(&clients) {
-            return (500, serde_json::json!({ "success": false, "error": e }).to_string());
+            return (
+                500,
+                serde_json::json!({ "success": false, "error": e }).to_string(),
+            );
         }
 
-        state.authorized_clients.lock().unwrap().insert(client_id.clone());
+        state
+            .authorized_clients
+            .lock()
+            .unwrap()
+            .insert(client_id.clone());
 
         let res = serde_json::json!({
             "success": true,
@@ -755,7 +804,10 @@ pub async fn route_request(
             .unwrap_or_default();
 
         if client_id.is_empty() {
-            return (400, r#"{"success":false,"error":"Missing client_id"}"#.to_string());
+            return (
+                400,
+                r#"{"success":false,"error":"Missing client_id"}"#.to_string(),
+            );
         }
 
         let clients = load_paired_clients();
@@ -835,7 +887,8 @@ pub async fn route_request(
             None => {
                 return (
                     401,
-                    r#"{"success":false,"error":"Client not found in paired registry"}"#.to_string(),
+                    r#"{"success":false,"error":"Client not found in paired registry"}"#
+                        .to_string(),
                 );
             }
         };
@@ -873,7 +926,11 @@ pub async fn route_request(
                 );
             }
         }
-        state.authorized_clients.lock().unwrap().insert(client_id.to_string());
+        state
+            .authorized_clients
+            .lock()
+            .unwrap()
+            .insert(client_id.to_string());
 
         client.last_used = Some(Utc::now().to_rfc3339());
         let _ = save_paired_clients(&clients);
@@ -906,15 +963,8 @@ pub async fn route_request(
         return (200, res.to_string());
     }
 
-    // ── 7. Authenticate / unlock routes (Rate-limited, F8 fix) ──────────────
+    // ── 7. Desktop authentication route ────────────────────────────────────
     if path == "/api/v1/auth" && method == "POST" {
-        if state.is_rate_limited() {
-            return (
-                429,
-                r#"{"success":false,"error":"Too many failed attempts. Please try again later."}"#.to_string(),
-            );
-        }
-
         let parsed: serde_json::Value = match serde_json::from_str(body) {
             Ok(v) => v,
             Err(_) => return (400, r#"{"error":"Invalid JSON body"}"#.to_string()),
@@ -944,7 +994,6 @@ pub async fn route_request(
                     return (200, res.to_string());
                 }
                 Err(e) => {
-                    state.record_auth_fail();
                     return (
                         401,
                         serde_json::json!({ "success": false, "error": e }).to_string(),
@@ -962,7 +1011,6 @@ pub async fn route_request(
             return (200, res.to_string());
         }
 
-        state.record_auth_fail();
         return (
             401,
             r#"{"success":false,"error":"Invalid credentials"}"#.to_string(),
@@ -973,7 +1021,8 @@ pub async fn route_request(
     if path == "/api/v1/unlock" && method == "POST" {
         return (
             403,
-            r#"{"success":false,"error":"Vault must be unlocked from the desktop application"}"#.to_string(),
+            r#"{"success":false,"error":"Vault must be unlocked from the desktop application"}"#
+                .to_string(),
         );
     }
 
@@ -1015,6 +1064,22 @@ pub async fn route_request(
             401,
             r#"{"success":false,"error":"Authentication required or token expired"}"#.to_string(),
         );
+    }
+
+    // The extension may list saved entries, but this index deliberately omits
+    // passwords. Secrets are released only by the domain-scoped endpoint below.
+    if path == "/api/v1/credentials/index" && method == "GET" {
+        let unlocked = state.unlocked_data.lock().unwrap();
+        let vault = match &*unlocked {
+            Some(v) => v,
+            None => {
+                return (401, r#"{"success":false,"unlocked":false,"error":"Vault is locked"}"#.to_string());
+            }
+        };
+        let entries: Vec<serde_json::Value> = vault.entries.iter().map(|e| serde_json::json!({
+            "id": e.id, "site": e.site, "username": e.username
+        })).collect();
+        return (200, serde_json::json!({"success":true,"unlocked":true,"credentials":entries}).to_string());
     }
 
     if path == "/api/v1/credentials" && method == "GET" {
@@ -1080,7 +1145,12 @@ pub async fn route_request(
         // Serialized writes: actually acquire semaphore (F13 fix)
         let _permit = match state.write_semaphore.acquire().await {
             Ok(p) => p,
-            Err(e) => return (500, serde_json::json!({"success":false,"error":e.to_string()}).to_string()),
+            Err(e) => {
+                return (
+                    500,
+                    serde_json::json!({"success":false,"error":e.to_string()}).to_string(),
+                )
+            }
         };
 
         let mut unlocked = state.unlocked_data.lock().unwrap();
@@ -1175,10 +1245,7 @@ pub async fn route_request(
     (404, r#"{"error":"Not Found"}"#.to_string())
 }
 
-fn check_request_auth(
-    headers: &HashMap<String, String>,
-    state: &Arc<ServerState>,
-) -> bool {
+fn check_request_auth(headers: &HashMap<String, String>, state: &Arc<ServerState>) -> bool {
     // 1. Check Bearer token
     if let Some(auth_val) = headers.get("authorization") {
         if let Some(token) = auth_val.strip_prefix("Bearer ") {
@@ -1241,6 +1308,40 @@ fn build_response(status: u16, content_type: &str, body: &str) -> String {
 mod tests {
     use super::*;
     use ring::signature::KeyPair;
+
+    static PAIRED_CLIENTS_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    struct PairedClientsTestIsolation {
+        _lock: std::sync::MutexGuard<'static, ()>,
+        _directory: tempfile::TempDir,
+        previous_path: Option<std::ffi::OsString>,
+    }
+
+    impl PairedClientsTestIsolation {
+        fn new() -> Self {
+            let lock = PAIRED_CLIENTS_TEST_LOCK.lock().unwrap();
+            let directory = tempfile::tempdir().unwrap();
+            let previous_path = std::env::var_os("CAIXA_PAIRED_CLIENTS_PATH");
+            std::env::set_var(
+                "CAIXA_PAIRED_CLIENTS_PATH",
+                directory.path().join("paired_clients.json"),
+            );
+            Self {
+                _lock: lock,
+                _directory: directory,
+                previous_path,
+            }
+        }
+    }
+
+    impl Drop for PairedClientsTestIsolation {
+        fn drop(&mut self) {
+            match self.previous_path.take() {
+                Some(path) => std::env::set_var("CAIXA_PAIRED_CLIENTS_PATH", path),
+                None => std::env::remove_var("CAIXA_PAIRED_CLIENTS_PATH"),
+            }
+        }
+    }
 
     #[test]
     fn test_server_state_lifecycle() {
@@ -1326,7 +1427,8 @@ mod tests {
             &headers,
             body_req,
             &state,
-        ).await;
+        )
+        .await;
         assert_eq!(status, 200);
         let parsed: serde_json::Value = serde_json::from_str(&body).unwrap();
         assert!(parsed["success"].as_bool().unwrap());
@@ -1342,7 +1444,13 @@ mod tests {
 
         // Subdomain of entry matches
         assert!(matches_domain("google.com", "accounts.google.com"));
-        assert!(matches_domain("accounts.google.com", "google.com"));
+        assert!(!matches_domain("accounts.google.com", "google.com"));
+        assert!(!matches_domain("github.io", "project.github.io"));
+        assert!(!matches_domain("project.github.io", "other.github.io"));
+        assert!(matches_domain(
+            "project.github.io",
+            "login.project.github.io"
+        ));
 
         // Phishing / lookalike MUST NOT match
         assert!(!matches_domain("google.com", "evilgoogle.com"));
@@ -1393,15 +1501,32 @@ mod tests {
         let mut headers = HashMap::new();
         headers.insert("authorization".to_string(), format!("Bearer {}", token));
 
+        let (index_status, index_body) = route_request(
+            "GET", "/api/v1/credentials/index", "", &headers, "", &state,
+        ).await;
+        assert_eq!(index_status, 200);
+        let index: serde_json::Value = serde_json::from_str(&index_body).unwrap();
+        assert_eq!(index["credentials"].as_array().unwrap().len(), 2);
+        assert!(index["credentials"][0].get("password").is_none());
+
         // 1. Empty domain parameter returns NO credentials
-        let (status, body) = route_request("GET", "/api/v1/credentials", "", &headers, "", &state).await;
+        let (status, body) =
+            route_request("GET", "/api/v1/credentials", "", &headers, "", &state).await;
         assert_eq!(status, 200);
         let parsed: serde_json::Value = serde_json::from_str(&body).unwrap();
         let creds = parsed["credentials"].as_array().unwrap();
         assert_eq!(creds.len(), 0);
 
         // 2. Exact match returns only matching site
-        let (status, body) = route_request("GET", "/api/v1/credentials", "domain=google.com", &headers, "", &state).await;
+        let (status, body) = route_request(
+            "GET",
+            "/api/v1/credentials",
+            "domain=google.com",
+            &headers,
+            "",
+            &state,
+        )
+        .await;
         assert_eq!(status, 200);
         let parsed: serde_json::Value = serde_json::from_str(&body).unwrap();
         let creds = parsed["credentials"].as_array().unwrap();
@@ -1409,14 +1534,30 @@ mod tests {
         assert_eq!(creds[0]["site"], "google.com");
 
         // 3. Phishing domain returns 0 entries
-        let (status, body) = route_request("GET", "/api/v1/credentials", "domain=evilgoogle.com", &headers, "", &state).await;
+        let (status, body) = route_request(
+            "GET",
+            "/api/v1/credentials",
+            "domain=evilgoogle.com",
+            &headers,
+            "",
+            &state,
+        )
+        .await;
         assert_eq!(status, 200);
         let parsed: serde_json::Value = serde_json::from_str(&body).unwrap();
         let creds = parsed["credentials"].as_array().unwrap();
         assert_eq!(creds.len(), 0);
 
         // 4. Subdomain of evil returns 0 entries
-        let (status, body) = route_request("GET", "/api/v1/credentials", "domain=google.com.evil.com", &headers, "", &state).await;
+        let (status, body) = route_request(
+            "GET",
+            "/api/v1/credentials",
+            "domain=google.com.evil.com",
+            &headers,
+            "",
+            &state,
+        )
+        .await;
         assert_eq!(status, 200);
         let parsed: serde_json::Value = serde_json::from_str(&body).unwrap();
         let creds = parsed["credentials"].as_array().unwrap();
@@ -1425,6 +1566,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_pairing_code_lifecycle() {
+        let _paired_clients = PairedClientsTestIsolation::new();
         let state = Arc::new(ServerState::new());
         state.set_unlocked("master".to_string(), vec![], vec![], vec![], vec![]);
 
@@ -1439,8 +1581,10 @@ mod tests {
             "label": "Test Chrome",
             "browser": "chrome",
             "public_key": "04abcd"
-        }).to_string();
-        let (status, _) = route_request("POST", "/api/v1/pair", "", &headers, &wrong_body, &state).await;
+        })
+        .to_string();
+        let (status, _) =
+            route_request("POST", "/api/v1/pair", "", &headers, &wrong_body, &state).await;
         assert_eq!(status, 401);
 
         // 2. Correct code pairs successfully and clears the code (single-use)
@@ -1449,15 +1593,18 @@ mod tests {
             "label": "Test Chrome",
             "browser": "chrome",
             "public_key": "04112233"
-        }).to_string();
-        let (status, res) = route_request("POST", "/api/v1/pair", "", &headers, &correct_body, &state).await;
+        })
+        .to_string();
+        let (status, res) =
+            route_request("POST", "/api/v1/pair", "", &headers, &correct_body, &state).await;
         assert_eq!(status, 200);
         let parsed: serde_json::Value = serde_json::from_str(&res).unwrap();
         assert!(parsed["success"].as_bool().unwrap());
         let client_id = parsed["client_id"].as_str().unwrap();
 
         // 3. Re-using the same pairing code fails (single-use!)
-        let (status2, _) = route_request("POST", "/api/v1/pair", "", &headers, &correct_body, &state).await;
+        let (status2, _) =
+            route_request("POST", "/api/v1/pair", "", &headers, &correct_body, &state).await;
         assert_eq!(status2, 400);
 
         // Clean up test client
@@ -1468,13 +1615,15 @@ mod tests {
     async fn test_unauthenticated_handshake_rejected() {
         let state = Arc::new(ServerState::new());
         let headers = HashMap::new(); // No x-shared-secret header
-        let (status, body) = route_request("GET", "/api/v1/handshake", "", &headers, "", &state).await;
+        let (status, body) =
+            route_request("GET", "/api/v1/handshake", "", &headers, "", &state).await;
         assert_eq!(status, 401);
         assert!(!body.contains("shared_secret"));
     }
 
     #[tokio::test]
     async fn test_challenge_response_and_revocation_lifecycle() {
+        let _paired_clients = PairedClientsTestIsolation::new();
         let state = Arc::new(ServerState::new());
         state.set_unlocked(
             "master".to_string(),

@@ -8,6 +8,33 @@ use rand::seq::SliceRandom;
 use rand::{rngs::OsRng, Rng, RngCore};
 use serde::{Deserialize, Serialize};
 
+pub fn store_os_secret(service: &str, account: &str, secret: &str) -> Result<(), String> {
+    let entry = keyring::Entry::new(service, account)
+        .map_err(|error| format!("Secure credential store unavailable: {}", error))?;
+    entry
+        .set_password(secret)
+        .map_err(|error| format!("Failed to store secret securely: {}", error))
+}
+
+pub fn load_os_secret(service: &str, account: &str) -> Result<Option<String>, String> {
+    let entry = keyring::Entry::new(service, account)
+        .map_err(|error| format!("Secure credential store unavailable: {}", error))?;
+    match entry.get_password() {
+        Ok(secret) => Ok(Some(secret)),
+        Err(keyring::Error::NoEntry) => Ok(None),
+        Err(error) => Err(format!("Failed to read secret securely: {}", error)),
+    }
+}
+
+pub fn delete_os_secret(service: &str, account: &str) -> Result<(), String> {
+    let entry = keyring::Entry::new(service, account)
+        .map_err(|error| format!("Secure credential store unavailable: {}", error))?;
+    match entry.delete_credential() {
+        Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+        Err(error) => Err(format!("Failed to delete secret securely: {}", error)),
+    }
+}
+
 const ASSOCIATED_DATA: &[u8] = b"";
 
 pub fn decode_hex_or_base64(value: &str, field: &str) -> Result<Vec<u8>, String> {

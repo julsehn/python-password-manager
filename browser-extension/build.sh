@@ -28,6 +28,7 @@ copy_common_files() {
 	local target="$1"
 	mkdir -p "$target/native"
 	cp native/caixa_forta_native.py "$target/native/"
+	cp ../node_modules/dompurify/dist/purify.min.js "$target/"
 	cp -R icons popup.html popup.js content.js content.css background.js "$target/"
 }
 

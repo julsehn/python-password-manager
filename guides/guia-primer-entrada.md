@@ -172,7 +172,7 @@
 │                                                  │
 │  • Encriptació: AES-256-GCM                    │
 │  • Derivació de clau: Argon2id                  │
-│  • Protecció contra força bruta: 10 intents     │
+│  • Bloqueig local Python després de 10 intents  │
 │  • Bloqueig automàtic: 5 minuts                │
 │                                                  │
 │  🔒 NINGÚ pot veure les teves dades sense       │

@@ -724,7 +724,7 @@
             stroke-linecap="round"
             stroke-linejoin="round"
           >
-            <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
+            <path d="M20 13c0 5-3.5 7.5-8 9-4.5-1.5-8-4-8-9V5l8-3 8 3z"></path>
             <path d="m9 12 2 2 4-4"></path>
           </svg>
         </div>
@@ -884,8 +884,8 @@
     <!-- TAB 2: GENERATOR -->
     <section id="tab-generator" class="tab-content">
       <div class="gen-display">
-        <div id="genOutput" class="gen-password">••••••••••••••••</div>
-        <button id="regenBtn" class="icon-btn" title="Generar de nou">
+        <div id="genOutput" class="gen-password">Tria les opcions i prem Generar</div>
+        <button id="regenBtn" class="icon-btn" title="Generar de nou" disabled>
           <svg
             viewBox="0 0 24 24"
             fill="none"
@@ -899,7 +899,7 @@
             ></path>
           </svg>
         </button>
-        <button id="copyGenBtn" class="icon-btn" title="Copiar">
+        <button id="copyGenBtn" class="icon-btn" title="Copiar" disabled>
           <svg
             viewBox="0 0 24 24"
             fill="none"
@@ -921,13 +921,17 @@
           <div
             id="strengthBar"
             class="strength-fill"
-            style="width: 80%; background: #22c55e"
+            style="width: 0%; background: var(--border-subtle)"
           ></div>
         </div>
-        <div id="strengthLabel" class="strength-text" style="color: #22c55e">
-          Forta
+        <div id="strengthLabel" class="strength-text" style="color: var(--text-muted)">
+          Encara no s'ha generat
         </div>
       </div>
+
+      <p id="generatorHint" class="state-desc" style="max-width: none; text-align: left">
+        Tria les opcions que vulguis i genera quan estiguis a punt.
+      </p>
 
       <div class="form-group">
         <div class="slider-wrap">
@@ -939,25 +943,33 @@
 
       <div class="options-grid">
         <label class="toggle-pill">
-          <input type="checkbox" id="chkUpper" checked />
+          <input type="checkbox" id="chkUpper" />
           <span>Majúscules (A-Z)</span>
         </label>
         <label class="toggle-pill">
-          <input type="checkbox" id="chkLower" checked />
+          <input type="checkbox" id="chkLower" />
           <span>Minúscules (a-z)</span>
         </label>
         <label class="toggle-pill">
-          <input type="checkbox" id="chkNumbers" checked />
+          <input type="checkbox" id="chkNumbers" />
           <span>Xifres (0-9)</span>
         </label>
         <label class="toggle-pill">
-          <input type="checkbox" id="chkSymbols" checked />
+          <input type="checkbox" id="chkSymbols" />
           <span>Símbols (!@#$)</span>
         </label>
       </div>
 
+      <button id="generatePasswordBtn" class="btn btn-primary" style="width: 100%; margin-top: 6px">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M12 3v3m0 12v3M3 12h3m12 0h3M5.6 5.6l2.1 2.1m8.6 8.6 2.1 2.1m0-12.8-2.1 2.1m-8.6 8.6-2.1 2.1"></path>
+          <circle cx="12" cy="12" r="4"></circle>
+        </svg>
+        Generar contrasenya
+      </button>
+
       <div style="display: flex; gap: 8px; margin-top: 6px">
-        <button id="copyGenAction" class="btn btn-secondary" style="flex: 1">
+        <button id="copyGenAction" class="btn btn-secondary" style="flex: 1" disabled>
           <svg
             viewBox="0 0 24 24"
             fill="none"
@@ -973,7 +985,7 @@
           </svg>
           Copiar
         </button>
-        <button id="fillGenAction" class="btn btn-secondary" style="flex: 1">
+        <button id="fillGenAction" class="btn btn-secondary" style="flex: 1" disabled>
           Omplir pàgina
         </button>
       </div>
@@ -981,6 +993,7 @@
         id="saveGenAction"
         class="btn btn-primary"
         style="width: 100%; margin-top: 6px"
+        disabled
       >
         <svg
           viewBox="0 0 24 24"
@@ -1054,7 +1067,10 @@
             class="btn btn-secondary"
             title="Mostrar / ocultar contrasenya"
           >
-            👁️
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7-10-7-10-7Z"></path>
+              <circle cx="12" cy="12" r="3"></circle>
+            </svg>
           </button>
           <button
             type="button"
@@ -1062,7 +1078,9 @@
             class="btn btn-secondary"
             title="Generar automàticament"
           >
-            ⚡
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M12 3 4 14h7l-1 7 9-12h-7l1-6Z"></path>
+            </svg>
           </button>
         </div>
       </div>
@@ -1123,6 +1141,30 @@
         </select>
       </div>
 
+      <div class="pairing-card">
+        <h3>Vincula aquest navegador</h3>
+        <p class="state-desc">
+          A l'app Caixa Forta, obre Ajustos i genera un codi de vinculació. El codi només es pot fer servir una vegada.
+        </p>
+        <label class="form-label" for="pairingCodeInput">Codi de vinculació</label>
+        <input
+          type="text"
+          id="pairingCodeInput"
+          class="form-control pairing-code-input"
+          inputmode="numeric"
+          autocomplete="one-time-code"
+          maxlength="6"
+          pattern="[0-9]{6}"
+          placeholder="000000"
+        />
+        <button id="pairBrowserBtn" class="btn btn-primary" style="width: 100%; margin-top: 8px">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <circle cx="7.5" cy="15.5" r="5.5"></circle><path d="m21 2-9.6 9.6"></path><path d="m15.5 7.5 3 3L22 7l-3-3"></path>
+          </svg>
+          Vincular navegador
+        </button>
+      </div>
+
       <div
         style="
           display: flex;
@@ -1165,6 +1207,7 @@
       <span id="toastMsg">Acció completada</span>
     </div>
 
+    <script src="purify.min.js"></script>
     <script src="popup.js"></script>
   </body>
 </html>

@@ -10,7 +10,7 @@ Una aplicació de gestió de contrasenyes de codi obert per a Mac, Windows i Lin
 
 - 🔐 **Criptografia end-a-end**: Totes les dades s'encifren localment amb AES-256-GCM
 - ☁️ **Sync a la núvol**: Sync automàtic amb Railway API
-- 🔒 **Protecció contra força bruta**: Bloqueig després de 10 intents fallits
+- 🔒 **Protecció contra força bruta**: Bloqueig local després de 10 intents fallits al client Python; l'API cloud aplica límits d'intents per IP i usuari.
 - 📱 **Té telafona amigable**: Interfície gràfica moderna amb PyQt6
 - 🎯 **Autocompliment**: Omple automàticament formularis amb contrasenyes
 - 🔋 **Bloqueig automàtic**: La caixa forta es bloqueja per inactivitat
@@ -21,6 +21,8 @@ Una aplicació de gestió de contrasenyes de codi obert per a Mac, Windows i Lin
 - Python 3.10+
 - PyQt6
 - Rust (només si composes amb Tauri)
+
+Per generar una versió macOS signada i notaritzada, executa `npm run tauri:build:macos:release` amb `APPLE_SIGNING_IDENTITY`, `APPLE_API_ISSUER`, `APPLE_API_KEY` i `APPLE_API_KEY_PATH` configurats. L'ordre s'atura si no troba una identitat de codi-signatura vàlida.
 
 ## Instal·lació
 

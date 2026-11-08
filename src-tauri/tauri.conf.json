@@ -28,7 +28,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' ipc: http://ipc.local; object-src 'none'"
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' https://fonts.googleapis.com; style-src-attr 'none'; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data:; connect-src 'self' ipc: http://ipc.local; object-src 'none'; base-uri 'self'; form-action 'self'"
     }
   },
   "bundle": {
@@ -36,7 +36,7 @@
     "targets": "all",
     "macOS": {
       "minimumSystemVersion": "11.0",
-      "signingIdentity": null
+      "hardenedRuntime": true
     },
     "windows": {
       "wix": {
