@@ -1,12 +1,26 @@
 #!/bin/bash
+# build.sh – Build Caixa Forta browser extension for Chrome and Firefox.
+#
+# ⚠️  Firefox note (F2b): If you loaded build/firefox as a Temporary Add-on in
+#    Firefox (about:debugging), rebuilding deletes and recreates that folder.
+#    Firefox keeps serving the stale code until you manually reload the add-on
+#    (click Reload in about:debugging), and Temporary Add-ons disappear on
+#    Firefox restart.  Use a permanent signed XPI for a stable test setup, or
+#    reload after every build.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
 
-echo "Building Caixa Forta Browser Extension..."
+echo "Building Caixa Forta Browser Extension…"
 
-# Recreate only the browser-specific outputs. Keep legacy top-level artifacts intact.
+# Warn if Firefox has the build/firefox directory loaded as a temporary add-on.
+if [ -d "build/firefox" ]; then
+  echo "⚠️  build/firefox exists and will be recreated."
+  echo "   If you loaded it as a Temporary Add-on in Firefox, reload it in"
+  echo "   about:debugging after this build completes."
+fi
+
 rm -rf build/chrome build/firefox
 mkdir -p build/chrome build/firefox
 
@@ -22,16 +36,21 @@ cp manifest.chrome.json build/chrome/manifest.json
 copy_common_files build/firefox
 cp manifest.firefox.json build/firefox/manifest.json
 
-# Create packed extensions
-echo "Creating Chrome extension archive..."
+echo "Creating Chrome extension archive…"
 cd build/chrome
 zip -qr ../caixa-forta-chrome-extension.zip .
 cd ../..
 
-echo "Creating Firefox extension archive..."
+echo "Creating Firefox extension archive…"
 cd build/firefox
 zip -qr ../caixa-forta-firefox-extension.zip .
 cd ../..
 
-echo "Build complete!"
-echo "Extension files are in build/chrome and build/firefox directories"
+echo ""
+echo "✅ Build complete!"
+echo "   Chrome:  browser-extension/build/chrome/  (load as unpacked extension)"
+echo "   Firefox: browser-extension/build/firefox/ (load as Temporary Add-on)"
+echo "   Zips in: browser-extension/build/"
+echo ""
+echo "   Chrome extension ID (from manifest key): lcbgmkafanopplcefoapdfmhhjfoaamd"
+echo "   Firefox add-on ID (from gecko.id):        caixa-forta@juls.com"

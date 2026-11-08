@@ -201,10 +201,18 @@ function showSavePrompt({ site, username, password }) {
       },
       (res) => {
         if (res && res.success) {
-          prompt.innerHTML = `<span style="font-weight: 600; color: #4ade80;">✓ Accés desat a Caixa Forta!</span>`;
+          // Use textContent to avoid XSS from server-provided strings (F15)
+          const okSpan = document.createElement("span");
+          okSpan.style.fontWeight = "600";
+          okSpan.style.color = "#4ade80";
+          okSpan.textContent = "✓ Accés desat a Caixa Forta!";
+          prompt.replaceChildren(okSpan);
           setTimeout(() => prompt.remove(), 2500);
         } else {
-          prompt.innerHTML = `<span style="color: #f87171;">Error: ${res?.error || "No s'ha pogut desar"}</span>`;
+          const errSpan = document.createElement("span");
+          errSpan.style.color = "#f87171";
+          errSpan.textContent = "Error: " + (res?.error || "No s'ha pogut desar");
+          prompt.replaceChildren(errSpan);
           setTimeout(() => prompt.remove(), 3500);
         }
       },

@@ -256,10 +256,6 @@ const state = {
 
 let imageAuthRenderSource = "";
 let imageAuthRenderBitmap = null;
-/* ==========================================================================
-   Funcions d'utilitat
-   ========================================================================== */
-
 const isTauriRuntime = () => Boolean(window.__TAURI_INTERNALS__);
 
 const icon = (name, size = 18) => {
@@ -422,8 +418,10 @@ async function cloudAuthSubmit(event) {
 
   const username = document.querySelector("#auth-username")?.value.trim() || "";
   const password = document.querySelector("#auth-password")?.value || "";
-  const customUrl = document.querySelector("#cloud-railway-url")?.value.trim() || "";
-  const customVaultId = document.querySelector("#cloud-vault-id")?.value.trim() || "";
+  const customUrl =
+    document.querySelector("#cloud-railway-url")?.value.trim() || "";
+  const customVaultId =
+    document.querySelector("#cloud-vault-id")?.value.trim() || "";
 
   if (!username) {
     state.cloudError = "Introdueix el teu nom d'usuari de Railway.";
@@ -439,8 +437,10 @@ async function cloudAuthSubmit(event) {
   const isRegister = state.cloudTab === "register";
 
   if (isRegister) {
-    const confirmPassword = document.querySelector("#auth-confirm-password")?.value || "";
-    const privacyAccepted = document.querySelector("#privacy-accepted")?.checked || false;
+    const confirmPassword =
+      document.querySelector("#auth-confirm-password")?.value || "";
+    const privacyAccepted =
+      document.querySelector("#privacy-accepted")?.checked || false;
 
     if (password !== confirmPassword) {
       state.cloudError = "Les contrasenyes no coincideixen.";
@@ -448,12 +448,14 @@ async function cloudAuthSubmit(event) {
       return;
     }
     if (password.length < 8) {
-      state.cloudError = "La contrasenya de Railway ha de tenir almenys 8 caràcters.";
+      state.cloudError =
+        "La contrasenya de Railway ha de tenir almenys 8 caràcters.";
       render();
       return;
     }
     if (!privacyAccepted) {
-      state.cloudError = "Has d'acceptar la Política de Privacitat per registrar-te.";
+      state.cloudError =
+        "Has d'acceptar la Política de Privacitat per registrar-te.";
       render();
       return;
     }
@@ -507,10 +509,13 @@ async function cloudAuthSubmit(event) {
 
   // Handle Login
   const isDownload = state.cloudActionContext === "download";
-  const masterPassword = document.querySelector("#auth-master-password")?.value || "";
+  const isSync = state.cloudActionContext === "sync";
+  const masterPassword =
+    document.querySelector("#auth-master-password")?.value || "";
 
   if (isDownload && !masterPassword) {
-    state.cloudError = "Introdueix la contrasenya mestra de la caixa forta per desxifrar-la.";
+    state.cloudError =
+      "Introdueix la contrasenya mestra de la caixa forta per desxifrar-la.";
     render();
     return;
   }
@@ -571,7 +576,21 @@ async function cloudAuthSubmit(event) {
       state.showCloudLogin = false;
       showToast("Caixa forta descarregada de Railway i oberta correctament!");
     } else {
-      showToast(`Sessió iniciada a Railway com a ${authData.username}.`);
+      if (isSync && !state.locked && state.masterPassword) {
+        try {
+          const result = await invoke("sync_upload_vault", {
+            masterPassword: state.masterPassword,
+            config: rustCloudConfig(updatedConfig),
+          });
+          showToast(result.message || "Canvis sincronitzats amb Railway!");
+        } catch (error) {
+          showToast(
+            `Sessió iniciada, però no s'ha pogut sincronitzar: ${error}`,
+          );
+        }
+      } else {
+        showToast(`Sessió iniciada a Railway com a ${authData.username}.`);
+      }
       state.showCloudLogin = false;
     }
   } catch (error) {
@@ -585,7 +604,7 @@ async function cloudAuthSubmit(event) {
 async function handleCloudSyncNow() {
   if (!state.cloudConfig.token) {
     state.showCloudLogin = true;
-    state.cloudActionContext = "settings";
+    state.cloudActionContext = "sync";
     render();
     return;
   }
@@ -633,11 +652,17 @@ async function handleCloudDownloadNow() {
     } catch {}
   }
   if (!pwd) {
-    pwd = prompt("Introdueix la contrasenya mestra per desxifrar la còpia de Railway:");
+    pwd = prompt(
+      "Introdueix la contrasenya mestra per desxifrar la còpia de Railway:",
+    );
     if (!pwd) return;
   }
 
-  if (!confirm("Això sincronitzarà les dades locals amb la còpia de Railway. Vols continuar?")) {
+  if (
+    !confirm(
+      "Això sincronitzarà les dades locals amb la còpia de Railway. Vols continuar?",
+    )
+  ) {
     return;
   }
 
@@ -682,7 +707,11 @@ async function handleCloudDownloadNow() {
 }
 
 async function handleCloudLogout() {
-  if (!confirm("Vols tancar la sessió a Railway? Les teves dades locals es mantindran intactes.")) {
+  if (
+    !confirm(
+      "Vols tancar la sessió a Railway? Les teves dades locals es mantindran intactes.",
+    )
+  ) {
     return;
   }
   state.cloudConfig = { railwayUrl: "", vaultId: "", token: "", authUser: "" };
@@ -1574,7 +1603,9 @@ function settingsScreen() {
             ${icon("Cloud", 19)}
             <h2>Sincronització amb Railway</h2>
           </div>
-          ${state.cloudConfig.authUser ? `
+          ${
+            state.cloudConfig.authUser
+              ? `
             <div class="cloud-status-card">
               <div class="cloud-status-header">
                 <span class="cloud-badge">
@@ -1600,12 +1631,14 @@ function settingsScreen() {
                 </button>
               </div>
             </div>
-          ` : `
+          `
+              : `
             <p class="helper">Connecta amb el núvol oficial de Railway per mantenir una còpia xifrada de la teva caixa forta i sincronitzar-la entre dispositius.</p>
             <button class="setting-action" id="open-cloud-login" data-context="settings">
               ${icon("Cloud", 18)} Iniciar sessió o crear compte a Railway
             </button>
-          `}
+          `
+          }
         </section>
 
         <section class="settings-section">
@@ -2072,12 +2105,16 @@ function cloudLoginModal() {
               </span>
             </div>
 
-            ${state.cloudError ? `
+            ${
+              state.cloudError
+                ? `
               <div class="cloud-error-banner">
                 ${icon("AlertCircle", 18)}
                 <span>${escapeHtml(state.cloudError)}</span>
               </div>
-            ` : ""}
+            `
+                : ""
+            }
 
             <!-- Common Username -->
             <div class="form-section">
@@ -2115,7 +2152,9 @@ function cloudLoginModal() {
               </div>
             </div>
 
-            ${activeTab === "register" ? `
+            ${
+              activeTab === "register"
+                ? `
               <!-- Register: Confirm Password -->
               <div class="form-section">
                 <label class="form-label" for="auth-confirm-password">Confirma la contrasenya de Railway:</label>
@@ -2137,9 +2176,13 @@ function cloudLoginModal() {
                   <span>He llegit i accepto la <a href="PRIVACY_POLICY.md" target="_blank" class="policy-link" style="color: var(--accent-primary, #3b82f6);">Política de Privacitat</a></span>
                 </label>
               </div>
-            ` : ""}
+            `
+                : ""
+            }
 
-            ${isDownloadContext && activeTab === "login" ? `
+            ${
+              isDownloadContext && activeTab === "login"
+                ? `
               <!-- Download context: Master Password -->
               <div class="form-section master-password-section" style="margin-top: 14px; padding-top: 12px; border-top: 1px dashed var(--border-section);">
                 <label class="form-label" for="auth-master-password">
@@ -2157,7 +2200,9 @@ function cloudLoginModal() {
                   Necessària per desxifrar la còpia de seguretat un cop descarregada de Railway.
                 </p>
               </div>
-            ` : ""}
+            `
+                : ""
+            }
 
             <!-- Advanced / Custom Server Toggle -->
             <div style="margin-top: 14px;">
@@ -2165,7 +2210,9 @@ function cloudLoginModal() {
                 ${icon(state.cloudShowAdvanced ? "ChevronDown" : "ChevronRight", 14)}
                 Opcions avançades (Servidor personalitzat)
               </button>
-              ${state.cloudShowAdvanced ? `
+              ${
+                state.cloudShowAdvanced
+                  ? `
                 <div class="cloud-advanced-panel">
                   <div class="form-section">
                     <label class="form-label" for="cloud-railway-url">URL del servidor Railway:</label>
@@ -2193,20 +2240,23 @@ function cloudLoginModal() {
                     />
                   </div>
                 </div>
-              ` : ""}
+              `
+                  : ""
+              }
             </div>
           </div>
 
           <footer class="modal-footer">
             <button type="button" class="secondary" id="cancel-cloud-login">Cancel·la</button>
             <button type="submit" class="primary" ${state.cloudLoading ? "disabled" : ""}>
-              ${state.cloudLoading
-                ? `${icon("Loader", 16)} Processant...`
-                : activeTab === "register"
-                  ? `${icon("UserPlus", 16)} Crear compte a Railway`
-                  : isDownloadContext
-                    ? `${icon("DownloadCloud", 16)} Iniciar sessió i descarregar`
-                    : `${icon("LogIn", 16)} Iniciar sessió`
+              ${
+                state.cloudLoading
+                  ? `${icon("Loader", 16)} Processant...`
+                  : activeTab === "register"
+                    ? `${icon("UserPlus", 16)} Crear compte a Railway`
+                    : isDownloadContext
+                      ? `${icon("DownloadCloud", 16)} Iniciar sessió i descarregar`
+                      : `${icon("LogIn", 16)} Iniciar sessió`
               }
             </button>
           </footer>
@@ -4107,7 +4157,8 @@ function bindEvents() {
   document.querySelectorAll("#open-cloud-login").forEach((button) =>
     button.addEventListener("click", () => {
       state.cloudError = "";
-      state.cloudActionContext = button.dataset.context || (state.locked ? "download" : "settings");
+      state.cloudActionContext =
+        button.dataset.context || (state.locked ? "download" : "settings");
       state.showCloudLogin = true;
       render();
     }),
@@ -4128,27 +4179,45 @@ function bindEvents() {
     state.cloudError = "";
     render();
   });
-  document.querySelector("#tab-cloud-register")?.addEventListener("click", () => {
-    state.cloudTab = "register";
-    state.cloudError = "";
-    render();
-  });
-  document.querySelector("#toggle-cloud-advanced")?.addEventListener("click", () => {
-    state.cloudShowAdvanced = !state.cloudShowAdvanced;
-    render();
-  });
-  document.querySelector("#reveal-cloud-password")?.addEventListener("click", () => {
-    const input = document.querySelector("#auth-password");
-    if (input) input.type = input.type === "password" ? "text" : "password";
-  });
+  document
+    .querySelector("#tab-cloud-register")
+    ?.addEventListener("click", () => {
+      state.cloudTab = "register";
+      state.cloudError = "";
+      render();
+    });
+  document
+    .querySelector("#toggle-cloud-advanced")
+    ?.addEventListener("click", () => {
+      state.cloudShowAdvanced = !state.cloudShowAdvanced;
+      render();
+    });
+  document
+    .querySelector("#reveal-cloud-password")
+    ?.addEventListener("click", () => {
+      const input = document.querySelector("#auth-password");
+      if (input) input.type = input.type === "password" ? "text" : "password";
+    });
 
-  document.querySelector("#btn-cloud-sync-now")?.addEventListener("click", handleCloudSyncNow);
-  document.querySelector("#btn-cloud-download-now")?.addEventListener("click", handleCloudDownloadNow);
-  document.querySelector("#btn-cloud-logout")?.addEventListener("click", handleCloudLogout);
+  document
+    .querySelector("#btn-cloud-sync-now")
+    ?.addEventListener("click", handleCloudSyncNow);
+  document
+    .querySelector("#btn-cloud-download-now")
+    ?.addEventListener("click", handleCloudDownloadNow);
+  document
+    .querySelector("#btn-cloud-logout")
+    ?.addEventListener("click", handleCloudLogout);
 
-  document.querySelector("#btn-cloud-sync-modal")?.addEventListener("click", handleCloudSyncNow);
-  document.querySelector("#btn-cloud-download-modal")?.addEventListener("click", handleCloudDownloadNow);
-  document.querySelector("#btn-cloud-logout-modal")?.addEventListener("click", handleCloudLogout);
+  document
+    .querySelector("#btn-cloud-sync-modal")
+    ?.addEventListener("click", handleCloudSyncNow);
+  document
+    .querySelector("#btn-cloud-download-modal")
+    ?.addEventListener("click", handleCloudDownloadNow);
+  document
+    .querySelector("#btn-cloud-logout-modal")
+    ?.addEventListener("click", handleCloudLogout);
   document
     .querySelector("#reset-vault")
     ?.addEventListener("click", resetLocalVault);

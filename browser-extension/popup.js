@@ -95,6 +95,11 @@ class PopupController {
 
   // --- CONNECTION & VAULT STATUS ---
   async checkStatus() {
+    // Clear any poll timer started by renderLockedState.
+    if (this._unlockPollTimer) {
+      clearInterval(this._unlockPollTimer);
+      this._unlockPollTimer = null;
+    }
     return new Promise((resolve) => {
       chrome.runtime.sendMessage({ action: "getVaultInfo" }, async (res) => {
         const pill = document.getElementById("statusPill");
@@ -187,6 +192,9 @@ class PopupController {
   }
 
   renderLockedState() {
+    // F9 (Phase 2): The master password must NOT travel through the extension.
+    // The popup instructs the user to unlock from the desktop app; it polls
+    // getVaultInfo to detect when the vault has been unlocked.
     const searchSection = document.getElementById("searchSection");
     if (searchSection) searchSection.style.display = "none";
 
@@ -200,46 +208,21 @@ class PopupController {
           </svg>
         </div>
         <h3 class="state-title">Caixa Forta bloquejada</h3>
-        <p class="state-desc">Introdueix la teva contrasenya mestra per accedir als teus accessos:</p>
-        
-        <form id="unlockForm" style="width: 100%; display: flex; flex-direction: column; gap: 8px;">
-          <div class="input-with-action">
-            <input type="password" id="unlockPasswordInput" class="form-control" placeholder="Contrasenya mestra" required autofocus />
-            <button type="button" id="toggleUnlockReveal" class="btn btn-secondary" title="Mostrar contrasenya">👁️</button>
-          </div>
-          <button type="submit" class="btn btn-primary">
-            Desbloquejar
-          </button>
-        </form>
+        <p class="state-desc">Desbloqueja a l'aplicació Caixa Forta per accedir als teus accessos.</p>
+        <button type="button" id="retryUnlockBtn" class="btn btn-secondary" style="margin-top: 8px;">
+          Comprovar de nou
+        </button>
       </div>
     `;
 
-    const unlockForm = document.getElementById("unlockForm");
-    const pwdInput = document.getElementById("unlockPasswordInput");
-    const toggleReveal = document.getElementById("toggleUnlockReveal");
+    // Poll every 3 seconds so the popup updates automatically once the user
+    // unlocks from the desktop app.
+    const retryBtn = document.getElementById("retryUnlockBtn");
+    retryBtn?.addEventListener("click", () => this.checkStatus());
 
-    toggleReveal?.addEventListener("click", () => {
-      pwdInput.type = pwdInput.type === "password" ? "text" : "password";
-    });
-
-    unlockForm?.addEventListener("submit", (e) => {
-      e.preventDefault();
-      const pwd = pwdInput.value;
-      if (!pwd) return;
-
-      this.showToast("Desbloquejant...");
-      chrome.runtime.sendMessage(
-        { action: "unlockVault", masterPassword: pwd },
-        (res) => {
-          if (res && res.success) {
-            this.showToast("Caixa Forta desbloquejada!");
-            this.checkStatus();
-          } else {
-            this.showToast(res?.error || "Contrasenya incorrecta");
-          }
-        },
-      );
-    });
+    this._unlockPollTimer = setInterval(() => {
+      this.checkStatus();
+    }, 3000);
   }
 
   renderCredentialsList() {

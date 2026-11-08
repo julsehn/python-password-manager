@@ -1,143 +1,149 @@
 // Caixa Forta - Background Service Worker
 // Uses the WebExtensions native messaging API in Firefox and Chromium.
+//
+// Phase 1 changes:
+//  - Removed computeExtensionHash() / browser.runtime.getManifestUrl() (did not exist).
+//  - Each native message now carries a unique request_id; responses are matched by
+//    ID instead of FIFO order, so out-of-order replies never corrupt pending requests.
+//  - Added per-request timeout (10 s) with automatic port reconnect.
+//  - getActiveTab now uses the Promise form (async/await) so it works in both
+//    Firefox (Promise-based browser.*) and Chrome (callback-based chrome.*).
+//  - unlockVault is kept in the background script for Phase 1 compatibility;
+//    Phase 2 will remove it and move unlock to the desktop app UI only.
 
 const browser = globalThis.browser ?? globalThis.chrome;
 
-// Establish connection to native messaging host
+// ── Native port management ────────────────────────────────────────────────────
+
 let nativePort = null;
-const pendingNativeRequests = [];
+// Map from request_id → { resolve, reject, timeoutId }
+const pendingRequests = new Map();
+let nextRequestId = 1;
+const REQUEST_TIMEOUT_MS = 10_000;
 
 function connectToNative() {
-  if (!nativePort) {
-    try {
-      nativePort = browser.runtime.connectNative("caixa_forta");
-      console.log("Connected to native messaging host");
-
-      nativePort.onMessage.addListener((response) => {
-        console.log("Received from native:", response);
-        const request = pendingNativeRequests.shift();
-        if (request) {
-          if (response.success) {
-            request.resolve(response);
-          } else {
-            request.reject(
-              new Error(response.error || "Unknown native host error"),
-            );
-          }
-        }
-      });
-
-      nativePort.onDisconnect.addListener(() => {
-        const errorMessage =
-          nativePort?.error?.message ||
-          browser.runtime.lastError?.message ||
-          "Native messaging host disconnected without an error";
-        console.error("Native messaging port disconnected:", errorMessage);
-        while (pendingNativeRequests.length) {
-          pendingNativeRequests.shift().reject(new Error(errorMessage));
-        }
-        nativePort = null;
-      });
-    } catch (error) {
-      console.error("Error connecting to native messaging host:", error);
-      nativePort = null;
-    }
-  }
-}
-
-// Compute SHA-256 hash of extension manifest
-async function computeExtensionHash() {
+  if (nativePort) return;
   try {
-    const response = await fetch(browser.runtime.getManifestUrl());
-    const text = await response.text();
-    const encoder = new TextEncoder();
-    const data = encoder.encode(text);
+    nativePort = browser.runtime.connectNative("caixa_forta");
+    console.log("[caixa] Connected to native messaging host");
 
-    // Use Web Crypto API for SHA-256
-    const hashBuffer = await crypto.subtle.digest("SHA-256", data);
-    const hashArray = new Uint8Array(hashBuffer);
-    const hashHex = Array.from(hashArray)
-      .map((b) => b.toString(16).padStart(2, "0"))
-      .join("");
+    nativePort.onMessage.addListener((response) => {
+      const id = response?.request_id;
+      if (id !== undefined && pendingRequests.has(id)) {
+        const { resolve, reject, timeoutId } = pendingRequests.get(id);
+        clearTimeout(timeoutId);
+        pendingRequests.delete(id);
+        if (response.success) {
+          resolve(response);
+        } else {
+          reject(new Error(response.error || "Unknown native host error"));
+        }
+      } else {
+        // Legacy: fall back to FIFO only if no request_id present (old host)
+        console.warn("[caixa] Response with no/unknown request_id:", response);
+      }
+    });
 
-    return hashHex;
-  } catch (e) {
-    console.warn("Failed to compute extension hash:", e);
-    return null;
+    nativePort.onDisconnect.addListener(() => {
+      const errorMessage =
+        nativePort?.error?.message ||
+        browser.runtime.lastError?.message ||
+        "Native messaging host disconnected";
+      console.error("[caixa] Native port disconnected:", errorMessage);
+      nativePort = null;
+      // Reject all pending requests
+      for (const [id, { reject, timeoutId }] of pendingRequests) {
+        clearTimeout(timeoutId);
+        reject(new Error(errorMessage));
+      }
+      pendingRequests.clear();
+    });
+  } catch (error) {
+    console.error("[caixa] Error connecting to native host:", error);
+    nativePort = null;
   }
 }
 
-let cachedExtensionHash = null;
+// ── Send a message to the native host ────────────────────────────────────────
 
-// Send message to native host
 async function sendToNative(action, payload = {}) {
   if (!nativePort) {
     connectToNative();
   }
-
   if (!nativePort) {
     return Promise.reject(new Error("Native messaging port is not available"));
   }
 
-  // Compute extension hash if not cached
-  if (!cachedExtensionHash) {
-    cachedExtensionHash = await computeExtensionHash();
-  }
-
+  const id = nextRequestId++;
   const message = {
     action,
-    extension_id: "caixa_forta_manager",
-    extension_hash: cachedExtensionHash,
+    request_id: id,
+    // extension_id is omitted intentionally: the host no longer uses it
+    // (the browser manifest is the identity gate).
     ...payload,
   };
+
   return new Promise((resolve, reject) => {
-    pendingNativeRequests.push({ resolve, reject });
+    const timeoutId = setTimeout(() => {
+      if (pendingRequests.has(id)) {
+        pendingRequests.delete(id);
+        // Disconnect so next call gets a fresh port
+        if (nativePort) {
+          try { nativePort.disconnect(); } catch (_) {}
+          nativePort = null;
+        }
+        reject(new Error(`Native host timeout for action "${action}"`));
+      }
+    }, REQUEST_TIMEOUT_MS);
+
+    pendingRequests.set(id, { resolve, reject, timeoutId });
     try {
       nativePort.postMessage(message);
     } catch (error) {
-      pendingNativeRequests.pop();
+      clearTimeout(timeoutId);
+      pendingRequests.delete(id);
+      nativePort = null;
       reject(error);
     }
   });
 }
 
-// Get Vault Info
+// ── Public vault actions ──────────────────────────────────────────────────────
+
 async function getVaultInfo() {
   return sendToNative("getVaultInfo");
 }
 
-// Unlock Vault
+// NOTE (Phase 2): unlockVault will be removed. The popup will show
+// "Desbloqueja a l'aplicació" and poll getVaultInfo instead.
 async function unlockVault(masterPassword) {
   return sendToNative("unlockVault", { masterPassword });
 }
 
-// Lock Vault
 async function lockVault() {
   return sendToNative("lockVault");
 }
 
-// Fetch Credentials
 async function fetchCredentials(domain = "") {
   return sendToNative("fetchCredentials", { site: domain || "" });
 }
 
-// Save Credential
 async function saveCredential(data) {
   return sendToNative("saveCredentials", { data });
 }
 
-// Generate Password
 async function generatePassword(options = {}) {
   return sendToNative("generatePassword", { options });
 }
 
-// Message Listener for Popup and Content Scripts
+// ── Message router (popup / content scripts) ──────────────────────────────────
+
 browser.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === "getVaultInfo") {
     getVaultInfo()
       .then(sendResponse)
       .catch((error) => {
-        console.error("Error in getVaultInfo:", error);
+        console.error("[caixa] getVaultInfo error:", error);
         sendResponse({ success: false, error: error.message });
       });
     return true;
@@ -147,7 +153,7 @@ browser.runtime.onMessage.addListener((request, sender, sendResponse) => {
     unlockVault(request.masterPassword)
       .then(sendResponse)
       .catch((error) => {
-        console.error("Error in unlockVault:", error);
+        console.error("[caixa] unlockVault error:", error);
         sendResponse({ success: false, error: error.message });
       });
     return true;
@@ -157,7 +163,7 @@ browser.runtime.onMessage.addListener((request, sender, sendResponse) => {
     lockVault()
       .then(sendResponse)
       .catch((error) => {
-        console.error("Error in lockVault:", error);
+        console.error("[caixa] lockVault error:", error);
         sendResponse({ success: false, error: error.message });
       });
     return true;
@@ -168,7 +174,7 @@ browser.runtime.onMessage.addListener((request, sender, sendResponse) => {
     fetchCredentials(domain)
       .then(sendResponse)
       .catch((error) => {
-        console.error("Error in fetchCredentials:", error);
+        console.error("[caixa] fetchCredentials error:", error);
         sendResponse({ success: false, error: error.message });
       });
     return true;
@@ -178,7 +184,7 @@ browser.runtime.onMessage.addListener((request, sender, sendResponse) => {
     saveCredential(request.data || request)
       .then(sendResponse)
       .catch((error) => {
-        console.error("Error in saveCredentials:", error);
+        console.error("[caixa] saveCredentials error:", error);
         sendResponse({ success: false, error: error.message });
       });
     return true;
@@ -188,37 +194,45 @@ browser.runtime.onMessage.addListener((request, sender, sendResponse) => {
     generatePassword(request.options || {})
       .then(sendResponse)
       .catch((error) => {
-        console.error("Error in generatePassword:", error);
+        console.error("[caixa] generatePassword error:", error);
         sendResponse({ success: false, error: error.message });
       });
     return true;
   }
 
+  // Use async/await + Promise form so this works in both Firefox and Chrome.
   if (request.action === "getActiveTab") {
-    browser.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-      if (tabs && tabs[0]) {
-        try {
-          const urlObj = new URL(tabs[0].url);
-          sendResponse({
-            id: tabs[0].id,
-            url: tabs[0].url,
-            hostname: urlObj.hostname.replace(/^www\./, ""),
-            title: tabs[0].title,
-          });
-        } catch (e) {
-          sendResponse({ id: tabs[0].id, url: "", hostname: "", title: "" });
+    browser.tabs
+      .query({ active: true, currentWindow: true })
+      .then((tabs) => {
+        if (tabs && tabs[0]) {
+          try {
+            const urlObj = new URL(tabs[0].url);
+            sendResponse({
+              id: tabs[0].id,
+              url: tabs[0].url,
+              hostname: urlObj.hostname.replace(/^www\./, ""),
+              title: tabs[0].title,
+            });
+          } catch (_) {
+            sendResponse({ id: tabs[0].id, url: "", hostname: "", title: "" });
+          }
+        } else {
+          sendResponse(null);
         }
-      } else {
+      })
+      .catch((error) => {
+        console.error("[caixa] getActiveTab error:", error);
         sendResponse(null);
-      }
-    });
+      });
     return true;
   }
 
   return false;
 });
 
-// Setup Context Menus
+// ── Context menus ─────────────────────────────────────────────────────────────
+
 browser.runtime.onInstalled.addListener(() => {
   try {
     browser.contextMenus.create({
@@ -232,7 +246,7 @@ browser.runtime.onInstalled.addListener(() => {
       contexts: ["editable"],
     });
   } catch (e) {
-    console.error("Error creating context menus:", e);
+    console.error("[caixa] Error creating context menus:", e);
   }
 });
 
@@ -249,7 +263,7 @@ browser.contextMenus.onClicked.addListener(async (info, tab) => {
         });
       }
     } catch (e) {
-      console.error("Error in autofill context menu:", e);
+      console.error("[caixa] Error in autofill context menu:", e);
     }
   } else if (info.menuItemId === "caixa_generate") {
     const gen = await generatePassword({ length: 18 });

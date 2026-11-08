@@ -103,6 +103,9 @@ pub fn run() {
             change_auth_method,
             export_vault,
             import_vault,
+            generate_pairing_code,
+            list_paired_clients,
+            revoke_paired_client,
         ])
         .manage(Mutex::new(SyncConfig::default()))
         .manage(server_state)
@@ -373,6 +376,26 @@ fn get_vault_info() -> VaultInfo {
         folder_count: 0,
         trash_count: 0,
     }
+}
+
+#[tauri::command]
+fn generate_pairing_code(
+    server_state: tauri::State<'_, Arc<ServerState>>,
+) -> Result<String, String> {
+    server_state.generate_pairing_code()
+}
+
+#[tauri::command]
+fn list_paired_clients() -> Vec<server::PairedClient> {
+    server::load_paired_clients()
+}
+
+#[tauri::command]
+fn revoke_paired_client(
+    server_state: tauri::State<'_, Arc<ServerState>>,
+    client_id: String,
+) -> Result<bool, String> {
+    Ok(server_state.revoke_client(&client_id))
 }
 
 #[tauri::command]

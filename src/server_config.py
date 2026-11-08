@@ -7,7 +7,7 @@ from pathlib import Path
 
 # Server settings
 HOST = "127.0.0.1"  # Only localhost for security
-PORT = 8080
+PORT = 8443  # Use 8443 for legacy HTTPS API to avoid collision with extension server on 8080
 
 # Security settings
 JWT_SECRET = Path.home() / ".password_manager" / "jwt_secret.bin"
