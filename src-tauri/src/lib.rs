@@ -513,7 +513,7 @@ fn revoke_paired_client(
 fn get_vault_entries(
     server_state: tauri::State<'_, Arc<ServerState>>,
 ) -> Result<VaultState, String> {
-    let unlocked = server_state.unlocked_data.lock().unwrap();
+    let unlocked = server_state.unlocked_data.lock().unwrap_or_else(|e| e.into_inner());
     match &*unlocked {
         Some(vault) => {
             let now = chrono::Utc::now().timestamp();
@@ -592,7 +592,7 @@ fn update_entry(
 ) -> Result<Entry, String> {
     let now = chrono::Utc::now().to_rfc3339();
     let (master_password, vault_data, updated_entry) = {
-        let unlocked = server_state.unlocked_data.lock().unwrap();
+        let unlocked = server_state.unlocked_data.lock().unwrap_or_else(|e| e.into_inner());
         let vault = unlocked
             .as_ref()
             .ok_or_else(|| "Vault is locked".to_string())?;

@@ -5,8 +5,8 @@ from argon2.low_level import Type, hash_secret_raw
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 
-ARGON2_MEMORY_COST_KIB = 19 * 1024
-ARGON2_TIME_COST = 2
+ARGON2_MEMORY_COST_KIB = 64 * 1024
+ARGON2_TIME_COST = 3
 ARGON2_PARALLELISM = 1
 KEY_LENGTH = 32
 

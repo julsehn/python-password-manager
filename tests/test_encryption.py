@@ -18,7 +18,7 @@ class VaultKeyDerivationTests(unittest.TestCase):
 
         self.assertEqual(
             key.hex(),
-            "6685b845ce381b544d2390e669f56bed913e879a0f645d6533872e5b6c24b9c0",
+            "24f35b029273a54b22a71e1aba8fb6d92d7eb469d00ed3eae30d735f0b0a5017",
         )
 
 

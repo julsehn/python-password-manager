@@ -1,6 +1,15 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import DOMPurify from "dompurify";
+import { api } from "./api.js";
+import {
+  escapeHtml,
+  sanitizedFragment,
+  replaceMarkup,
+  appendMarkup,
+  formatDate,
+  parseEntryNotes,
+  isTauriRuntime,
+} from "./utils.js";
 import {
   normalizeImportedEntries,
   normalizeImportedFolders,
@@ -251,7 +260,6 @@ const state = {
 
 let imageAuthRenderSource = "";
 let imageAuthRenderBitmap = null;
-const isTauriRuntime = () => Boolean(window.__TAURI_INTERNALS__);
 
 const icon = (name, size = 18) => {
   const safeName = Object.prototype.hasOwnProperty.call(icons, name)
@@ -262,60 +270,6 @@ const icon = (name, size = 18) => {
     .replace(/^-/, "");
   return `<i data-lucide="${escapeHtml(kebabName)}" width="${size}" height="${size}"></i>`;
 };
-
-const escapeHtml = (value = "") =>
-  String(value).replace(
-    /[&<>'"]/g,
-    (char) =>
-      ({
-        "&": "&amp;",
-        "<": "&lt;",
-        ">": "&gt;",
-        "'": "&#39;",
-        '"': "&quot;",
-      })[char],
-  );
-
-function sanitizedFragment(markup) {
-  return DOMPurify.sanitize(String(markup ?? ""), {
-    RETURN_DOM_FRAGMENT: true,
-  });
-}
-
-function replaceMarkup(element, markup) {
-  element.replaceChildren(sanitizedFragment(markup));
-}
-
-function appendMarkup(element, markup) {
-  element.append(sanitizedFragment(markup));
-}
-
-function formatDate(isoString) {
-  if (!isoString) return "";
-  try {
-    const date = new Date(isoString);
-    return date.toLocaleDateString("ca-ES", {
-      day: "2-digit",
-      month: "short",
-      year: "numeric",
-      hour: "2-digit",
-      minute: "2-digit",
-    });
-  } catch {
-    return isoString;
-  }
-}
-
-function parseEntryNotes(notes = "") {
-  let url = "";
-  let cleanNotes = notes;
-  if (notes.startsWith("URL: ")) {
-    const lines = notes.split("\n");
-    url = lines[0].replace(/^URL:\s*/, "").trim();
-    cleanNotes = lines.slice(1).join("\n").trim();
-  }
-  return { url, cleanNotes };
-}
 
 function showToast(message) {
   state.toast = message;
@@ -338,7 +292,7 @@ async function lockVault() {
   if (state.locked) return;
   clearTimeout(autoLockTimer);
   try {
-    await invoke("lock_vault");
+    await api.lockVault();
   } catch (error) {
     showToast(`No s'ha pogut bloquejar la caixa forta: ${error}`);
     resetAutoLock();
@@ -361,7 +315,7 @@ async function lockVault() {
   state.showGridUnlock = false;
 
   try {
-    const authData = await invoke("get_image_grid_auth");
+    const authData = await api.getImageGridAuth();
     if (authData?.type === "image_grid" && authData.version === 5) {
       state.imageAuthImage = authData.image_data || "";
       state.imageGridConfigured = true;
@@ -378,7 +332,7 @@ async function initializeApp() {
   render();
   if (!isTauriRuntime()) return;
   try {
-    const info = await invoke("get_vault_info");
+    const info = await api.getVaultInfo();
     state.vaultExists = Boolean(info.exists);
 
     if (!state.vaultExists) {
@@ -388,7 +342,7 @@ async function initializeApp() {
       const hasGridAuth = await checkGridAuth();
       if (hasGridAuth) {
         state.imageGridPattern = [];
-        const imageGrid = await invoke("get_image_grid_auth");
+        const imageGrid = await api.getImageGridAuth();
         state.imageAuthImage = imageGrid.image_data;
         state.imageGridConfigured = true;
         state.showGridUnlock = true;
@@ -848,14 +802,17 @@ function enhanceRenderedUi() {
     state.generatorType === "password" &&
     !output.querySelector("span")
   ) {
-    replaceMarkup(output, Array.from(output.textContent || "", (character) => {
-      const className = /[0-9]/.test(character)
-        ? "generated-number"
-        : /[^A-Za-z0-9]/.test(character)
-          ? "generated-symbol"
-          : "";
-      return `<span class="${className}">${escapeHtml(character)}</span>`;
-    }).join(""));
+    replaceMarkup(
+      output,
+      Array.from(output.textContent || "", (character) => {
+        const className = /[0-9]/.test(character)
+          ? "generated-number"
+          : /[^A-Za-z0-9]/.test(character)
+            ? "generated-symbol"
+            : "";
+        return `<span class="${className}">${escapeHtml(character)}</span>`;
+      }).join(""),
+    );
   }
 
   const generatedCard = document.querySelector(".generated-card");
@@ -867,7 +824,7 @@ function enhanceRenderedUi() {
     const strength = passwordStrength(state.generatedValue || generateValue());
     generatedCard.after(
       sanitizedFragment(
-      `
+        `
       <div class="password-strength">
         <div class="strength-label">
           <span>Força de la contrasenya</span>
@@ -1586,14 +1543,22 @@ function settingsScreen() {
           <button class="setting-action" id="generate-browser-pairing-code">
             ${icon("KeyRound", 18)} Generar codi per vincular un navegador
           </button>
-          ${state.browserPairingCode ? `
+          ${
+            state.browserPairingCode
+              ? `
             <div class="cloud-status-card browser-pairing-code" role="status">
               <strong>${escapeHtml(state.browserPairingCode)}</strong>
               <small>Introdueix aquest codi a l'extensió. Caduca al cap de dos minuts.</small>
             </div>
-          ` : ""}
+          `
+              : ""
+          }
           <div class="paired-browser-list">
-            ${state.pairedBrowsers.length ? state.pairedBrowsers.map((client) => `
+            ${
+              state.pairedBrowsers.length
+                ? state.pairedBrowsers
+                    .map(
+                      (client) => `
               <div class="setting-row paired-browser-row">
                 <span>
                   <strong>${escapeHtml(client.label || "Navegador")}</strong>
@@ -1601,7 +1566,11 @@ function settingsScreen() {
                 </span>
                 <button type="button" class="secondary danger" data-revoke-paired-browser="${escapeHtml(client.id)}">Revocar</button>
               </div>
-            `).join("") : `<p class="helper">Encara no hi ha cap navegador vinculat.</p>`}
+            `,
+                    )
+                    .join("")
+                : `<p class="helper">Encara no hi ha cap navegador vinculat.</p>`
+            }
           </div>
         </section>
 
@@ -4099,15 +4068,17 @@ function bindEvents() {
     .querySelector("#reset-vault")
     ?.addEventListener("click", resetLocalVault);
 
-  document.querySelector("#generate-browser-pairing-code")?.addEventListener("click", async () => {
-    try {
-      state.browserPairingCode = await invoke("generate_pairing_code");
-      render();
-      showToast("Codi de vinculació creat.");
-    } catch (error) {
-      showToast(error?.toString?.() || "No s'ha pogut crear el codi.");
-    }
-  });
+  document
+    .querySelector("#generate-browser-pairing-code")
+    ?.addEventListener("click", async () => {
+      try {
+        state.browserPairingCode = await invoke("generate_pairing_code");
+        render();
+        showToast("Codi de vinculació creat.");
+      } catch (error) {
+        showToast(error?.toString?.() || "No s'ha pogut crear el codi.");
+      }
+    });
 
   document.querySelectorAll("[data-revoke-paired-browser]").forEach((button) =>
     button.addEventListener("click", async () => {

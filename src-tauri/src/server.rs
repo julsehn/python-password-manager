@@ -84,7 +84,7 @@ impl ServerState {
     }
 
     pub fn set_app_handle(&self, handle: tauri::AppHandle) {
-        let mut app_handle = self.app_handle.lock().unwrap();
+        let mut app_handle = self.app_handle.lock().unwrap_or_else(|e| e.into_inner());
         *app_handle = Some(handle);
     }
 
@@ -96,7 +96,7 @@ impl ServerState {
         trash: Vec<TrashedEntry>,
         history: Vec<HistoryItem>,
     ) {
-        let mut data = self.unlocked_data.lock().unwrap();
+        let mut data = self.unlocked_data.lock().unwrap_or_else(|e| e.into_inner());
         *data = Some(UnlockedVault {
             master_password: Zeroizing::new(master_password),
             entries,
@@ -107,18 +107,18 @@ impl ServerState {
     }
 
     pub fn lock(&self) {
-        let mut data = self.unlocked_data.lock().unwrap();
+        let mut data = self.unlocked_data.lock().unwrap_or_else(|e| e.into_inner());
         *data = None;
-        let mut sessions = self.client_sessions.lock().unwrap();
+        let mut sessions = self.client_sessions.lock().unwrap_or_else(|e| e.into_inner());
         sessions.clear();
-        let mut auth = self.authorized_clients.lock().unwrap();
+        let mut auth = self.authorized_clients.lock().unwrap_or_else(|e| e.into_inner());
         auth.clear();
-        let mut challenges = self.pending_challenges.lock().unwrap();
+        let mut challenges = self.pending_challenges.lock().unwrap_or_else(|e| e.into_inner());
         challenges.clear();
     }
 
     pub fn is_unlocked(&self) -> bool {
-        self.unlocked_data.lock().unwrap().is_some()
+        self.unlocked_data.lock().unwrap_or_else(|e| e.into_inner()).is_some()
     }
 
     pub fn get_entry_count(&self) -> usize {
@@ -145,7 +145,7 @@ impl ServerState {
             client_id: client_id.map(|s| s.to_string()),
         };
 
-        let mut sessions = self.client_sessions.lock().unwrap();
+        let mut sessions = self.client_sessions.lock().unwrap_or_else(|e| e.into_inner());
         let now = Utc::now().timestamp();
         sessions.retain(|_, s| s.expires_at > now);
         sessions.insert(token.clone(), st);
@@ -155,7 +155,7 @@ impl ServerState {
 
     pub fn validate_token(&self, token_to_check: &str) -> bool {
         let now = Utc::now().timestamp();
-        let sessions = self.client_sessions.lock().unwrap();
+        let sessions = self.client_sessions.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(st) = sessions.get(token_to_check) {
             if st.expires_at > now {
                 if let Some(ref cid) = st.client_id {
@@ -181,7 +181,7 @@ impl ServerState {
         let code = format!("{:06}", code_num);
         let expires_at = Utc::now().timestamp() + 120; // 2 minutes
 
-        let mut pc = self.pairing_code.lock().unwrap();
+        let mut pc = self.pairing_code.lock().unwrap_or_else(|e| e.into_inner());
         *pc = Some(PairingCode {
             code: code.clone(),
             expires_at,
@@ -200,13 +200,13 @@ impl ServerState {
         }
         let _ = save_paired_clients(&clients);
 
-        let mut sessions = self.client_sessions.lock().unwrap();
+        let mut sessions = self.client_sessions.lock().unwrap_or_else(|e| e.into_inner());
         sessions.retain(|_, st| st.client_id.as_deref() != Some(client_id));
 
-        let mut auth = self.authorized_clients.lock().unwrap();
+        let mut auth = self.authorized_clients.lock().unwrap_or_else(|e| e.into_inner());
         auth.remove(client_id);
 
-        let mut challenges = self.pending_challenges.lock().unwrap();
+        let mut challenges = self.pending_challenges.lock().unwrap_or_else(|e| e.into_inner());
         challenges.remove(client_id);
 
         true
@@ -469,7 +469,7 @@ pub async fn start_server(state: Arc<ServerState>, port: u16) -> Result<(), Stri
                     "Failed to bind to {} ({}), including an available loopback port ({})",
                     requested_addr, bind_error, fallback_error
                 );
-                *state.server_error.lock().unwrap() = Some(message.clone());
+                *state.server_error.lock().unwrap_or_else(|e| e.into_inner()) = Some(message.clone());
                 message
             })?,
     };
@@ -690,7 +690,7 @@ pub async fn route_request(
         }
 
         let now = Utc::now().timestamp();
-        let mut pc_guard = state.pairing_code.lock().unwrap();
+        let mut pc_guard = state.pairing_code.lock().unwrap_or_else(|e| e.into_inner());
         let pc = match &mut *pc_guard {
             Some(pc) => pc,
             None => {
@@ -836,7 +836,7 @@ pub async fn route_request(
         }
 
         // Remove immediately to prevent replay
-        let pending = state.pending_challenges.lock().unwrap().remove(client_id);
+        let pending = state.pending_challenges.lock().unwrap_or_else(|e| e.into_inner()).remove(client_id);
         let (stored_nonce, expires_at) = match pending {
             Some(p) => p,
             None => {
@@ -892,10 +892,10 @@ pub async fn route_request(
         }
 
         // User presence check (Target design 4)
-        let require_prompt = *state.require_presence_prompt.lock().unwrap();
-        let is_authorized = state.authorized_clients.lock().unwrap().contains(client_id);
+        let require_prompt = *state.require_presence_prompt.lock().unwrap_or_else(|e| e.into_inner());
+        let is_authorized = state.authorized_clients.lock().unwrap_or_else(|e| e.into_inner()).contains(client_id);
         if require_prompt && !is_authorized {
-            if let Some(handle) = state.app_handle.lock().unwrap().as_ref() {
+            if let Some(handle) = state.app_handle.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
                 use tauri::Emitter;
                 let _ = handle.emit(
                     "browser-connection-request",
@@ -928,7 +928,7 @@ pub async fn route_request(
     // ── 6. Authenticated Handshake (F7 fix: shared_secret required, never leaked) ──
     if path == "/api/v1/handshake" && method == "GET" {
         let provided_secret = headers.get("x-shared-secret").cloned().unwrap_or_default();
-        let current_secret = state.shared_secret.lock().unwrap().clone();
+        let current_secret = state.shared_secret.lock().unwrap_or_else(|e| e.into_inner()).clone();
         if provided_secret.is_empty() || provided_secret != current_secret {
             return (
                 401,
@@ -953,7 +953,7 @@ pub async fn route_request(
 
         let master_pwd = parsed["master_password"].as_str().unwrap_or("");
         let provided_secret = parsed["shared_secret"].as_str().unwrap_or("");
-        let current_secret = state.shared_secret.lock().unwrap().clone();
+        let current_secret = state.shared_secret.lock().unwrap_or_else(|e| e.into_inner()).clone();
 
         if !master_pwd.is_empty() {
             match decrypt_vault_from_disk(master_pwd) {
@@ -1050,7 +1050,7 @@ pub async fn route_request(
     // The extension may list saved entries, but this index deliberately omits
     // passwords. Secrets are released only by the domain-scoped endpoint below.
     if path == "/api/v1/credentials/index" && method == "GET" {
-        let unlocked = state.unlocked_data.lock().unwrap();
+        let unlocked = state.unlocked_data.lock().unwrap_or_else(|e| e.into_inner());
         let vault = match &*unlocked {
             Some(v) => v,
             None => {
@@ -1064,7 +1064,7 @@ pub async fn route_request(
     }
 
     if path == "/api/v1/credentials" && method == "GET" {
-        let unlocked = state.unlocked_data.lock().unwrap();
+        let unlocked = state.unlocked_data.lock().unwrap_or_else(|e| e.into_inner());
         let vault = match &*unlocked {
             Some(v) => v,
             None => {
@@ -1134,7 +1134,7 @@ pub async fn route_request(
             }
         };
 
-        let mut unlocked = state.unlocked_data.lock().unwrap();
+        let mut unlocked = state.unlocked_data.lock().unwrap_or_else(|e| e.into_inner());
         let vault = match &mut *unlocked {
             Some(v) => v,
             None => {
@@ -1207,7 +1207,7 @@ pub async fn route_request(
             );
         }
 
-        if let Some(handle) = state.app_handle.lock().unwrap().as_ref() {
+        if let Some(handle) = state.app_handle.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
             use tauri::Emitter;
             let _ = handle.emit(
                 "vault-updated",
@@ -1244,7 +1244,7 @@ fn check_request_auth(headers: &HashMap<String, String>, state: &Arc<ServerState
         if let Ok(ts) = ts_str.parse::<i64>() {
             let now = Utc::now().timestamp();
             if (now - ts).abs() <= 60 {
-                let secret = state.shared_secret.lock().unwrap().clone();
+                let secret = state.shared_secret.lock().unwrap_or_else(|e| e.into_inner()).clone();
                 let key = ring::hmac::Key::new(ring::hmac::HMAC_SHA256, secret.as_bytes());
                 if let Ok(sig_bytes) = hex::decode(sig) {
                     if ring::hmac::verify(&key, ts_str.as_bytes(), &sig_bytes).is_ok() {
@@ -1300,7 +1300,7 @@ mod tests {
 
     impl PairedClientsTestIsolation {
         fn new() -> Self {
-            let lock = PAIRED_CLIENTS_TEST_LOCK.lock().unwrap();
+            let lock = PAIRED_CLIENTS_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
             let directory = tempfile::tempdir().unwrap();
             let previous_path = std::env::var_os("CAIXA_PAIRED_CLIENTS_PATH");
             std::env::set_var(

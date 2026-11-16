@@ -7,6 +7,12 @@ use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use rand::seq::SliceRandom;
 use rand::{rngs::OsRng, Rng, RngCore};
 use serde::{Deserialize, Serialize};
+use zeroize::Zeroize;
+
+pub const ARGON2_MEMORY_COST_KIB: u32 = 64 * 1024;
+pub const ARGON2_TIME_COST: u32 = 3;
+pub const ARGON2_PARALLELISM: u32 = 1;
+pub const KEY_LENGTH: usize = 32;
 
 pub fn store_os_secret(service: &str, account: &str, secret: &str) -> Result<(), String> {
     let entry = keyring::Entry::new(service, account)
@@ -104,15 +110,27 @@ pub fn generate_nonce() -> Result<Vec<u8>, String> {
 }
 
 pub fn derive_key_from_password(password: &str, salt: &[u8]) -> Result<Vec<u8>, String> {
-    let mut key = [0u8; 32];
-    let params = Params::new(19 * 1024, 2, 1, Some(key.len()))
-        .map_err(|e| format!("Invalid Argon2id parameters: {}", e))?;
+    let mut key = [0u8; KEY_LENGTH];
+    let params = Params::new(
+        ARGON2_MEMORY_COST_KIB,
+        ARGON2_TIME_COST,
+        ARGON2_PARALLELISM,
+        Some(key.len()),
+    )
+    .map_err(|e| format!("Invalid Argon2id parameters: {}", e))?;
     let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
-    argon2
+    let res = argon2
         .hash_password_into(password.as_bytes(), salt, &mut key)
-        .map_err(|e| format!("Failed to derive key with Argon2id: {}", e))?;
+        .map_err(|e| format!("Failed to derive key with Argon2id: {}", e));
 
-    Ok(key.to_vec())
+    if let Err(err) = res {
+        key.zeroize();
+        return Err(err);
+    }
+
+    let key_vec = key.to_vec();
+    key.zeroize();
+    Ok(key_vec)
 }
 
 pub fn derive_key_with_argon2(password: &str, salt: &[u8]) -> Result<Vec<u8>, String> {
@@ -338,7 +356,7 @@ mod kdf_tests {
 
         assert_eq!(
             hex::encode(key),
-            "6685b845ce381b544d2390e669f56bed913e879a0f645d6533872e5b6c24b9c0"
+            "24f35b029273a54b22a71e1aba8fb6d92d7eb469d00ed3eae30d735f0b0a5017"
         );
     }
 }

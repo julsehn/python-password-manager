@@ -1,26 +1,25 @@
 # Caixa Forta - Password Manager
 
-Una aplicació de gestió de contrasenyes de codi obert per a Mac, Windows i Linux.
+Una aplicació de gestió de contrasenyes de codi obert per a Mac, Windows i Linux construïda amb Tauri, Rust i Vite.
 
 ![Caixa Forta](https://img.shields.io/badge/License-MIT-yellow.svg)
-![Python](https://img.shields.io/badge/Python-3.12+-blue)
-![PyQt6](https://img.shields.io/badge/PyQt6-6.6+-green)
+![Rust](https://img.shields.io/badge/Rust-Tauri-orange)
 
 ## Característiques
 
-- 🔐 **Criptografia end-a-end**: Totes les dades s'encifren localment amb AES-256-GCM
+- 🔐 **Criptografia end-a-end**: Totes les dades s'encifren localment amb AES-256-GCM i derivació de claus Argon2id (64 MiB, 3 passades)
 - ☁️ **Sync a la núvol**: Sync automàtic amb Railway API
-- 🔒 **Protecció contra força bruta**: Bloqueig local després de 10 intents fallits al client Python; l'API cloud aplica límits d'intents per IP i usuari.
-- 📱 **Té telafona amigable**: Interfície gràfica moderna amb PyQt6
+- 🔒 **Protecció de memòria**: Neteja de memòria amb `zeroize` per a dades sensibles
+- 📱 **Interfície d'escriptori**: Aplicació nativa lleugera amb Tauri 2
 - 🎯 **Autocompliment**: Omple automàticament formularis amb contrasenyes
 - 🔋 **Bloqueig automàtic**: La caixa forta es bloqueja per inactivitat
 - 🌐 **Extensió del navegador**: Chrome i Firefox amb missatgeria nativa
 
-## Requereiximents
+## Requeriments
 
-- Python 3.10+
-- PyQt6
-- Rust (només si composes amb Tauri)
+- Node.js 18+
+- Rust & Cargo
+- Python 3.10+ (per al Native Messaging Host de l'extensió)
 
 Per generar una versió macOS signada i notaritzada, executa `npm run tauri:build:macos:release` amb `APPLE_SIGNING_IDENTITY`, `APPLE_API_ISSUER`, `APPLE_API_KEY` i `APPLE_API_KEY_PATH` configurats. L'ordre s'atura si no troba una identitat de codi-signatura vàlida.
 
