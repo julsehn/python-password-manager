@@ -1,4 +1,4 @@
-// Caixa Forta - Popup Controller
+// SherLock - Popup Controller
 // Implements reactive state, Tauri design system integration, and secure vault communication.
 
 function replacePopupMarkup(element, markup) {
@@ -34,8 +34,8 @@ class PopupController {
 
   // --- THEME ---
   async initTheme() {
-    const data = await chrome.storage.local.get("caixa_theme");
-    const theme = (data && data.caixa_theme) || "auto";
+    const data = await chrome.storage.local.get("sherlock_theme");
+    const theme = (data && data.sherlock_theme) || "auto";
     const select = document.getElementById("themeSelect");
     if (select) select.value = theme;
     this.applyTheme(theme);
@@ -146,21 +146,18 @@ class PopupController {
     if (!this.state.connected || !this.state.unlocked) return;
 
     return new Promise((resolve) => {
-      chrome.runtime.sendMessage(
-        { action: "listCredentials" },
-        (res) => {
-          if (res && res.success) {
-            this.state.credentials = res.credentials || [];
-            this.renderCredentialsList();
-          } else if (res && res.unlocked === false) {
-            this.state.unlocked = false;
-            this.checkStatus();
-          } else if (/no està vinculat|not paired/i.test(res?.error || "")) {
-            this.renderPairRequiredState();
-          }
-          resolve();
-        },
-      );
+      chrome.runtime.sendMessage({ action: "listCredentials" }, (res) => {
+        if (res && res.success) {
+          this.state.credentials = res.credentials || [];
+          this.renderCredentialsList();
+        } else if (res && res.unlocked === false) {
+          this.state.unlocked = false;
+          this.checkStatus();
+        } else if (/no està vinculat|not paired/i.test(res?.error || "")) {
+          this.renderPairRequiredState();
+        }
+        resolve();
+      });
     });
   }
 
@@ -170,7 +167,9 @@ class PopupController {
     if (searchSection) searchSection.style.display = "none";
 
     const container = document.getElementById("vaultContent");
-    replacePopupMarkup(container, `
+    replacePopupMarkup(
+      container,
+      `
       <div class="state-box">
         <div class="state-icon red">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -180,8 +179,8 @@ class PopupController {
             <line x1="6" y1="18" x2="6.01" y2="18"></line>
           </svg>
         </div>
-        <h3 class="state-title">Caixa Forta no detectada</h3>
-        <p class="state-desc">Obre l'aplicació d'escriptori Caixa Forta al teu ordinador per connectar-hi.</p>
+        <h3 class="state-title">SherLock no detectada</h3>
+        <p class="state-desc">Obre l'aplicació d'escriptori SherLock al teu ordinador per connectar-hi.</p>
         <button id="retryConnectBtn" class="btn btn-primary" style="margin-top: 6px;">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"></path>
@@ -189,7 +188,8 @@ class PopupController {
           Reintentar connexió
         </button>
       </div>
-    `);
+    `,
+    );
 
     document
       .getElementById("retryConnectBtn")
@@ -207,7 +207,9 @@ class PopupController {
     if (searchSection) searchSection.style.display = "none";
 
     const container = document.getElementById("vaultContent");
-    replacePopupMarkup(container, `
+    replacePopupMarkup(
+      container,
+      `
       <div class="state-box">
         <div class="state-icon amber">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -215,13 +217,14 @@ class PopupController {
             <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
           </svg>
         </div>
-        <h3 class="state-title">Caixa Forta bloquejada</h3>
-        <p class="state-desc">Desbloqueja a l'aplicació Caixa Forta per accedir als teus accessos.</p>
+        <h3 class="state-title">SherLock bloquejat</h3>
+        <p class="state-desc">Desbloqueja l'aplicació SherLock per accedir als teus accessos.</p>
         <button type="button" id="retryUnlockBtn" class="btn btn-secondary" style="margin-top: 8px;">
           Comprovar de nou
         </button>
       </div>
-    `);
+    `,
+    );
 
     // Poll every 3 seconds so the popup updates automatically once the user
     // unlocks from the desktop app.
@@ -237,28 +240,38 @@ class PopupController {
     const searchSection = document.getElementById("searchSection");
     if (searchSection) searchSection.style.display = "none";
     const container = document.getElementById("vaultContent");
-    replacePopupMarkup(container, `
+    replacePopupMarkup(
+      container,
+      `
       <div class="state-box">
         <div class="state-icon amber">${this.iconSvg("KeyRound", 24)}</div>
         <h3 class="state-title">Vincula aquest navegador</h3>
-        <p class="state-desc">Per protegir la caixa, cada navegador s'ha d'aprovar des de l'app Caixa Forta.</p>
+        <p class="state-desc">Per protegir la caixa, cada navegador s'ha d'aprovar des de l'app SherLock.</p>
         <button id="openPairSettingsBtn" class="btn btn-primary" style="margin-top: 6px">Obrir vinculació</button>
       </div>
-    `);
-    document.getElementById("openPairSettingsBtn")?.addEventListener("click", () => {
-      this.switchTab("settings");
-    });
+    `,
+    );
+    document
+      .getElementById("openPairSettingsBtn")
+      ?.addEventListener("click", () => {
+        this.switchTab("settings");
+      });
   }
 
   iconSvg(name, size = 16) {
     const paths = {
-      KeyRound: '<circle cx="7.5" cy="15.5" r="5.5"></circle><path d="m21 2-9.6 9.6"></path><path d="m15.5 7.5 3 3L22 7l-3-3"></path>',
-      Globe: '<circle cx="12" cy="12" r="10"></circle><path d="M2 12h20"></path><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10Z"></path>',
+      KeyRound:
+        '<circle cx="7.5" cy="15.5" r="5.5"></circle><path d="m21 2-9.6 9.6"></path><path d="m15.5 7.5 3 3L22 7l-3-3"></path>',
+      Globe:
+        '<circle cx="12" cy="12" r="10"></circle><path d="M2 12h20"></path><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10Z"></path>',
       Eye: '<path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7-10-7-10-7Z"></path><circle cx="12" cy="12" r="3"></circle>',
-      EyeOff: '<path d="m3 3 18 18"></path><path d="M10.6 10.6a2 2 0 0 0 2.8 2.8"></path><path d="M9.9 5.2A11 11 0 0 1 12 5c6.4 0 10 7 10 7a14 14 0 0 1-3.2 3.9"></path><path d="M6.6 6.6C3.7 8.3 2 12 2 12s3.6 7 10 7a10 10 0 0 0 3.2-.5"></path>',
-      UserRound: '<circle cx="12" cy="8" r="5"></circle><path d="M20 21a8 8 0 0 0-16 0"></path>',
+      EyeOff:
+        '<path d="m3 3 18 18"></path><path d="M10.6 10.6a2 2 0 0 0 2.8 2.8"></path><path d="M9.9 5.2A11 11 0 0 1 12 5c6.4 0 10 7 10 7a14 14 0 0 1-3.2 3.9"></path><path d="M6.6 6.6C3.7 8.3 2 12 2 12s3.6 7 10 7a10 10 0 0 0 3.2-.5"></path>',
+      UserRound:
+        '<circle cx="12" cy="8" r="5"></circle><path d="M20 21a8 8 0 0 0-16 0"></path>',
       Copy: '<rect x="8" y="8" width="14" height="14" rx="2"></rect><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"></path>',
-      Sparkles: '<path d="m12 3 1.9 5.8L20 11l-6.1 2.2L12 19l-1.9-5.8L4 11l6.1-2.2L12 3Z"></path><path d="m19 14 1.1 2.9L23 18l-2.9 1.1L19 22l-1.1-2.9L15 18l2.9-1.1L19 14Z"></path>',
+      Sparkles:
+        '<path d="m12 3 1.9 5.8L20 11l-6.1 2.2L12 19l-1.9-5.8L4 11l6.1-2.2L12 3Z"></path><path d="m19 14 1.1 2.9L23 18l-2.9 1.1L19 22l-1.1-2.9L15 18l2.9-1.1L19 14Z"></path>',
     };
     return `<svg viewBox="0 0 24 24" width="${size}" height="${size}" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths[name] || ""}</svg>`;
   }
@@ -293,16 +306,22 @@ class PopupController {
 
     if (query) {
       if (matched.length === 0) {
-        replacePopupMarkup(container, `
+        replacePopupMarkup(
+          container,
+          `
           <div class="state-box"><p class="state-desc">Cap resultat per a "${this.escapeHtml(this.state.searchQuery)}"</p></div>
-        `);
+        `,
+        );
       } else {
-        replacePopupMarkup(container, `
+        replacePopupMarkup(
+          container,
+          `
           <div class="credential-section">
             <h3 class="credential-section-title">Resultats (${matched.length})</h3>
             <div class="cred-list">${matched.map((c) => this.renderCredCard(c)).join("")}</div>
           </div>
-        `);
+        `,
+        );
       }
     } else {
       const currentHeading = currentDomain
@@ -315,9 +334,11 @@ class PopupController {
         ? `<section class="credential-section"><h3 class="credential-section-title">Altres entrades (${others.length})</h3><div class="cred-list">${others.map((c) => this.renderCredCard(c)).join("")}</div></section>`
         : "";
       replacePopupMarkup(container, `${currentSection}${othersSection}`);
-      document.getElementById("quickSaveForSiteBtn")?.addEventListener("click", () => {
-        this.switchTab("save");
-      });
+      document
+        .getElementById("quickSaveForSiteBtn")
+        ?.addEventListener("click", () => {
+          this.switchTab("save");
+        });
     }
 
     this.attachCardActions();
@@ -327,8 +348,9 @@ class PopupController {
     const input = String(value).trim().toLowerCase();
     if (!input) return "";
     try {
-      return new URL(input.includes("://") ? input : `https://${input}`).hostname
-        .replace(/^www\./, "");
+      return new URL(
+        input.includes("://") ? input : `https://${input}`,
+      ).hostname.replace(/^www\./, "");
     } catch {
       return input.replace(/^www\./, "").split(/[/:]/, 1)[0];
     }
@@ -336,9 +358,9 @@ class PopupController {
 
   hostMatches(savedHost, activeHost) {
     return Boolean(
-      savedHost && activeHost &&
-      (savedHost === activeHost ||
-        activeHost.endsWith(`.${savedHost}`)),
+      savedHost &&
+      activeHost &&
+      (savedHost === activeHost || activeHost.endsWith(`.${savedHost}`)),
     );
   }
 
@@ -364,7 +386,7 @@ class PopupController {
           </button>
         </div>
         <div class="cred-actions">
-          <button class="btn btn-primary action-fill" data-id="${this.escapeHtml(cred.id)}" ${autofillAllowed ? "" : "disabled title=\"L'ompliment només està disponible per a aquest lloc\""}>
+          <button class="btn btn-primary action-fill" data-id="${this.escapeHtml(cred.id)}" ${autofillAllowed ? "" : 'disabled title="L\'ompliment només està disponible per a aquest lloc"'}>
             ${this.iconSvg("Sparkles", 14)}
             Omplir formulari
           </button>
@@ -392,11 +414,13 @@ class PopupController {
         const credential = this.state.credentials.find(
           (item) => item.id === id,
         );
-        if (credential) this.loadCredential(credential).then((full) => {
-          if (!full?.password) return this.showToast("No s'ha pogut obtenir la contrasenya");
-          navigator.clipboard.writeText(full.password);
-          this.showToast("Contrasenya copiada!");
-        });
+        if (credential)
+          this.loadCredential(credential).then((full) => {
+            if (!full?.password)
+              return this.showToast("No s'ha pogut obtenir la contrasenya");
+            navigator.clipboard.writeText(full.password);
+            this.showToast("Contrasenya copiada!");
+          });
       });
     });
 
@@ -404,16 +428,28 @@ class PopupController {
       btn.addEventListener("click", () => {
         const id = btn.getAttribute("data-id");
         const cred = this.state.credentials.find((c) => c.id === id);
-        if (cred) this.loadCredential(cred, this.state.domain).then((full) => full && this.autofillCredential(full));
+        if (cred)
+          this.loadCredential(cred, this.state.domain).then(
+            (full) => full && this.autofillCredential(full),
+          );
       });
     });
   }
 
   loadCredential(credential, domain = credential.site) {
-    return new Promise((resolve) => chrome.runtime.sendMessage(
-      { action: "fetchCredentials", site: this.normalizeHost(domain) },
-      (res) => resolve(res?.success ? (res.credentials || []).find((item) => item.id === credential.id) : null),
-    ));
+    return new Promise((resolve) =>
+      chrome.runtime.sendMessage(
+        { action: "fetchCredentials", site: this.normalizeHost(domain) },
+        (res) =>
+          resolve(
+            res?.success
+              ? (res.credentials || []).find(
+                  (item) => item.id === credential.id,
+                )
+              : null,
+          ),
+      ),
+    );
   }
 
   autofillCredential(credential) {
@@ -528,17 +564,23 @@ class PopupController {
       strengthLabel.textContent = "Encara no s'ha generat";
       strengthLabel.style.color = "var(--text-muted)";
     }
-    ["regenBtn", "copyGenBtn", "copyGenAction", "fillGenAction", "saveGenAction"]
-      .forEach((id) => {
-        const button = document.getElementById(id);
-        if (button) button.disabled = true;
-      });
+    [
+      "regenBtn",
+      "copyGenBtn",
+      "copyGenAction",
+      "fillGenAction",
+      "saveGenAction",
+    ].forEach((id) => {
+      const button = document.getElementById(id);
+      if (button) button.disabled = true;
+    });
     this.updateGenerateButtonState();
   }
 
   updateGenerateButtonState() {
-    const selected = ["chkUpper", "chkLower", "chkNumbers", "chkSymbols"]
-      .some((id) => document.getElementById(id)?.checked);
+    const selected = ["chkUpper", "chkLower", "chkNumbers", "chkSymbols"].some(
+      (id) => document.getElementById(id)?.checked,
+    );
     const button = document.getElementById("generatePasswordBtn");
     if (button) button.disabled = !selected;
     const hint = document.getElementById("generatorHint");
@@ -550,10 +592,12 @@ class PopupController {
   }
 
   runGenerator() {
-    const selected = ["chkUpper", "chkLower", "chkNumbers", "chkSymbols"]
-      .some((id) => document.getElementById(id)?.checked);
+    const selected = ["chkUpper", "chkLower", "chkNumbers", "chkSymbols"].some(
+      (id) => document.getElementById(id)?.checked,
+    );
     if (!selected) {
       this.clearGeneratedPassword();
+      this.showToast("Marca almenys una opció de caràcters");
       return;
     }
 
@@ -577,11 +621,16 @@ class PopupController {
           const outputEl = document.getElementById("genOutput");
           if (outputEl) outputEl.textContent = res.password;
           this.updateStrength(res.password);
-          ["regenBtn", "copyGenBtn", "copyGenAction", "fillGenAction", "saveGenAction"]
-            .forEach((id) => {
-              const button = document.getElementById(id);
-              if (button) button.disabled = false;
-            });
+          [
+            "regenBtn",
+            "copyGenBtn",
+            "copyGenAction",
+            "fillGenAction",
+            "saveGenAction",
+          ].forEach((id) => {
+            const button = document.getElementById(id);
+            if (button) button.disabled = false;
+          });
         }
       },
     );
@@ -636,13 +685,15 @@ class PopupController {
     document.getElementById("pairBrowserBtn")?.addEventListener("click", () => {
       const input = document.getElementById("pairingCodeInput");
       const code = (input?.value || "").trim();
-      if (!/^\d{6}$/.test(code)) return this.showToast("Introdueix el codi de sis xifres");
+      if (!/^\d{6}$/.test(code))
+        return this.showToast("Introdueix el codi de sis xifres");
       chrome.runtime.sendMessage({ action: "pairBrowser", code }, (res) => {
         if (res?.success) {
           if (input) input.value = "";
           this.showToast("Navegador vinculat correctament");
           this.checkStatus();
-        } else this.showToast(res?.error || "No s'ha pogut vincular el navegador");
+        } else
+          this.showToast(res?.error || "No s'ha pogut vincular el navegador");
       });
     });
 
@@ -655,7 +706,7 @@ class PopupController {
     // Lock button
     document.getElementById("lockBtn")?.addEventListener("click", () => {
       chrome.runtime.sendMessage({ action: "lockVault" }, () => {
-        this.showToast("Caixa Forta bloquejada");
+        this.showToast("SherLock bloquejat");
         this.checkStatus();
       });
     });
@@ -735,7 +786,7 @@ class PopupController {
       const submitBtn = document.getElementById("submitSaveBtn");
       if (submitBtn) submitBtn.disabled = true;
 
-      this.showToast("Desant a Caixa Forta...");
+      this.showToast("Desant a SherLock...");
       chrome.runtime.sendMessage(
         {
           action: "saveCredentials",
@@ -757,15 +808,15 @@ class PopupController {
 
     // Settings actions
     const serverUrlInput = document.getElementById("serverUrlInput");
-    chrome.storage.local.get("caixa_server_url", (data) => {
-      if (data.caixa_server_url && serverUrlInput) {
-        serverUrlInput.value = data.caixa_server_url;
+    chrome.storage.local.get("sherlock_server_url", (data) => {
+      if (data.sherlock_server_url && serverUrlInput) {
+        serverUrlInput.value = data.sherlock_server_url;
       }
     });
 
     serverUrlInput?.addEventListener("change", (e) => {
       chrome.storage.local.set(
-        { caixa_server_url: e.target.value.trim() },
+        { sherlock_server_url: e.target.value.trim() },
         () => {
           this.showToast("Adreça desada");
           this.checkStatus();
@@ -775,7 +826,7 @@ class PopupController {
 
     document.getElementById("themeSelect")?.addEventListener("change", (e) => {
       const theme = e.target.value;
-      chrome.storage.local.set({ caixa_theme: theme }, () => {
+      chrome.storage.local.set({ sherlock_theme: theme }, () => {
         this.applyTheme(theme);
         this.showToast("Tema actualitzat");
       });
@@ -790,7 +841,7 @@ class PopupController {
       .getElementById("clearSessionBtn")
       ?.addEventListener("click", () => {
         chrome.storage.local.remove(
-          ["caixa_session_token", "caixa_shared_secret"],
+          ["sherlock_session_token", "sherlock_shared_secret"],
           () => {
             this.showToast("Sessió tancada");
             this.checkStatus();

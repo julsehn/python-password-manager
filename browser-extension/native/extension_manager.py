@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Extension permission management tool for Caixa Forta."""
+"""Extension permission management tool for SherLock."""
 
 import os
 import json
@@ -94,7 +94,7 @@ def show_pending():
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Manage Caixa Forta extension permissions")
+    parser = argparse.ArgumentParser(description="Manage SherLock extension permissions")
     subparsers = parser.add_subparsers(dest="command")
 
     subparsers.add_parser("list", help="List all extensions")

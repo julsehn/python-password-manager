@@ -1,5 +1,5 @@
 /**
- * Caixa Forta - UI Components
+ * SherLock - UI Components
  * Navigation, sidebar, folder items, and entry card components.
  */
 
@@ -11,7 +11,7 @@ export function bottomNavComponent(activeTab = "vault") {
     <footer class="bottom-nav">
       <button class="nav ${activeTab === "vault" ? "active" : ""}" id="nav-vault">
         ${icon("ShieldCheck", 21)}
-        <span>Caixa forta</span>
+        <span>SherLock</span>
       </button>
       <button class="nav" id="nav-new">
         ${icon("Plus", 21)}
@@ -50,8 +50,8 @@ export function sidebarComponent(state) {
   return `
     <aside class="sidebar">
       <div class="brand">
-        <div class="brand-mark">${icon("ShieldCheck", 21)}</div>
-        <span>Caixa forta</span>
+        <div class="brand-mark"><img class="brand-icon" src="/brand/SherLock-brand.png" alt="" /></div>
+        <span>SherLock</span>
       </div>
       <div class="folders-heading">
         <p class="side-label">LA TEVA ORGANITZACIÓ</p>

@@ -167,7 +167,7 @@ let paletteHideTimer;
 const savedSettings = (() => {
   try {
     const parsed = JSON.parse(
-      localStorage.getItem("caixa-forta-settings") || "{}",
+      localStorage.getItem("sherlock-settings") || "{}",
     );
     return { ...defaultSettings, ...parsed };
   } catch {
@@ -177,11 +177,15 @@ const savedSettings = (() => {
 
 const savedCloudConfig = (() => {
   try {
-    return JSON.parse(localStorage.getItem("caixa-forta-cloud") || "{}");
+    return JSON.parse(localStorage.getItem("sherlock-cloud") || "{}");
   } catch {
     return {};
   }
 })();
+
+let lastLockedState = null;
+let browserPairingPollingTimer = null;
+let browserPairingExpirationTimer = null;
 
 const state = {
   locked: true,
@@ -291,10 +295,12 @@ function resetAutoLock() {
 async function lockVault() {
   if (state.locked) return;
   clearTimeout(autoLockTimer);
+  stopBrowserPairingTimers();
+  state.browserPairingCode = "";
   try {
     await api.lockVault();
   } catch (error) {
-    showToast(`No s'ha pogut bloquejar la caixa forta: ${error}`);
+    showToast(`No s'ha pogut bloquejar SherLock: ${error}`);
     resetAutoLock();
     return;
   }
@@ -431,7 +437,7 @@ async function cloudAuthSubmit(event) {
       };
 
       state.cloudConfig = updatedConfig;
-      localStorage.setItem("caixa-forta-cloud", JSON.stringify(updatedConfig));
+      localStorage.setItem("sherlock-cloud", JSON.stringify(updatedConfig));
       await invoke("set_railway_sync_config", rustCloudConfig(updatedConfig));
 
       if (!state.locked) {
@@ -439,7 +445,7 @@ async function cloudAuthSubmit(event) {
           await invoke("sync_upload_vault", {
             config: rustCloudConfig(updatedConfig),
           });
-          showToast("Compte creat i caixa forta sincronitzada a Railway!");
+          showToast("Compte creat i SherLock sincronitzada a Railway!");
         } catch {
           showToast(`Compte creat com a ${authData.username} a Railway.`);
         }
@@ -466,7 +472,7 @@ async function cloudAuthSubmit(event) {
 
   if (isDownload && state.locked && !masterPassword) {
     state.cloudError =
-      "Introdueix la contrasenya mestra de la caixa forta per desxifrar-la.";
+      "Introdueix la contrasenya mestra de la SherLock per desxifrar-la.";
     render();
     return;
   }
@@ -491,7 +497,7 @@ async function cloudAuthSubmit(event) {
     };
 
     state.cloudConfig = updatedConfig;
-    localStorage.setItem("caixa-forta-cloud", JSON.stringify(updatedConfig));
+    localStorage.setItem("sherlock-cloud", JSON.stringify(updatedConfig));
     await invoke("set_railway_sync_config", rustCloudConfig(updatedConfig));
 
     if (isDownload) {
@@ -524,7 +530,7 @@ async function cloudAuthSubmit(event) {
       state.locked = false;
       state.view = "vault";
       state.showCloudLogin = false;
-      showToast("Caixa forta descarregada de Railway i oberta correctament!");
+      showToast("SherLock descarregat de Railway i oberta correctament!");
     } else {
       if (isSync && !state.locked) {
         try {
@@ -559,7 +565,7 @@ async function handleCloudSyncNow() {
   }
 
   if (state.locked) {
-    showToast("Desbloqueja la caixa forta abans de sincronitzar-la.");
+    showToast("Desbloqueja la SherLock abans de sincronitzar-la.");
     return;
   }
 
@@ -570,7 +576,7 @@ async function handleCloudSyncNow() {
     const res = await invoke("sync_upload_vault", {
       config: rustCloudConfig(state.cloudConfig),
     });
-    showToast(res.message || "Caixa forta pujada correctament a Railway!");
+    showToast(res.message || "SherLock pujat correctament a Railway!");
   } catch (err) {
     showToast(`Error de sincronització: ${err}`);
   } finally {
@@ -633,7 +639,7 @@ async function handleCloudDownloadNow() {
     }));
     state.vaultExists = true;
     state.locked = false;
-    showToast("Caixa forta descarregada i sincronitzada de Railway!");
+    showToast("SherLock descarregat i sincronitzada de Railway!");
   } catch (err) {
     showToast(`Error en descarregar de Railway: ${err}`);
   } finally {
@@ -666,7 +672,7 @@ async function handleCloudLogout() {
     token: "",
     authUser: "",
   };
-  localStorage.removeItem("caixa-forta-cloud");
+  localStorage.removeItem("sherlock-cloud");
   try {
     await invoke("set_railway_sync_config", {
       railway_url: "",
@@ -690,6 +696,7 @@ function cancelResetLocalVault() {
 
 async function confirmResetLocalVault() {
   state.showResetConfirm = false;
+  stopBrowserPairingTimers();
   try {
     await invoke("reset_vault");
     state.entries = [];
@@ -714,6 +721,13 @@ function render() {
   if (!appContainer) return;
   document.documentElement.dataset.locked = String(state.locked);
 
+  // Detect lock/unlock transitions to apply entry animation
+  let needsTransition = false;
+  if (lastLockedState !== null && lastLockedState !== state.locked) {
+    needsTransition = true;
+  }
+  lastLockedState = state.locked;
+
   const viewMarkup = state.locked
     ? lockScreen()
     : state.view === "generator"
@@ -722,6 +736,20 @@ function render() {
         ? settingsScreen()
         : vaultScreen();
   replaceMarkup(appContainer, viewMarkup);
+
+  // Apply lock/unlock transition animation
+  if (needsTransition) {
+    const shell = appContainer.querySelector(
+      ".lock-shell, .shell, .generator-shell, .settings-shell",
+    );
+    if (shell) {
+      if (state.locked) {
+        shell.classList.add("is-locked-transition");
+      } else {
+        shell.classList.add("is-unlocked-transition");
+      }
+    }
+  }
 
   if (!state.locked && state.showCommandPalette) {
     appendMarkup(appContainer, commandPalette());
@@ -775,7 +803,7 @@ function applySettings() {
 }
 
 function persistSettings() {
-  localStorage.setItem("caixa-forta-settings", JSON.stringify(state.settings));
+  localStorage.setItem("sherlock-settings", JSON.stringify(state.settings));
   applySettings();
 }
 
@@ -846,7 +874,7 @@ function bottomNavComponent(activeTab = "vault") {
     <footer class="bottom-nav">
       <button class="nav ${activeTab === "vault" ? "active" : ""}" id="nav-vault">
         ${icon("ShieldCheck", 21)}
-        <span>Caixa forta</span>
+        <span>SherLock</span>
       </button>
       <button class="nav" id="nav-new">
         ${icon("Plus", 21)}
@@ -868,8 +896,8 @@ function sidebarComponent() {
   return `
     <aside class="sidebar">
       <div class="brand">
-        <div class="brand-mark">${icon("ShieldCheck", 21)}</div>
-        <span>Caixa forta</span>
+        <div class="brand-mark"><img class="brand-icon" src="/brand/SherLock-brand.png" alt="" /></div>
+        <span>SherLock</span>
       </div>
       <div class="folders-heading">
         <p class="side-label">LA TEVA ORGANITZACIÓ</p>
@@ -962,7 +990,7 @@ function commandPalette() {
           `,
                   )
                   .join("")
-              : `<p class="palette-empty">${query ? "Cap accés coincideix amb la cerca." : "La caixa forta no conté accessos."}</p>`
+              : `<p class="palette-empty">${query ? "Cap accés coincideix amb la cerca." : "La SherLock no conté accessos."}</p>`
           }
         </div>
         <footer class="palette-footer"><span>${results.length} ${results.length === 1 ? "accés" : "accessos"}</span><span><kbd>↑</kbd><kbd>↓</kbd> navegar</span><span><kbd>Enter</kbd> copiar</span></footer>
@@ -1016,11 +1044,11 @@ function lockScreen() {
   return `
     <main class="lock-shell">
       <div class="lock-card">
-        <div class="brand-mark large">${icon("ShieldCheck", 28)}</div>
-        <p class="eyebrow">CAIXA FORTA LOCAL</p>
+        <div class="brand-mark large"><img class="brand-icon" src="/brand/SherLock-brand.png" alt="" /></div>
+        <p class="eyebrow">SherLock LOCAL</p>
         <h1>Un espai segur per als teus accessos</h1>
         <p class="lock-copy">
-          Si és el primer ús, crea ara una contrasenya mestra nova. La necessitaràs cada vegada que obris la caixa forta.
+          Si és el primer ús, crea ara una contrasenya mestra nova. La necessitaràs cada vegada que obris la SherLock.
         </p>
         <form id="unlock-form">
           <label class="field-label" for="master-password">Contrasenya mestra</label>
@@ -1040,7 +1068,7 @@ function lockScreen() {
           </div>
           ${state.error ? `<p class="error">${escapeHtml(state.error)}</p>` : ""}
           <button class="primary full" type="submit" ${state.loading ? "disabled" : ""}>
-            ${state.loading ? "Desbloquejant..." : "Crear o desbloquejar la caixa forta"}
+            ${state.loading ? "Desbloquejant..." : "Crear o desbloquejar la SherLock"}
           </button>
         </form>
         <button class="secondary full" id="open-cloud-login" data-context="download">
@@ -1066,7 +1094,7 @@ function welcomeModal() {
       icon: "ShieldCheck",
       kicker: "PROTECCIÓ LOCAL",
       title: "Tot el que necessites, en un sol lloc",
-      text: "La Caixa Forta guarda els teus accessos de manera local i protegida, perquè els tinguis sempre a mà.",
+      text: "SherLock guarda els teus accessos de manera local i protegida, perquè els tinguis sempre a mà.",
     },
     {
       icon: "KeyRound",
@@ -1078,7 +1106,7 @@ function welcomeModal() {
       icon: "Plus",
       kicker: "A punt per començar",
       title: "Afegeix els teus primers accessos",
-      text: "Després podràs guardar llocs web, usuaris, contrasenyes i notes privades dins la teva caixa forta.",
+      text: "Després podràs guardar llocs web, usuaris, contrasenyes i notes privades dins la teva SherLock.",
     },
   ];
   const slide = slides[state.welcomeStep] || slides[0];
@@ -1091,7 +1119,7 @@ function welcomeModal() {
           <div class="brand-mark">${icon(slide.icon, 22)}</div>
           <div>
             <p class="welcome-slide-count">PAS ${state.welcomeStep + 1} DE ${slides.length}</p>
-            <h2 id="welcome-title">Benvingut a la Caixa Forta</h2>
+            <h2 id="welcome-title">Benvingut a SherLock</h2>
           </div>
         </header>
         <div class="welcome-slide" aria-live="polite">
@@ -1125,12 +1153,17 @@ function authMethodSelectionModal() {
             <button class="auth-method-card ${state.authMethodSelected === "password" ? "selected" : ""}" id="auth-method-password">
               ${icon("LockKeyhole", 32)}
               <h3>Contrasenya mestra</h3>
-              <p>Utilitza una contrasenya text per obrir la caixa forta.</p>
+              <p>Utilitza una contrasenya text per obrir la SherLock.</p>
             </button>
             <button class="auth-method-card ${state.authMethodSelected === "image" ? "selected" : ""}" id="auth-method-image">
               ${icon("Camera", 32)}
               <h3>Autenticació amb imatge</h3>
               <p>Utilitza una imatge i punts de clic per autenticar-te.</p>
+            </button>
+            <button class="auth-method-card" id="auth-method-cloud-download">
+              ${icon("Cloud", 32)}
+              <h3>Descarregar des del núvol</h3>
+              <p>Si ja tens una caixa al núvol, descarrega-la i desbloqueja-la amb la contrasenya mestra.</p>
             </button>
           </div>
           ${state.gridSetupError ? `<p class="error" id="image-auth-setup-error">${escapeHtml(state.gridSetupError)}</p>` : ""}
@@ -1206,10 +1239,10 @@ function imageAuthUnlockModal() {
               state.loading
                 ? `
               <div class="unlock-loading" role="status" aria-live="polite">
-                <div class="unlock-progress-track" role="progressbar" aria-label="Desxifrant la caixa forta" aria-valuetext="En curs">
+                <div class="unlock-progress-track" role="progressbar" aria-label="Desxifrant la SherLock" aria-valuetext="En curs">
                   <span class="unlock-progress-indicator"></span>
                 </div>
-                <span>Verificant el patró i desxifrant la caixa forta…</span>
+                <span>Verificant el patró i desxifrant la SherLock…</span>
               </div>
             `
                 : ""
@@ -1239,7 +1272,7 @@ function changeAuthMethodModal() {
             <button type="button" class="auth-method-card ${state.changeAuthSelected === "password" ? "selected" : ""}" id="change-auth-password">
               ${icon("LockKeyhole", 32)}
               <h3>Contrasenya mestra</h3>
-              <p>Tria una contrasenya mestra nova per obrir la caixa forta.</p>
+              <p>Tria una contrasenya mestra nova per obrir la SherLock.</p>
             </button>
             <button type="button" class="auth-method-card ${state.changeAuthSelected === "image" ? "selected" : ""}" id="change-auth-image">
               ${icon("Camera", 32)}
@@ -1333,7 +1366,7 @@ function vaultScreen() {
       <section class="workspace">
         <header class="topbar">
           <div>
-            <p class="eyebrow">LA TEVA CAIXA FORTA</p>
+            <p class="eyebrow">EL TEU SherLock</p>
             <h1>Les teves contrasenyes</h1>
             <p class="subtitle">Tot el que necessites, protegit i a mà.</p>
           </div>
@@ -1341,7 +1374,7 @@ function vaultScreen() {
             <button class="lock-button" id="refresh-vault" title="Actualitzar accessos">
               ${icon("RotateCw", 17)}
             </button>
-            <button class="lock-button" id="lock-vault" title="Bloquejar la caixa forta">
+            <button class="lock-button" id="lock-vault" title="Bloquejar la SherLock">
               ${icon("LockKeyhole", 17)}
             </button>
           </div>
@@ -1373,7 +1406,7 @@ function vaultScreen() {
               : `
               <div class="empty">
                 ${icon("Vault", 28)}
-                <h2>${state.entries.length ? "No s'ha trobat cap accés" : "La teva caixa forta està buida"}</h2>
+                <h2>${state.entries.length ? "No s'ha trobat cap accés" : "La teva SherLock està buida"}</h2>
                 <p>${state.entries.length ? "Prova una altra cerca." : "Comença afegint el teu primer accés."}</p>
                 <button class="primary" id="empty-new">
                   ${icon("Plus", 16)} Crear accés
@@ -1416,9 +1449,9 @@ function generatorScreen() {
         <div>
           <p class="eyebrow">EINES DE SEGURETAT</p>
           <h1>Generador</h1>
-          <p class="subtitle">Crea credencials úniques i desa l'historial dins de la caixa forta.</p>
+          <p class="subtitle">Crea credencials úniques i desa l'historial dins de la SherLock.</p>
         </div>
-        <button class="lock-button" id="lock-vault" title="Bloquejar la caixa forta">
+        <button class="lock-button" id="lock-vault" title="Bloquejar la SherLock">
           ${icon("LockKeyhole", 17)}
         </button>
       </header>
@@ -1502,9 +1535,9 @@ function settingsScreen() {
         <div>
           <p class="eyebrow">PREFERÈNCIES</p>
           <h1>Configuració</h1>
-          <p class="subtitle">Adapta la Caixa Forta a la teva manera de treballar.</p>
+          <p class="subtitle">Adapta SherLock a la teva manera de treballar.</p>
         </div>
-        <button class="lock-button" id="lock-vault" title="Bloquejar la caixa forta">
+        <button class="lock-button" id="lock-vault" title="Bloquejar la SherLock">
           ${icon("LockKeyhole", 17)}
         </button>
       </header>
@@ -1513,7 +1546,7 @@ function settingsScreen() {
         <section class="settings-section">
           <div class="settings-section-title">
             ${icon("ShieldCheck", 19)}
-            <h2>Seguretat de la caixa forta</h2>
+            <h2>Seguretat de la SherLock</h2>
           </div>
           <label class="setting-row">
             <span>
@@ -1548,7 +1581,14 @@ function settingsScreen() {
               ? `
             <div class="cloud-status-card browser-pairing-code" role="status">
               <strong>${escapeHtml(state.browserPairingCode)}</strong>
-              <small>Introdueix aquest codi a l'extensió. Caduca al cap de dos minuts.</small>
+              <small>
+                Introdueix aquest codi a l'extensió.
+                ${
+                  state.browserPairingExpiresAt
+                    ? ` Temps restant: ${Math.max(0, Math.floor((state.browserPairingExpiresAt - Date.now()) / 1000))} s.`
+                    : ""
+                }
+              </small>
             </div>
           `
               : ""
@@ -1577,7 +1617,7 @@ function settingsScreen() {
         <section class="settings-section">
           <div class="settings-section-title">
             ${icon("Vault", 19)}
-            <h2>Opcions de la caixa forta</h2>
+            <h2>Opcions de la SherLock</h2>
           </div>
           <div class="settings-actions">
             <button class="setting-action" id="import-vault" title="Importa un fitxer JSON o CSV">
@@ -1615,7 +1655,7 @@ function settingsScreen() {
                 </span>
               </div>
               <p class="helper helper-top">
-                Còpia de seguretat xifrada al núvol oficial de Railway. El servidor només guarda les teves credencials i la caixa forta xifrada (AES-256-GCM).
+                Còpia de seguretat xifrada al núvol oficial de Railway. El servidor només guarda les teves credencials i la SherLock xifrada (AES-256-GCM).
               </p>
               <div class="cloud-actions-row">
                 <button type="button" class="primary" id="btn-cloud-sync-now" ${state.cloudLoading ? "disabled" : ""}>
@@ -1631,7 +1671,7 @@ function settingsScreen() {
             </div>
           `
               : `
-            <p class="helper">Connecta amb el núvol oficial de Railway per mantenir una còpia xifrada de la teva caixa forta i sincronitzar-la entre dispositius.</p>
+            <p class="helper">Connecta amb el núvol oficial de Railway per mantenir una còpia xifrada de la teva SherLock i sincronitzar-la entre dispositius.</p>
             <button class="setting-action" id="open-cloud-login" data-context="settings">
               ${icon("Cloud", 18)} Iniciar sessió o crear compte a Railway
             </button>
@@ -1704,6 +1744,65 @@ async function refreshPairedBrowsers() {
   } catch {
     state.pairedBrowsers = [];
   }
+}
+
+function stopBrowserPairingTimers() {
+  if (browserPairingPollingTimer) {
+    clearInterval(browserPairingPollingTimer);
+    browserPairingPollingTimer = null;
+  }
+  if (browserPairingExpirationTimer) {
+    clearTimeout(browserPairingExpirationTimer);
+    browserPairingExpirationTimer = null;
+  }
+  // Clear countdown timer via interval reference
+  if (typeof window !== "undefined") {
+    if (window.__browserPairingCountdownTimer) {
+      clearInterval(window.__browserPairingCountdownTimer);
+      window.__browserPairingCountdownTimer = null;
+    }
+  }
+}
+
+function startBrowserPairingMonitoring() {
+  stopBrowserPairingTimers();
+
+  const poll = async () => {
+    const prevCount = state.pairedBrowsers.length;
+    try {
+      state.pairedBrowsers = await invoke("list_paired_clients");
+    } catch {
+      state.pairedBrowsers = [];
+    }
+    if (state.pairedBrowsers.length > prevCount) {
+      stopBrowserPairingTimers();
+      state.browserPairingCode = "";
+      render();
+      showToast("Navegador vinculat correctament.");
+    }
+  };
+
+  browserPairingPollingTimer = setInterval(poll, 2000);
+
+  // Update countdown timer every second
+  window.__browserPairingCountdownTimer = setInterval(() => {
+    if (Date.now() >= state.browserPairingExpiresAt) {
+      clearInterval(window.__browserPairingCountdownTimer);
+      stopBrowserPairingTimers();
+      state.browserPairingCode = "";
+      render();
+    } else {
+      // Update countdown display without full render
+      const pairingCodeEl = document.querySelector(".browser-pairing-code");
+      if (pairingCodeEl) {
+        const remaining = Math.max(
+          0,
+          Math.floor((state.browserPairingExpiresAt - Date.now()) / 1000),
+        );
+        pairingCodeEl.textContent = `Temp restant: ${remaining} s.`;
+      }
+    }
+  }, 1000);
 }
 
 function entryDetailsModal() {
@@ -2003,7 +2102,7 @@ function resetConfirmModal() {
           <h2 id="reset-vault-title">Eliminar dades locals?</h2>
         </header>
         <div class="modal-scroll">
-          <p>Aquesta acció eliminarà la caixa forta local, la paperera i l'historial. No es pot desfer.</p>
+          <p>Aquesta acció eliminarà la SherLock local, la paperera i l'historial. No es pot desfer.</p>
         </div>
         <footer class="modal-footer">
           <button type="button" class="secondary" id="cancel-reset-vault-bottom">Cancel·la</button>
@@ -2055,7 +2154,7 @@ function cloudLoginModal() {
             <div class="cloud-info-box">
               ${icon("ShieldCheck", 18)}
               <span>
-                <strong>Privacitat garantida:</strong> La caixa forta roman sempre xifrada amb AES-256-GCM. El servidor mai coneix la teva contrasenya mestra ni pot desxifrar les teves dades.
+                <strong>Privacitat garantida:</strong> La SherLock roman sempre xifrada amb AES-256-GCM. El servidor mai coneix la teva contrasenya mestra ni pot desxifrar les teves dades.
               </span>
             </div>
 
@@ -2087,7 +2186,7 @@ function cloudLoginModal() {
           <div>
             <h2 id="cloud-login-title">${icon("Cloud", 20)} Connexió amb Railway</h2>
             <p class="modal-subtitle">
-              ${isDownloadContext ? "Restaura la teva caixa forta des del núvol oficial" : "Sincronització segura al núvol de Railway"}
+              ${isDownloadContext ? "Restaura la teva SherLock des del núvol oficial" : "Sincronització segura al núvol de Railway"}
             </p>
           </div>
         </header>
@@ -2108,7 +2207,7 @@ function cloudLoginModal() {
             <div class="cloud-info-box">
               ${icon("ShieldCheck", 18)}
               <span>
-                <strong>Privacitat d'extrem a extrem:</strong> La instància oficial de Railway només emmagatzema les credencials del compte i la teva caixa forta xifrada. El servidor no pot desxifrar ni llegir mai les teves contrasenyes.
+                <strong>Privacitat d'extrem a extrem:</strong> La instància oficial de Railway només emmagatzema les credencials del compte i la teva SherLock xifrada. El servidor no pot desxifrar ni llegir mai les teves contrasenyes.
               </span>
             </div>
 
@@ -2193,14 +2292,14 @@ function cloudLoginModal() {
               <!-- Download context: Master Password -->
               <div class="form-section master-password-section download-master-password">
                 <label class="form-label" for="auth-master-password">
-                  ${icon("KeyRound", 14)} Contrasenya mestra de la caixa forta:
+                  ${icon("KeyRound", 14)} Contrasenya mestra de la SherLock:
                 </label>
                 <input
                   class="form-input"
                   id="auth-master-password"
                   name="masterPassword"
                   type="password"
-                  placeholder="Contrasenya per desxifrar la caixa forta descarregada"
+                  placeholder="Contrasenya per desxifrar la SherLock descarregada"
                   required
                 />
                 <p class="helper helper-small helper-top-small">
@@ -2236,7 +2335,7 @@ function cloudLoginModal() {
                     </small>
                   </div>
                   <div class="form-section form-section-spaced">
-                    <label class="form-label" for="cloud-vault-id">Identificador de caixa forta (opcional):</label>
+                    <label class="form-label" for="cloud-vault-id">Identificador de SherLock (opcional):</label>
                     <input
                       class="form-input"
                       id="cloud-vault-id"
@@ -2246,7 +2345,7 @@ function cloudLoginModal() {
                       value="${escapeHtml(config.vaultId || "")}"
                     />
                   </div>
-                  <p class="helper">Fes servir una contrasenya diferent de la contrasenya mestra de la caixa forta.</p>
+                  <p class="helper">Fes servir una contrasenya diferent de la contrasenya mestra de la SherLock.</p>
                 </div>
               `
                   : ""
@@ -2780,7 +2879,7 @@ async function unlock(event) {
   event.preventDefault();
   if (!isTauriRuntime()) {
     state.error =
-      "Obre la Caixa Forta amb `Obrir_Caixa_Forta.command` per crear o desbloquejar la caixa forta.";
+      "Obre SherLock amb `Obrir_SherLock.command` per crear o desbloquejar.";
     render();
     return;
   }
@@ -2940,7 +3039,7 @@ function exportVault() {
   link.href = URL.createObjectURL(
     new Blob([payload], { type: "application/json" }),
   );
-  link.download = `caixa-forta-${new Date().toISOString().slice(0, 10)}.json`;
+  link.download = `sherlock-${new Date().toISOString().slice(0, 10)}.json`;
   link.click();
   URL.revokeObjectURL(link.href);
   showToast("Còpia exportada. Desa-la en un lloc segur.");
@@ -3326,6 +3425,15 @@ function bindEvents() {
     .querySelector("#auth-method-image")
     ?.addEventListener("click", () => {
       state.authMethodSelected = "image";
+      render();
+    });
+  document
+    .querySelector("#auth-method-cloud-download")
+    ?.addEventListener("click", () => {
+      state.showCloudLogin = true;
+      state.cloudTab = "login";
+      state.cloudLoading = false;
+      state.cloudError = "";
       render();
     });
   document
@@ -4073,6 +4181,8 @@ function bindEvents() {
     ?.addEventListener("click", async () => {
       try {
         state.browserPairingCode = await invoke("generate_pairing_code");
+        state.browserPairingExpiresAt = Date.now() + 120_000;
+        startBrowserPairingMonitoring();
         render();
         showToast("Codi de vinculació creat.");
       } catch (error) {
@@ -4181,19 +4291,22 @@ function bindEvents() {
       state.showEntryForm = true;
     }
     state.view = "vault";
+    stopBrowserPairingTimers();
+    state.browserPairingCode = "";
     render();
   });
   document.querySelector("#nav-settings")?.addEventListener("click", () => {
     state.view = "settings";
-    refreshPairedBrowsers().then(() => {
-      if (state.view === "settings") render();
-    });
     render();
+    // Refresh browser list in background — don't block or re-render here.
+    refreshPairedBrowsers().catch(() => {});
   });
   document.querySelector("#nav-generator")?.addEventListener("click", () => {
     state.generatorType = "password";
     state.generatedValue = state.generatedValue || generateValue();
     state.view = "generator";
+    stopBrowserPairingTimers();
+    state.browserPairingCode = "";
     render();
   });
 
@@ -4212,10 +4325,7 @@ function bindEvents() {
       document.documentElement.dataset.fontSize = String(val);
       const out = document.querySelector("#font-size-value");
       if (out) out.textContent = `${val} px`;
-      localStorage.setItem(
-        "caixa-forta-settings",
-        JSON.stringify(state.settings),
-      );
+      localStorage.setItem("sherlock-settings", JSON.stringify(state.settings));
     });
   }
 
@@ -4486,7 +4596,7 @@ function bindEvents() {
     .querySelector("#refresh-vault")
     ?.addEventListener("click", async () => {
       await reloadVaultEntries();
-      showToast("Caixa forta actualitzada.");
+      showToast("SherLock actualitzat.");
     });
 
   document.querySelector("#lock-vault")?.addEventListener("click", async () => {
@@ -4568,7 +4678,7 @@ async function reloadVaultEntries() {
 
 listen("vault-updated", async () => {
   await reloadVaultEntries();
-  showToast("Caixa forta sincronitzada amb l'extensió.");
+  showToast("SherLock sincronitzat amb l'extensió.");
 }).catch(() => {});
 
 listen("palette-shortcut", () => {

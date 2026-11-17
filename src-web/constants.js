@@ -1,5 +1,5 @@
 /**
- * Caixa Forta - Constants & Configuration
+ * SherLock - Constants & Configuration
  * Icon definitions, default application settings, and styling tokens.
  */
 

@@ -27,7 +27,7 @@ def generate_extension_certs():
             "365",
             "-nodes",
             "-subj",
-            "/CN=extension/CN=Browser Extension/O=Caixa Forta",
+            "/CN=extension/CN=Browser Extension/O=SherLock",
         ],
         check=True,
     )

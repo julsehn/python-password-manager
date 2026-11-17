@@ -1,4 +1,4 @@
-// Caixa Forta - Content Script for secure autofill and form detection
+// SherLock - Content Script for secure autofill and form detection
 
 function setNativeInputValue(element, value) {
   if (!element) return;
@@ -47,7 +47,8 @@ function inputAttributes(input) {
 }
 
 function isUsableInput(input) {
-  if (input.tagName !== "INPUT" || input.disabled || input.readOnly) return false;
+  if (input.tagName !== "INPUT" || input.disabled || input.readOnly)
+    return false;
   if (["hidden", "submit", "button", "reset", "image"].includes(input.type)) {
     return false;
   }
@@ -65,17 +66,24 @@ function scoreUsernameInput(input) {
   if (autocomplete === "username") score += 120;
   if (autocomplete === "email") score += 90;
   if (input.type === "email") score += 70;
-  if (/user(name)?|login|account|email|mail|identifier/.test(hints)) score += 40;
+  if (/user(name)?|login|account|email|mail|identifier/.test(hints))
+    score += 40;
   if (input.type === "text") score += 5;
 
   return score;
 }
 
 function findFormFields(root = document, { includeNewPassword = false } = {}) {
-  const inputs = Array.from(root.querySelectorAll("input")).filter(isUsableInput);
+  const inputs = Array.from(root.querySelectorAll("input")).filter(
+    isUsableInput,
+  );
   const passwordInputs = inputs.filter((input) => input.type === "password");
-  const signupOnly = !includeNewPassword && passwordInputs.length > 0 &&
-    passwordInputs.every((input) => (input.autocomplete || "").toLowerCase() === "new-password");
+  const signupOnly =
+    !includeNewPassword &&
+    passwordInputs.length > 0 &&
+    passwordInputs.every(
+      (input) => (input.autocomplete || "").toLowerCase() === "new-password",
+    );
   if (signupOnly) return { usernameEl: null, passwordEl: null };
   const passwordEl =
     passwordInputs
@@ -130,6 +138,144 @@ function findFormFields(root = document, { includeNewPassword = false } = {}) {
   };
 }
 
+// ─── Inline field icons ───
+// Inject inline icons near password/username fields for autofill.
+
+let lastIconUpdate = 0;
+const ICON_THROTTLE_MS = 500;
+
+function shouldInjectIcons() {
+  const now = Date.now();
+  if (now - lastIconUpdate < ICON_THROTTLE_MS) return false;
+  lastIconUpdate = now;
+  return true;
+}
+
+function isEligibleField(input) {
+  if (input.disabled || input.readOnly) return false;
+  if (input.getClientRects && input.getClientRects().length === 0) return false;
+  return (
+    input.type === "password" || input.type === "email" || input.type === "text"
+  );
+}
+
+function hasIcon(input) {
+  return input.dataset.sherlockIcon !== undefined;
+}
+
+function injectInlineIcons() {
+  if (!shouldInjectIcons()) return;
+
+  const { usernameEl, passwordEl } = findFormFields();
+
+  // Remove icons from fields that are no longer eligible
+  document.querySelectorAll("[data-sherlock-icon]").forEach((container) => {
+    const field = container.dataset.sherlockTarget;
+    const stillEligible = field === passwordEl || field === usernameEl;
+    if (!stillEligible) container.remove();
+  });
+
+  // Add icon to password field if eligible and not already added
+  if (passwordEl && isEligibleField(passwordEl) && !hasIcon(passwordEl)) {
+    passwordEl.dataset.sherlockIcon = "password";
+    const wrapper = createFieldIconWrapper(passwordEl);
+    createInlineIcon(wrapper, passwordEl, "password");
+    passwordEl.parentElement.appendChild(wrapper);
+  }
+
+  // Add icon to username field if eligible and not already added
+  if (usernameEl && isEligibleField(usernameEl) && !hasIcon(usernameEl)) {
+    usernameEl.dataset.sherlockIcon = "username";
+    const wrapper = createFieldIconWrapper(usernameEl);
+    createInlineIcon(wrapper, usernameEl, "username");
+    usernameEl.parentElement.appendChild(wrapper);
+  }
+}
+
+function createFieldIconWrapper(field) {
+  const wrapper = document.createElement("span");
+  wrapper.setAttribute("data-sherlock-icon", "");
+  wrapper.setAttribute("data-sherlock-target", field);
+  wrapper.className = "sherlock-icon-wrapper";
+  return wrapper;
+}
+
+function createInlineIcon(wrapper, field, type) {
+  const icon = document.createElement("button");
+  icon.type = "button";
+  icon.className = "sherlock-inline-icon";
+  icon.setAttribute("data-sherlock-field-type", type);
+  icon.setAttribute("data-sherlock-field-target", field);
+  icon.setAttribute("aria-label", "SherLock: fill credentials");
+
+  // SVG icon inline (no external resource needed)
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("width", "16");
+  svg.setAttribute("height", "16");
+  svg.setAttribute("fill", "none");
+  svg.setAttribute("stroke", "currentColor");
+  svg.setAttribute("stroke-width", "2");
+  svg.setAttribute("stroke-linecap", "round");
+  svg.setAttribute("stroke-linejoin", "round");
+  const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  path.setAttribute(
+    "d",
+    "M12 2a5 5 0 0 0-5 5v4a5 5 0 0 0 10 0V7a5 5 0 0 0-5-5z",
+  );
+  svg.appendChild(path);
+  icon.appendChild(svg);
+
+  icon.addEventListener("click", async (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    handleIconClick(field, type, icon);
+  });
+
+  wrapper.appendChild(icon);
+  return icon;
+}
+
+async function handleIconClick(field, type, icon) {
+  icon.classList.add("sherlock-loading");
+  try {
+    if (type === "password") {
+      const response = await chrome.runtime.sendMessage({
+        action: "autofillLogin",
+      });
+      if (response.success) {
+        showToast("Filled credentials");
+      } else {
+        showToast("Could not fill credentials");
+      }
+    } else {
+      showToast("Select login form first");
+    }
+  } catch (error) {
+    showToast("SherLock error: " + error.message);
+  } finally {
+    icon.classList.remove("sherlock-loading");
+  }
+}
+
+function showToast(message) {
+  const existing = document.getElementById("sherlock-toast");
+  if (existing) existing.remove();
+
+  const toast = document.createElement("div");
+  toast.id = "sherlock-toast";
+  toast.className = "sherlock-toast";
+  toast.textContent = message;
+  document.body.appendChild(toast);
+
+  setTimeout(() => {
+    toast.remove();
+  }, 3000);
+}
+
+// Periodically inject icons for new forms (SPA)
+setInterval(injectInlineIcons, 3000);
+
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === "autofillLogin") {
     const cred = request.credential;
@@ -176,7 +322,9 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === "fillGeneratedPassword") {
     let target = document.activeElement;
     if (!target || target.tagName !== "INPUT" || target.type !== "password") {
-      const { passwordEl } = findFormFields(document, { includeNewPassword: true });
+      const { passwordEl } = findFormFields(document, {
+        includeNewPassword: true,
+      });
       target = passwordEl;
     }
     if (target) {
@@ -213,17 +361,17 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 function showSavePrompt({ site, username, password }) {
   if (!site || !password) return;
 
-  const existing = document.getElementById("caixa-forta-save-prompt");
+  const existing = document.getElementById("sherlock-save-prompt");
   if (existing) existing.remove();
 
   const prompt = document.createElement("div");
-  prompt.id = "caixa-forta-save-prompt";
-  prompt.className = "caixa-forta-save-prompt";
+  prompt.id = "sherlock-save-prompt";
+  prompt.className = "sherlock-save-prompt";
 
   const cleanSite = site.replace(/^www\./, "");
   const title = document.createElement("span");
   title.style.fontWeight = "600";
-  title.textContent = "Caixa Forta:";
+  title.textContent = "SherLock:";
 
   const message = document.createElement("span");
   message.append("Desar contrasenya per a ");
@@ -238,7 +386,7 @@ function showSavePrompt({ site, username, password }) {
   const saveButton = document.createElement("button");
   saveButton.type = "button";
   saveButton.className = "cf-btn-save";
-  saveButton.textContent = "Desar a Caixa Forta";
+  saveButton.textContent = "Desar a SherLock";
 
   const closeButton = document.createElement("button");
   closeButton.type = "button";
@@ -268,7 +416,7 @@ function showSavePrompt({ site, username, password }) {
           const okSpan = document.createElement("span");
           okSpan.style.fontWeight = "600";
           okSpan.style.color = "#4ade80";
-          okSpan.textContent = "✓ Accés desat a Caixa Forta!";
+          okSpan.textContent = "✓ Accés desat a SherLock!";
           prompt.replaceChildren(okSpan);
           setTimeout(() => prompt.remove(), 2500);
         } else {

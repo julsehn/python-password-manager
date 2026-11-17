@@ -1,5 +1,5 @@
 /**
- * Caixa Forta - Password & Passphrase Generator
+ * SherLock - Password & Passphrase Generator
  * Secure cryptographically-random password, passphrase, and username generation.
  */
 

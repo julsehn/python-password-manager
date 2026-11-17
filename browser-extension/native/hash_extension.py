@@ -43,7 +43,7 @@ def main():
         return
     hash_value = compute_hash(manifest_path)
     print(f"Computed hash: {hash_value}")
-    update_registry("caixa_forta_manager", hash_value)
+    update_registry("sherlock_manager", hash_value)
 
 
 if __name__ == "__main__":

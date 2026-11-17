@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Caixa Forta - Secure Native Messaging Host
+SherLock - Secure Native Messaging Host
 Cross-platform, stdio (length-prefixed) native messaging protocol.
 
 Security model (Phase 1):
@@ -34,7 +34,7 @@ from typing import Any, Dict, NoReturn, Optional
 # in argv[2] in some versions. The primary trust boundary is the browser
 # manifest; this check is defence-in-depth only.
 ALLOWED_CHROME_ORIGIN = "chrome-extension://lcbgmkafanopplcefoapdfmhhjfoaamd/"
-ALLOWED_FIREFOX_ID = "caixa-forta@juls.com"
+ALLOWED_FIREFOX_ID = "sherlock@juls.com"
 
 # ── Constants 
 MAX_MESSAGE_SIZE = 1024 * 1024  # 1 MB
@@ -61,7 +61,7 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     stream=sys.stderr,
 )
-logger: logging.Logger = logging.getLogger("caixa_forta_native")
+logger: logging.Logger = logging.getLogger("sherlock_native")
 
 
 # ── Origin check (defence-in-depth) ──
@@ -259,7 +259,7 @@ def main() -> None:
 
     _validate_argv_origin()
 
-    logger.info("Caixa Forta Native Messaging Host started")
+    logger.info("SherLock Native Messaging Host started")
 
     if sys.version_info < (3, 6):
         logger.error("Python 3.6+ required")
@@ -302,7 +302,7 @@ def main() -> None:
                         "/pair",
                         {
                             "code": message.get("code", ""),
-                            "label": message.get("label", "Caixa Forta browser"),
+                            "label": message.get("label", "SherLock browser"),
                             "browser": message.get("browser", "unknown"),
                             "public_key": message.get("public_key", ""),
                         },

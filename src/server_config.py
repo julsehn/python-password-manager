@@ -83,7 +83,7 @@ def ensure_certificates_exist() -> None:
                 "365",
                 "-nodes",
                 "-subj",
-                "/CN=localhost/O=Caixa Forta/C=US",
+                "/CN=localhost/O=SherLock/C=US",
             ],
             check=True,
         )
@@ -104,7 +104,7 @@ def ensure_certificates_exist() -> None:
                 "365",
                 "-nodes",
                 "-subj",
-                "/CN=extension/CN=Browser Extension/O=Caixa Forta",
+                "/CN=extension/CN=Browser Extension/O=SherLock",
             ],
             check=True,
         )

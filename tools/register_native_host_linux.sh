@@ -2,14 +2,14 @@
 set -euo pipefail
 
 # ============================================================================
-# Caixa Forta - Linux/macOS Native Messaging Host Registration
+# SherLock - Linux/macOS Native Messaging Host Registration
 # Registers the native messaging host for Chrome and Firefox on Linux/macOS
 # ============================================================================
 
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 PROJECT_DIR="$SCRIPT_DIR"
-HOST_SCRIPT="$PROJECT_DIR/browser-extension/native/caixa_forta_native.py"
-HOST_NAME="caixa_forta"
+HOST_SCRIPT="$PROJECT_DIR/browser-extension/native/sherlock_native.py"
+HOST_NAME="sherlock"
 
 # Colors for output
 RED='\033[0;31m'
@@ -18,7 +18,7 @@ YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
 echo "========================================"
-echo "  Caixa Forta - Linux/macOS Registration"
+echo "  SherLock - Linux/macOS Registration"
 echo "========================================"
 echo ""
 
@@ -32,21 +32,21 @@ fi
 chmod +x "$HOST_SCRIPT"
 
 # Create a shell wrapper for the Python script
-WRAPPER_SCRIPT="$PROJECT_DIR/browser-extension/native/caixa_forta_native.sh"
+WRAPPER_SCRIPT="$PROJECT_DIR/browser-extension/native/sherlock_native.sh"
 
 echo "Creating shell wrapper..."
 cat > "$WRAPPER_SCRIPT" << 'EOF'
 #!/bin/bash
-# Caixa Forta Native Messaging Host Wrapper
+# SherLock Native Messaging Host Wrapper
 exec python3 "$0" "$@"
 EOF
 
 # Actually, we need to call the Python script directly
 cat > "$WRAPPER_SCRIPT" << WRAPPER_EOF
 #!/bin/bash
-# Caixa Forta Native Messaging Host Wrapper
+# SherLock Native Messaging Host Wrapper
 # This wrapper ensures the Python script is executed with proper arguments
-exec python3 "$(dirname "$0")/caixa_forta_native.py" "\$@"
+exec python3 "$(dirname "$0")/sherlock_native.py" "\$@"
 WRAPPER_EOF
 
 chmod +x "$WRAPPER_SCRIPT"
@@ -71,11 +71,11 @@ fi
 cat > "$FF_DIR/${HOST_NAME}.json" << EOF
 {
   "name": "$HOST_NAME",
-  "description": "Caixa Forta Native Messaging Host",
+  "description": "SherLock Native Messaging Host",
   "path": "$WRAPPER_SCRIPT",
   "type": "stdio",
   "allowed_extensions": [
-    "caixa-forta@juls.com"
+    "sherlock@juls.com"
   ]
 }
 EOF
@@ -100,7 +100,7 @@ fi
 cat > "$CHROME_DIR/${HOST_NAME}.json" << EOF
 {
   "name": "$HOST_NAME",
-  "description": "Caixa Forta Native Messaging Host",
+  "description": "SherLock Native Messaging Host",
   "path": "$WRAPPER_SCRIPT",
   "type": "stdio",
   "allowed_origins": [

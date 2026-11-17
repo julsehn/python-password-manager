@@ -10,9 +10,9 @@ for python in \
   /usr/bin/python3
  do
   if [ -x "$python" ]; then
-    exec "$python" "$SCRIPT_DIR/caixa_forta_native.py"
+    exec "$python" "$SCRIPT_DIR/sherlock_native.py"
   fi
 done
 
-printf '%s\n' 'Caixa Forta: no s\x27ha trobat Python 3.' >&2
+printf '%s\n' 'SherLock: no s\x27ha trobat Python 3.' >&2
 exit 127

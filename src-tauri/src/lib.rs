@@ -20,9 +20,9 @@ use vault::visible_trash;
 pub use vault::{Entry, Folder, HistoryItem, TrashedEntry, VaultData, VaultInfo, VaultState};
 use zeroize::Zeroizing;
 
-const CLOUD_SESSION_SERVICE: &str = "com.juls.caixaforta";
+const CLOUD_SESSION_SERVICE: &str = "com.juls.sherlock";
 const CLOUD_SESSION_ACCOUNT: &str = "official-cloud-refresh";
-const IMAGE_GRID_SERVICE: &str = "com.juls.caixaforta";
+const IMAGE_GRID_SERVICE: &str = "com.juls.sherlock";
 const IMAGE_GRID_ACCOUNT: &str = "image-grid-cell-values";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -177,11 +177,11 @@ pub fn run() {
                 .build(),
         )
         .setup(move |app| {
-            println!("Caixa Forta Tauri application started");
+            println!("SherLock Tauri application started");
             server_state_setup.set_app_handle(app.handle().clone());
             tauri::async_runtime::spawn(async move {
                 if let Err(e) = server::start_server(server_state_clone, 8080).await {
-                    eprintln!("Caixa Forta Extension Server error: {}", e);
+                    eprintln!("SherLock Extension Server error: {}", e);
                 }
             });
             Ok(())

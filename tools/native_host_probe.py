@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
-native_host_probe.py – Scripted native-messaging client for Caixa Forta.
+native_host_probe.py – Scripted native-messaging client for SherLock.
 
 Spawns the native host the way a browser would (length-prefixed JSON on stdio)
 and sends a sequence of test messages.  Used for Phase 0 baseline and ongoing
 regression testing.
 
 Usage:
-    python3 tools/native_host_probe.py [--host /path/to/caixa_forta_native.py]
+    python3 tools/native_host_probe.py [--host /path/to/sherlock_native.py]
 
 Exit codes:
     0  All probed actions got a response (success/failure is reported, not fatal).
@@ -26,12 +26,12 @@ import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-HOST_SCRIPT = ROOT / "browser-extension" / "native" / "caixa_forta_native.py"
+HOST_SCRIPT = ROOT / "browser-extension" / "native" / "sherlock_native.py"
 PYTHON = sys.executable
 TIMEOUT = 6  # seconds per response
 
 CHROME_EXTENSION_ID = "lcbgmkafanopplcefoapdfmhhjfoaamd"
-FIREFOX_EXTENSION_ID = "caixa-forta@juls.com"
+FIREFOX_EXTENSION_ID = "sherlock@juls.com"
 
 
 def send_msg(proc, obj: dict) -> None:
@@ -66,14 +66,14 @@ def probe(host_script: Path, argv_origin: str, setup_registry: bool) -> bool:
     """
     Spawn the host and run a sequence of probe messages.
 
-    :param host_script:     Path to caixa_forta_native.py in the install dir.
+    :param host_script:     Path to sherlock_native.py in the install dir.
     :param argv_origin:     What the browser passes as argv[1] (origin string).
     :param setup_registry:  If True, copy an approved extensions.json next to the host.
     :returns: True if all probes completed without protocol errors.
     """
     with tempfile.TemporaryDirectory() as tmp:
         tmp_dir = Path(tmp)
-        script = tmp_dir / "caixa_forta_native.py"
+        script = tmp_dir / "sherlock_native.py"
         shutil.copy2(host_script, script)
 
         if setup_registry:
@@ -81,7 +81,7 @@ def probe(host_script: Path, argv_origin: str, setup_registry: bool) -> bool:
                 json.dumps(
                     {
                         "extensions": {
-                            "caixa_forta_manager": {
+                            "sherlock_manager": {
                                 "name": "Test",
                                 "permissions": [],
                                 "approved": True,
@@ -110,7 +110,7 @@ def probe(host_script: Path, argv_origin: str, setup_registry: bool) -> bool:
         try:
             # ── Probe 1: ping ─────
             print("\n[probe] action=ping")
-            send_msg(proc, {"action": "ping", "extension_id": "caixa_forta_manager"})
+            send_msg(proc, {"action": "ping", "extension_id": "sherlock_manager"})
             r = recv_msg(proc)
             print(f"       response: {r}")
             if r.get("pong"):
@@ -123,7 +123,7 @@ def probe(host_script: Path, argv_origin: str, setup_registry: bool) -> bool:
 
             # ── Probe 2: getVaultInfo ──────────
             print("\n[probe] action=getVaultInfo")
-            send_msg(proc, {"action": "getVaultInfo", "extension_id": "caixa_forta_manager"})
+            send_msg(proc, {"action": "getVaultInfo", "extension_id": "sherlock_manager"})
             r = recv_msg(proc)
             print(f"       response: {r}")
             if r.get("connected") or r.get("success"):
@@ -138,7 +138,7 @@ def probe(host_script: Path, argv_origin: str, setup_registry: bool) -> bool:
             print("\n[probe] action=fetchCredentials")
             send_msg(
                 proc,
-                {"action": "fetchCredentials", "extension_id": "caixa_forta_manager", "site": "example.com"},
+                {"action": "fetchCredentials", "extension_id": "sherlock_manager", "site": "example.com"},
             )
             r = recv_msg(proc)
             print(f"       response: {r}")
@@ -217,8 +217,8 @@ def check_f7_handshake() -> None:
 def main() -> None:
     import argparse
 
-    parser = argparse.ArgumentParser(description="Caixa Forta native host probe")
-    parser.add_argument("--host", type=Path, default=HOST_SCRIPT, help="Path to caixa_forta_native.py")
+    parser = argparse.ArgumentParser(description="SherLock native host probe")
+    parser.add_argument("--host", type=Path, default=HOST_SCRIPT, help="Path to sherlock_native.py")
     args = parser.parse_args()
 
     host = args.host.resolve()
@@ -227,7 +227,7 @@ def main() -> None:
         sys.exit(1)
 
     print("═" * 60)
-    print("Caixa Forta Native Host Probe – Phase 0 Baseline")
+    print("SherLock Native Host Probe – Phase 0 Baseline")
     print("═" * 60)
 
     # F1 static check (no network needed)

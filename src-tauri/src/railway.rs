@@ -219,11 +219,11 @@ pub async fn upload_vault(config: &SyncConfig) -> Result<SyncResponse, String> {
     let vault_path = crate::vault_path();
 
     if !std::path::Path::new(&vault_path).exists() {
-        return Err("No s'ha trobat l'arxiu local de la caixa forta.".to_string());
+        return Err("No s'ha trobat l'arxiu local de SherLock.".to_string());
     }
 
     let content = std::fs::read_to_string(&vault_path)
-        .map_err(|e| format!("Error en llegir la caixa forta: {}", e))?;
+        .map_err(|e| format!("Error en llegir SherLock: {}", e))?;
 
     let payload = VaultBlob {
         blob: content,
@@ -249,7 +249,7 @@ pub async fn upload_vault(config: &SyncConfig) -> Result<SyncResponse, String> {
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
         return Err(format!(
-            "Error en pujar la caixa forta ({}) : {}",
+            "Error en pujar SherLock ({}) : {}",
             status, body
         ));
     }
@@ -262,7 +262,7 @@ pub async fn upload_vault(config: &SyncConfig) -> Result<SyncResponse, String> {
     Ok(SyncResponse {
         success: true,
         message: format!(
-            "Caixa forta sincronitzada correctament amb Railway (versió {})",
+            "Caixa sincronitzada correctament amb Railway (versió {})",
             vault_response.version
         ),
         timestamp: chrono::Utc::now().timestamp() as u64,
@@ -299,7 +299,7 @@ pub async fn download_vault(
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
         return Err(format!(
-            "Error en descarregar la caixa forta ({}): {}",
+            "Error en descarregar SherLock ({}): {}",
             status, body
         ));
     }
@@ -319,7 +319,7 @@ pub async fn register_vault(
     let base_url = resolve_url(&config.railway_url);
 
     if config.vault_id.is_empty() {
-        return Err("L'identificador de caixa forta no pot estar buit".to_string());
+        return Err("L'identificador de SherLock no pot estar buit".to_string());
     }
 
     let client = Client::builder()
@@ -351,7 +351,7 @@ pub async fn register_vault(
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
         return Err(format!(
-            "Error en registrar caixa forta ({}): {}",
+            "Error en registrar SherLock ({}): {}",
             status, body
         ));
     }
@@ -364,7 +364,7 @@ pub async fn register_vault(
     Ok(SyncResponse {
         success: true,
         message: format!(
-            "Caixa forta registrada correctament a Railway (versió {})",
+            "SherLock registrat correctament a Railway (versió {})",
             vault_response.version
         ),
         timestamp: chrono::Utc::now().timestamp() as u64,
@@ -376,7 +376,7 @@ pub async fn delete_vault(_master_password: String, config: &SyncConfig) -> Resu
     let base_url = resolve_url(&config.railway_url);
 
     if config.vault_id.is_empty() {
-        return Err("L'identificador de caixa forta no pot estar buit".to_string());
+        return Err("L'identificador de SherLock no pot estar buit".to_string());
     }
 
     let client = Client::builder()
@@ -398,7 +398,7 @@ pub async fn delete_vault(_master_password: String, config: &SyncConfig) -> Resu
         _ => {
             let body = response.text().await.unwrap_or_default();
             Err(format!(
-                "Error en eliminar caixa forta ({}): {}",
+                "Error en eliminar SherLock ({}): {}",
                 status, body
             ))
         }

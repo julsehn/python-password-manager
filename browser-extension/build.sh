@@ -1,5 +1,5 @@
 #!/bin/bash
-# build.sh – Build Caixa Forta browser extension for Chrome and Firefox.
+# build.sh – Build SherLock browser extension for Chrome and Firefox.
 #
 # ⚠️  Firefox note (F2b): If you loaded build/firefox as a Temporary Add-on in
 #    Firefox (about:debugging), rebuilding deletes and recreates that folder.
@@ -12,7 +12,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
 
-echo "Building Caixa Forta Browser Extension…"
+echo "Building SherLock Browser Extension…"
 
 # Warn if Firefox has the build/firefox directory loaded as a temporary add-on.
 if [ -d "build/firefox" ]; then
@@ -27,7 +27,7 @@ mkdir -p build/chrome build/firefox
 copy_common_files() {
 	local target="$1"
 	mkdir -p "$target/native"
-	cp native/caixa_forta_native.py "$target/native/"
+	cp native/sherlock_native.py "$target/native/"
 	cp ../node_modules/dompurify/dist/purify.min.js "$target/"
 	cp -R icons popup.html popup.js content.js content.css background.js "$target/"
 }
@@ -39,12 +39,12 @@ cp manifest.firefox.json build/firefox/manifest.json
 
 echo "Creating Chrome extension archive…"
 cd build/chrome
-zip -qr ../caixa-forta-chrome-extension.zip .
+zip -qr ../sherlock-chrome-extension.zip .
 cd ../..
 
 echo "Creating Firefox extension archive…"
 cd build/firefox
-zip -qr ../caixa-forta-firefox-extension.zip .
+zip -qr ../sherlock-firefox-extension.zip .
 cd ../..
 
 echo ""
@@ -54,4 +54,4 @@ echo "   Firefox: browser-extension/build/firefox/ (load as Temporary Add-on)"
 echo "   Zips in: browser-extension/build/"
 echo ""
 echo "   Chrome extension ID (from manifest key): lcbgmkafanopplcefoapdfmhhjfoaamd"
-echo "   Firefox add-on ID (from gecko.id):        caixa-forta@juls.com"
+echo "   Firefox add-on ID (from gecko.id):        sherlock@juls.com"

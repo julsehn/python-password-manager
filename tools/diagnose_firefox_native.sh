@@ -1,5 +1,5 @@
 #!/bin/bash
-# diagnose_firefox_native.sh – Check Firefox native messaging setup for Caixa Forta.
+# diagnose_firefox_native.sh – Check Firefox native messaging setup for SherLock.
 #
 # Reads the expected ID from browser-extension/manifest.firefox.json and validates:
 #   1. Host manifest exists in the correct macOS directory.
@@ -7,7 +7,7 @@
 #   3. The manifest "path" points to an executable file.
 #   4. allowed_extensions contains the gecko ID from the Firefox extension manifest.
 #   5. The shell wrapper finds python3.
-#   6. The installed directory contains caixa_forta_native.py.
+#   6. The installed directory contains sherlock_native.py.
 #
 # Usage: ./tools/diagnose_firefox_native.sh
 # Exit code: 0 = all checks pass, 1 = at least one check failed.
@@ -15,7 +15,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-FF_MANIFEST="$HOME/Library/Application Support/Mozilla/NativeMessagingHosts/caixa_forta.json"
+FF_MANIFEST="$HOME/Library/Application Support/Mozilla/NativeMessagingHosts/sherlock.json"
 EXT_MANIFEST="$SCRIPT_DIR/browser-extension/manifest.firefox.json"
 
 PASS=0
@@ -27,7 +27,7 @@ info() { echo "  ℹ️  $1"; }
 
 echo ""
 echo "═══════════════════════════════════════════════════════════"
-echo "  Caixa Forta – Firefox Native Messaging Diagnostics"
+echo "  SherLock – Firefox Native Messaging Diagnostics"
 echo "═══════════════════════════════════════════════════════════"
 
 # ── 1. Host manifest exists ───────────
@@ -114,15 +114,15 @@ done
 if [ -n "$FOUND_PYTHON" ]; then
   ok "Found: $FOUND_PYTHON"
 else
-  fail "No python3 found in the paths checked by caixa_forta_native.sh"
+  fail "No python3 found in the paths checked by sherlock_native.sh"
 fi
 
 # ── 6. native Python script present in install dir 
 echo ""
-echo "6. caixa_forta_native.py in install directory"
+echo "6. sherlock_native.py in install directory"
 if [ -n "${HOST_PATH:-}" ]; then
   INSTALL_DIR="$(dirname "$HOST_PATH")"
-  PY_SCRIPT="$INSTALL_DIR/caixa_forta_native.py"
+  PY_SCRIPT="$INSTALL_DIR/sherlock_native.py"
   if [ -f "$PY_SCRIPT" ]; then
     ok "Found: $PY_SCRIPT"
   else
@@ -161,7 +161,7 @@ echo "  about:debugging → This Firefox → Inspect (on the extension) → Cons
 echo "  OR: Browser Console (Cmd+Shift+J)"
 echo ""
 echo "Common messages:"
-echo "  'No such native application caixa_forta' → manifest missing from FF_DIR above"
+echo "  'No such native application sherlock' → manifest missing from FF_DIR above"
 echo "  'Extension lacks permission'             → allowed_extensions mismatch"
 echo "  Port disconnects immediately             → Python path wrong, or script crashes"
 echo "  'Extension permission denied'            → host rejecting the origin (Phase 1 fixed)"

@@ -248,17 +248,17 @@ def deserialize_vault(
     try:
         payload = json.loads(blob)
         if not isinstance(payload, dict) or payload.get("version") != "1":
-            raise ValueError("Format de caixa forta no compatible")
+            raise ValueError("Format de SherLock no compatible")
         salt = base64.b64decode(payload["salt"], validate=True)
         nonce = base64.b64decode(payload["nonce"], validate=True)
         ciphertext = base64.b64decode(payload["ciphertext"], validate=True)
         if len(salt) != 16 or len(nonce) != 12:
-            raise ValueError("Format de caixa forta invàlid")
+            raise ValueError("Format de SherLock invàlid")
         key, _ = derive_key(master_password, salt=salt)
         data = json.loads(decrypt(nonce, ciphertext, key).decode("utf-8"))
         entries = data.get("entries", []) if isinstance(data, dict) else []
         if not isinstance(entries, list) or len(entries) > 10_000:
-            raise ValueError("Contingut de caixa forta invàlid")
+            raise ValueError("Contingut de SherLock invàlid")
         result = [PasswordEntry.from_dict(d) for d in entries if isinstance(d, dict)]
     except (
         KeyError,
@@ -269,7 +269,7 @@ def deserialize_vault(
         json.JSONDecodeError,
     ) as error:
         _record_failed_attempt(lockout_key)
-        raise ValueError("No s'ha pogut desxifrar la caixa forta") from error
+        raise ValueError("No s'ha pogut desxifrar SherLock") from error
 
     _record_successful_login(lockout_key)
     return result

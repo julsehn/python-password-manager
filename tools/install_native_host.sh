@@ -1,5 +1,5 @@
 #!/bin/bash
-# install_native_host.sh – Register the Caixa Forta native messaging host.
+# install_native_host.sh – Register the SherLock native messaging host.
 #
 # Usage:
 #   ./tools/install_native_host.sh [CHROME_EXTENSION_ID]
@@ -20,9 +20,9 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-HOST_PATH="$SCRIPT_DIR/browser-extension/native/caixa_forta_native.sh"
-HOST_INSTALL_DIR="$HOME/Library/Application Support/Caixa Forta/NativeMessaging"
-INSTALLED_HOST_PATH="$HOST_INSTALL_DIR/caixa_forta_native.sh"
+HOST_PATH="$SCRIPT_DIR/browser-extension/native/sherlock_native.sh"
+HOST_INSTALL_DIR="$HOME/Library/Application Support/SherLock/NativeMessaging"
+INSTALLED_HOST_PATH="$HOST_INSTALL_DIR/sherlock_native.sh"
 
 # This ID is derived from the key in browser-extension/manifest.chrome.json.
 # Do NOT change this without also updating that key.
@@ -33,9 +33,9 @@ CHROME_EXTENSION_ID="${1:-${CHROME_EXTENSION_ID:-$DEFAULT_CHROME_EXTENSION_ID}}"
 chmod +x "$HOST_PATH"
 mkdir -p "$HOST_INSTALL_DIR"
 cp "$HOST_PATH" "$INSTALLED_HOST_PATH"
-cp "$SCRIPT_DIR/browser-extension/native/caixa_forta_native.py" \
-   "$HOST_INSTALL_DIR/caixa_forta_native.py"
-chmod +x "$INSTALLED_HOST_PATH" "$HOST_INSTALL_DIR/caixa_forta_native.py"
+cp "$SCRIPT_DIR/browser-extension/native/sherlock_native.py" \
+   "$HOST_INSTALL_DIR/sherlock_native.py"
+chmod +x "$INSTALLED_HOST_PATH" "$HOST_INSTALL_DIR/sherlock_native.py"
 
 # ── Firefox ─
 # macOS (stable + Developer Edition): ~/Library/Application Support/Mozilla/NativeMessagingHosts/
@@ -43,14 +43,14 @@ chmod +x "$INSTALLED_HOST_PATH" "$HOST_INSTALL_DIR/caixa_forta_native.py"
 # NOT read by any current Firefox release on macOS; only the Mozilla path is.
 FF_DIR="$HOME/Library/Application Support/Mozilla/NativeMessagingHosts"
 mkdir -p "$FF_DIR"
-cat > "$FF_DIR/caixa_forta.json" << EOF
+cat > "$FF_DIR/sherlock.json" << EOF
 {
-  "name": "caixa_forta",
-  "description": "Caixa Forta Native Messaging Host",
+  "name": "sherlock",
+  "description": "SherLock Native Messaging Host",
   "path": "$INSTALLED_HOST_PATH",
   "type": "stdio",
   "allowed_extensions": [
-    "caixa-forta@juls.com"
+    "sherlock@juls.com"
   ]
 }
 EOF
@@ -58,10 +58,10 @@ EOF
 # ── Chrome ─
 CHROME_DIR="$HOME/Library/Application Support/Google/Chrome/NativeMessagingHosts"
 mkdir -p "$CHROME_DIR"
-cat > "$CHROME_DIR/caixa_forta.json" << EOF
+cat > "$CHROME_DIR/sherlock.json" << EOF
 {
-  "name": "caixa_forta",
-  "description": "Caixa Forta Native Messaging Host",
+  "name": "sherlock",
+  "description": "SherLock Native Messaging Host",
   "path": "$INSTALLED_HOST_PATH",
   "type": "stdio",
   "allowed_origins": [
@@ -74,8 +74,8 @@ echo ""
 echo "✅ Native Messaging Host installed:"
 echo "   Host: $INSTALLED_HOST_PATH"
 echo ""
-echo "   Firefox manifest:  $FF_DIR/caixa_forta.json"
-echo "   Chrome manifest:   $CHROME_DIR/caixa_forta.json"
+echo "   Firefox manifest:  $FF_DIR/sherlock.json"
+echo "   Chrome manifest:   $CHROME_DIR/sherlock.json"
 echo ""
 echo "   Chrome extension ID: $CHROME_EXTENSION_ID"
 echo "   (Load build/chrome as an unpacked extension; the ID is fixed by the manifest key.)"

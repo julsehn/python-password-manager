@@ -1,5 +1,5 @@
 /**
- * Caixa Forta - Railway Cloud Sync Operations
+ * SherLock - Railway Cloud Sync Operations
  * Helpers for cloud configuration, payload serialization, and sync lifecycle.
  */
 
@@ -13,16 +13,16 @@ export function rustCloudConfig(config = {}) {
 
 export function loadSavedCloudConfig() {
   try {
-    return JSON.parse(localStorage.getItem("caixa-forta-cloud") || "{}");
+    return JSON.parse(localStorage.getItem("sherlock-cloud") || "{}");
   } catch {
     return {};
   }
 }
 
 export function persistCloudConfig(config) {
-  localStorage.setItem("caixa-forta-cloud", JSON.stringify(config));
+  localStorage.setItem("sherlock-cloud", JSON.stringify(config));
 }
 
 export function clearCloudConfig() {
-  localStorage.removeItem("caixa-forta-cloud");
+  localStorage.removeItem("sherlock-cloud");
 }

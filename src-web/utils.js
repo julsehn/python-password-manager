@@ -1,5 +1,5 @@
 /**
- * Caixa Forta - Frontend Utilities
+ * SherLock - Frontend Utilities
  * Pure helper functions for formatting, DOM sanitization, and icons.
  */
 

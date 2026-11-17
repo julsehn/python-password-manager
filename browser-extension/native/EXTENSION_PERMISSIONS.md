@@ -1,6 +1,6 @@
 # Extension Permission System
 
-Caixa Forta uses a hash-based extension permission system to control access to the vault. Extensions must be explicitly approved and their identity is verified using cryptographic hashes.
+SherLock uses a hash-based extension permission system to control access to the vault. Extensions must be explicitly approved and their identity is verified using cryptographic hashes.
 
 ## How It Works
 

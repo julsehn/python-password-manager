@@ -13,7 +13,7 @@ cleanup_project_vite() {
 
 cleanup_project_app() {
     local app_pids
-    app_pids="$(pgrep -f "$PROJECT_DIR/src-tauri/target/debug/caixa-forta" 2>/dev/null || true)"
+    app_pids="$(pgrep -f "$PROJECT_DIR/src-tauri/target/debug/sherlock" 2>/dev/null || true)"
     if [[ -n "$app_pids" ]]; then
         kill $app_pids 2>/dev/null || true
     fi
@@ -22,15 +22,15 @@ cleanup_project_app() {
 VAULT_PATH="$HOME/.password_manager/vault.json"
 if [[ -f "$VAULT_PATH" ]]; then
     echo ""
-    echo "S'ha trobat una caixa forta local."
+    echo "S'ha trobat una instància de SherLock local."
     local delete_vault="n"
     read -q -k 1 "delete_vault?Vols eliminar-la i començar de nou? [y/N] "
     echo ""
     if [[ "$delete_vault" == "y" || "$delete_vault" == "Y" ]]; then
         rm -f "$VAULT_PATH"
-        echo "Caixa forta local eliminada."
+        echo "SherLock local eliminada."
     else
-        echo "La caixa forta local es conservarà."
+        echo "L'instància de SherLock local es conservarà."
     fi
 fi
 
@@ -96,10 +96,10 @@ else
 fi
 
 if [[ -n "$(command -v cargo)" ]]; then
-    echo "Iniciant Caixa forta amb Tauri..."
+    echo "Iniciant SherLock amb Tauri..."
     "$PROJECT_DIR/node_modules/.bin/tauri" dev
 elif [[ -n "$CARGO" && -x "$CARGO" ]]; then
-    echo "Iniciant Caixa forta amb Tauri..."
+    echo "Iniciant SherLock amb Tauri..."
     "$PROJECT_DIR/node_modules/.bin/tauri" dev
 else
     echo "Rust/Cargo encara no està disponible."

@@ -1,6 +1,6 @@
-# Caixa Forta Browser Extension
+# SherLock Browser Extension
 
-This browser extension provides local autofill functionality for Caixa Forta credentials with native messaging integration.
+This browser extension provides local autofill functionality for SherLock credentials with native messaging integration.
 
 ## Features
 
@@ -18,7 +18,7 @@ This browser extension provides local autofill functionality for Caixa Forta cre
 
 2. **Install the native messaging host**:
    - Run `./tools/install_native_host.sh` from the project root.
-   - The installer registers `browser-extension/native/caixa_forta_native.sh` for both browsers.
+   - The installer registers `browser-extension/native/sherlock_native.sh` for both browsers.
 
 ### Chrome Installation
 
@@ -79,7 +79,7 @@ The extension supports the following actions:
 2. **Check native messaging permissions**:
    - Chrome: `chrome://native-messaging/`
    - Firefox: `about:native-messaging`
-   - Ensure `caixa_forta` is listed and enabled
+   - Ensure `sherlock` is listed and enabled
 
 3. **Reinstall the extension**:
    - Remove the extension
@@ -95,7 +95,7 @@ The extension supports the following actions:
    ```
 
 2. **Check the registered host path**:
-   - Ensure the browser host manifest points to `browser-extension/native/caixa_forta_native.sh`
+   - Ensure the browser host manifest points to `browser-extension/native/sherlock_native.sh`
 
 3. **Restart the browser** after making changes
 

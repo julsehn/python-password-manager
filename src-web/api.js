@@ -1,5 +1,5 @@
 /**
- * Caixa Forta - Frontend Tauri API Client
+ * SherLock - Frontend Tauri API Client
  * Centralized, typed wrapper for all Tauri IPC commands.
  */
 

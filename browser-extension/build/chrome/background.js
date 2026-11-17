@@ -1,4 +1,4 @@
-// Caixa Forta - Background Service Worker
+// SherLock - Background Service Worker
 // Uses the WebExtensions native messaging API in Firefox and Chromium.
 //
 // Phase 1 changes:
@@ -23,7 +23,7 @@ let browserAuthPromise = null;
 function connectToNative() {
   if (nativePort) return;
   try {
-    nativePort = browser.runtime.connectNative("caixa_forta");
+    nativePort = browser.runtime.connectNative("sherlock");
     console.log("[caixa] Connected to native messaging host");
 
     nativePort.onMessage.addListener((response) => {
@@ -51,7 +51,7 @@ function connectToNative() {
       console.error("[caixa] Native port disconnected:", errorMessage);
       nativePort = null;
       // Reject all pending requests
-      for (const [id, { reject, timeoutId }] of pendingRequests) {
+      for (const [_id, { reject, timeoutId }] of pendingRequests) {
         clearTimeout(timeoutId);
         reject(new Error(errorMessage));
       }
@@ -130,7 +130,7 @@ async function pairBrowser(code) {
   const normalizedCode = String(code || "").replace(/\D/g, "");
   if (!/^\d{6}$/.test(normalizedCode)) {
     throw new Error(
-      "Introdueix el codi de sis xifres que mostra l'app Caixa Forta",
+      "Introdueix el codi de sis xifres que mostra l'app SherLock",
     );
   }
 
@@ -160,12 +160,12 @@ async function pairBrowser(code) {
     code: normalizedCode,
     public_key: publicKey,
     browser: browserName,
-    label: `Caixa Forta — ${browserName}`,
+    label: `SherLock — ${browserName}`,
   });
 
   await browser.storage.local.set({
-    caixa_browser_client_id: result.client_id,
-    caixa_browser_private_key: privateKey,
+    sherlock_browser_client_id: result.client_id,
+    sherlock_browser_private_key: privateKey,
   });
   return { success: true, browser: browserName };
 }
@@ -174,11 +174,11 @@ async function authenticatePairedBrowser() {
   if (browserAuthPromise) return browserAuthPromise;
   browserAuthPromise = (async () => {
     const {
-      caixa_browser_client_id: clientId,
-      caixa_browser_private_key: privateKeyHex,
+      sherlock_browser_client_id: clientId,
+      sherlock_browser_private_key: privateKeyHex,
     } = await browser.storage.local.get([
-      "caixa_browser_client_id",
-      "caixa_browser_private_key",
+      "sherlock_browser_client_id",
+      "sherlock_browser_private_key",
     ]);
 
     if (!clientId || !privateKeyHex) {
@@ -218,8 +218,8 @@ async function authenticatePairedBrowser() {
   } catch (error) {
     if (/unknown or unapproved client|client not found/i.test(error.message)) {
       await browser.storage.local.remove([
-        "caixa_browser_client_id",
-        "caixa_browser_private_key",
+        "sherlock_browser_client_id",
+        "sherlock_browser_private_key",
       ]);
     }
     throw error;
@@ -372,13 +372,13 @@ browser.runtime.onMessage.addListener((request, sender, sendResponse) => {
 browser.runtime.onInstalled.addListener(() => {
   try {
     browser.contextMenus.create({
-      id: "caixa_autofill",
-      title: "Caixa Forta: Omplir dades d'accés",
+      id: "sherlock_autofill",
+      title: "SherLock: Omplir dades d'accés",
       contexts: ["editable"],
     });
     browser.contextMenus.create({
-      id: "caixa_generate",
-      title: "Caixa Forta: Generar contrasenya segura",
+      id: "sherlock_generate",
+      title: "SherLock: Generar contrasenya segura",
       contexts: ["editable"],
     });
   } catch (e) {
@@ -388,7 +388,7 @@ browser.runtime.onInstalled.addListener(() => {
 
 browser.contextMenus.onClicked.addListener(async (info, tab) => {
   if (!tab || !tab.id) return;
-  if (info.menuItemId === "caixa_autofill") {
+  if (info.menuItemId === "sherlock_autofill") {
     try {
       const urlObj = new URL(tab.url);
       const creds = await fetchCredentials(urlObj.hostname);
@@ -401,7 +401,7 @@ browser.contextMenus.onClicked.addListener(async (info, tab) => {
     } catch (e) {
       console.error("[caixa] Error in autofill context menu:", e);
     }
-  } else if (info.menuItemId === "caixa_generate") {
+  } else if (info.menuItemId === "sherlock_generate") {
     const gen = await generatePassword({ length: 18 });
     if (gen.success) {
       browser.tabs.sendMessage(tab.id, {

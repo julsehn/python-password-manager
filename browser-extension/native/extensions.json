@@ -1,7 +1,7 @@
 {
   "extensions": {
-    "caixa_forta_manager": {
-      "name": "Caixa Forta Manager (built-in)",
+    "sherlock_manager": {
+      "name": "SherLock Manager (built-in)",
       "permissions": [
         "get_vault_info",
         "unlock_vault",

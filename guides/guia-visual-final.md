@@ -58,7 +58,7 @@ He creat un nou diàleg d'overlay a `src/ui/overlay_guide.py` que:
 │                                                  │
 │  1. Executar app (python main.py)                │
 │     ↓                                            │
-│  2. Crea nova caixa forta                        │
+│  2. Crea nova SherLock                        │
 │     ↓                                            │
 │  3. Introdueix contrasenya mestra                │
 │     ↓                                            │
@@ -147,7 +147,7 @@ L'usuari veu:
 # 1. Executa l'aplicació
 python3 main.py
 
-# 2. Crea una nova caixa forta amb una contrasenya segura
+# 2. Crea una nova SherLock amb una contrasenya segura
 # 3. L'Overlay Guide apareix automàticament sobre la UI
 # 4. Navega per les fletxes i finalitza
 # 5. La fletxa apunta al botó "Afegir accés"
@@ -156,7 +156,7 @@ python3 main.py
 
 ## 📝 Notes
 
-- La guia només es mostra **una vegada** quan la caixa forta està buida
+- La guia només es mostra **una vegada** quan la SherLock està buida
 - Si esborren totes les dades i comencen de nou, la guia es mostra de nou
 - La guia detecta automàticament el botó "Afegir accés" a la UI
 - Les fletxes es dibuixen dinàmicament cap al botó real

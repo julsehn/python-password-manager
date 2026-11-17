@@ -2,12 +2,12 @@
 setlocal EnableDelayedExpansion
 
 :: ============================================================================
-:: Caixa Forta - Windows Native Messaging Host Registration
+:: SherLock - Windows Native Messaging Host Registration
 :: Registers the native messaging host for Chrome and Firefox on Windows
 :: ============================================================================
 
 echo ========================================
-echo   Caixa Forta - Windows Registration
+echo   SherLock - Windows Registration
 echo ========================================
 echo.
 
@@ -16,8 +16,8 @@ set "SCRIPT_DIR=%~dp0"
 set "PROJECT_DIR=%SCRIPT_DIR%"
 
 :: Define paths
-set "HOST_SCRIPT=%PROJECT_DIR%browser-extension\native\caixa_forta_native.py"
-set "HOST_NAME=caixa_forta"
+set "HOST_SCRIPT=%PROJECT_DIR%browser-extension\native\sherlock_native.py"
+set "HOST_NAME=sherlock"
 
 :: Check if host script exists
 if not exist "%HOST_SCRIPT%" (
@@ -27,7 +27,7 @@ if not exist "%HOST_SCRIPT%" (
 )
 
 :: Create a batch wrapper for the Python script
-set "WRAPPER_SCRIPT=%PROJECT_DIR%browser-extension\native\caixa_forta_native.bat"
+set "WRAPPER_SCRIPT=%PROJECT_DIR%browser-extension\native\sherlock_native.bat"
 
 echo Creating Windows batch wrapper...
 (
@@ -38,7 +38,7 @@ echo Creating Windows batch wrapper...
     echo set "SCRIPT_DIR=%~dp0"
     echo.
     echo :: Run the Python script with all arguments
-    echo python "%SCRIPT_DIR%caixa_forta_native.py" %*
+    echo python "%SCRIPT_DIR%sherlock_native.py" %*
     echo endlocal
 ) > "%WRAPPER_SCRIPT%"
 
@@ -72,11 +72,11 @@ if not exist "%FF_NATIVE_DIR%" (
 (
     echo {
     echo   "name": "%HOST_NAME%",
-    echo   "description": "Caixa Forta Native Messaging Host",
+    echo   "description": "SherLock Native Messaging Host",
     echo   "path": "%WRAPPER_SCRIPT%",
     echo   "type": "stdio",
     echo   "allowed_extensions": [
-    echo     "caixa-forta@juls.com"
+    echo     "sherlock@juls.com"
     echo   ]
     echo }
 ) > "%FF_NATIVE_DIR%\%HOST_NAME%.json"
@@ -101,7 +101,7 @@ if not exist "%CHROME_NATIVE_DIR%" (
 (
     echo {
     echo   "name": "%HOST_NAME%",
-    echo   "description": "Caixa Forta Native Messaging Host",
+    echo   "description": "SherLock Native Messaging Host",
     echo   "path": "%WRAPPER_SCRIPT%",
     echo   "type": "stdio",
     echo   "allowed_origins": [

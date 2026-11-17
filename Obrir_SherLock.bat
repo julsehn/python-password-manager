@@ -2,7 +2,7 @@
 setlocal EnableDelayedExpansion
 
 :: ============================================================================
-:: Caixa Forta - Windows Launcher
+:: SherLock - Windows Launcher
 :: Automatically builds extension, loads Firefox extension, and starts app
 :: ============================================================================
 
@@ -10,7 +10,7 @@ set "PROJECT_DIR=%~dp0"
 cd /d "%PROJECT_DIR%"
 
 echo ========================================
-echo   Caixa Forta - Windows Launcher
+echo   SherLock - Windows Launcher
 echo ========================================
 echo.
 
@@ -29,7 +29,7 @@ if !VITE_PID! neq "" (
 )
 
 :cleanup_tauri
-for /f "tokens=5" %%a in ('tasklist /fi "imagename eq caixa-forta.exe" /vh 2^>nul') do (
+for /f "tokens=5" %%a in ('tasklist /fi "imagename eq sherlock.exe" /vh 2^>nul') do (
     set "TAURI_PID=%%a"
 )
 if !TAURI_PID! neq "" (
@@ -38,7 +38,7 @@ if !TAURI_PID! neq "" (
 )
 
 :cleanup_native_host
-for /f "tokens=5" %%a in ('tasklist /fi "imagename python.exe" /vh 2^>nul ^| findstr /i "caixa_forta_native") do (
+for /f "tokens=5" %%a in ('tasklist /fi "imagename python.exe" /vh 2^>nul ^| findstr /i "sherlock_native") do (
     set "NATIVE_HOST_PID=%%a"
 )
 if !NATIVE_HOST_PID! neq "" (
@@ -117,7 +117,7 @@ if errorlevel 1 (
 :: Load extension using Firefox automation
 if exist "browser-extension\manifest.json" (
     echo Loading extension from: browser-extension\manifest.json
-    echo Extension ID: caixa-forta@juls.com
+    echo Extension ID: sherlock@juls.com
     
     :: Use Firefox Profile Manager to load extension
     echo Firefox extension loaded (temporary mode).
@@ -131,18 +131,18 @@ if exist "browser-extension\manifest.json" (
 
 :: Start native messaging host
 echo Starting Native Messaging Host...
-if exist "browser-extension\native\caixa_forta_native.py" (
+if exist "browser-extension\native\sherlock_native.py" (
     echo Starting native messaging host (background)...
-    start /B cmd /c "python browser-extension\native\caixa_forta_native.py && exit" >nul 2>&1
+    start /B cmd /c "python browser-extension\native\sherlock_native.py && exit" >nul 2>&1
     echo Native Messaging Host started.
     echo.
     timeout /t 2 >nul
     
     :: Verify it's running
-    tasklist | findstr /i "caixa_forta_native" >nul 2>&1
+    tasklist | findstr /i "sherlock_native" >nul 2>&1
     if errorlevel 1 (
         echo WARNING: Native Messaging Host may not be running properly.
-        echo Please start it manually: python browser-extension\native\caixa_forta_native.py
+        echo Please start it manually: python browser-extension\native\sherlock_native.py
         echo.
     ) else (
         echo Native Messaging Host verified running.
@@ -155,7 +155,7 @@ if exist "browser-extension\native\caixa_forta_native.py" (
 
 :: Start the main application
 echo ========================================
-echo   Starting Caixa Forta Application
+echo   Starting SherLock Application
 echo ========================================
 echo.
 

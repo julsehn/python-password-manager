@@ -1614,7 +1614,7 @@
 }
 
 .lock-shell {
-  animation: secureBoundaryIn 520ms cubic-bezier(0.2, 1, 0.3, 1) both;
+  /* Animation moved to .is-locked-transition (JS-controlled). Prevents firing on every render(). */
 }
 
 .lock-card {
@@ -1624,7 +1624,7 @@
 .shell,
 .generator-shell,
 .settings-shell {
-  animation: secureBoundaryIn 520ms cubic-bezier(0.2, 1, 0.3, 1) both;
+  /* Animation moved to .is-unlocked-transition (JS-controlled). Prevents firing on every render(). */
 }
 
 .strength-fill {
@@ -1695,12 +1695,22 @@
   }
 }
 
+/* JS-applied transition classes — fire only on lock/unlock state changes */
+.is-locked-transition {
+  animation: secureBoundaryIn 520ms cubic-bezier(0.2, 1, 0.3, 1) both;
+}
+.is-unlocked-transition {
+  animation: secureBoundaryIn 520ms cubic-bezier(0.2, 1, 0.3, 1) both;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .lock-shell,
   .lock-card,
   .shell,
   .generator-shell,
-  .settings-shell {
+  .settings-shell,
+  .is-locked-transition,
+  .is-unlocked-transition {
     animation: none;
   }
 }

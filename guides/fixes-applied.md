@@ -9,7 +9,7 @@
 **Solució:**
 
 - Actualitzat la referència a `StepByStepGuideDialog` en `_initialize_new_vault()` (línia 364)
-- Afecta quan es crea una nova caixa forta per primera vegada
+- Afecta quan es crea una nova SherLock per primera vegada
 
 ### 2️⃣ Problema: Els usuaris havien de reintroduir la contrasenya
 
@@ -19,7 +19,7 @@
 
 - Afegit un flag `_showed_first_time_guide` per recordar si la guia ja s'ha mostrat
 - Actualitzat `on_add()` per no mostrar la guia si ja s'ha mostrat abans
-- La guia només es mostra una vegada quan la caixa forta està buida
+- La guia només es mostra una vegada quan la SherLock està buida
 
 ## 📝 Canvis al Codi
 
@@ -73,7 +73,7 @@ Ja existent amb les classes:
 ┌─────────┐
 │  1. L'usuari executa python main.py             │
 │     ↓                                            │
-│  2. Crea una nova caixa forta                   │
+│  2. Crea una nova SherLock                   │
 │     ↓                                            │
 │  3. Introdueix la contrasenya mestra            │
 │     ↓                                            │
@@ -108,7 +108,7 @@ Ara l'experiència de l'usuari és:
 # 1. Executa l'aplicació
 python3 main.py
 
-# 2. Crea una nova caixa forta amb una contrasenya segura
+# 2. Crea una nova SherLock amb una contrasenya segura
 # 3. La guia visual amb fletxes s'ha d'obrir automàticament
 # 4. Navega per les fletxes i finalitza
 # 5. Clica "Afegir accés" - la guia NO hauria de mostrar-se de nou

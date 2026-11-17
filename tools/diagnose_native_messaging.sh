@@ -1,17 +1,17 @@
 #!/bin/bash
 # ============================================================================
-# Caixa Forta - Native Messaging Diagnostic Script
+# SherLock - Native Messaging Diagnostic Script
 # This script tests the native messaging connection and captures detailed logs
 # ============================================================================
 
 set -e
 
 PROJECT_DIR="$(cd "$(dirname "$0")" && pwd)"
-HOST_SCRIPT="$PROJECT_DIR/browser-extension/native/caixa_forta_native.py"
-LOG_FILE="/tmp/caixa_forta_diagnostic_$(date +%Y%m%d_%H%M%S).log"
+HOST_SCRIPT="$PROJECT_DIR/browser-extension/native/sherlock_native.py"
+LOG_FILE="/tmp/sherlock_diagnostic_$(date +%Y%m%d_%H%M%S).log"
 
 echo "========================================"
-echo "  Caixa Forta - Native Messaging Diagnostic"
+echo "  SherLock - Native Messaging Diagnostic"
 echo "========================================"
 echo ""
 
@@ -33,7 +33,7 @@ log() {
 
 # Stop any existing host
 log "Stopping any existing native messaging host..."
-pkill -f "caixa_forta_native.py" 2>/dev/null || true
+pkill -f "sherlock_native.py" 2>/dev/null || true
 sleep 1
 
 # Start the host in the foreground with debug logging

@@ -2,7 +2,7 @@
 
 ## Purpose
 
-This repository is the source for Caixa Forta, a local-first password manager with:
+This repository is the source for SherLock, a local-first password manager with:
 
 - a Python desktop client built with PyQt6
 - secure local vault storage and encryption
@@ -50,7 +50,7 @@ Future AI agents should treat this project as a security-sensitive app. Keep cha
   - `browser-extension/background.js`
   - `browser-extension/content.js`
   - `browser-extension/popup.js`
-  - `browser-extension/native/caixa_forta_native.py`
+  - `browser-extension/native/sherlock_native.py`
 
 ### 6. Tauri app shell
 
@@ -59,7 +59,7 @@ Future AI agents should treat this project as a security-sensitive app. Keep cha
 
 ### 7. Active desktop UI and Tauri workflows
 
-- The usual macOS launcher `Obrir_Caixa_Forta.command` starts the Tauri app, whose frontend is `src-web/main.js` with styles in `src-web/secure.css` and `src-web/styles.css`. Changes under `src/ui/` affect the Python/PyQt app, not the normal Tauri launch path.
+- The usual macOS launcher `Obrir_SherLock.command` starts the Tauri app, whose frontend is `src-web/main.js` with styles in `src-web/secure.css` and `src-web/styles.css`. Changes under `src/ui/` affect the Python/PyQt app, not the normal Tauri launch path.
 - Tauri commands and encrypted-vault workflows live in `src-tauri/src/lib.rs`; in-memory server session state is managed by `src-tauri/src/server.rs`.
 - Validate frontend work with `npm run build`; validate Tauri backend work with `cargo test --manifest-path src-tauri/Cargo.toml`.
 

@@ -85,7 +85,7 @@ Quan l'usuari obre l'app per primera vegada:
 ```
 ┌──────────┐
 │                                                  │
-│  1. L'usuari crea la caixa forta                 │
+│  1. L'usuari crea la SherLock                 │
 │     ↓                                            │
 │  2. S'obre automàticament la guia                │
 │     ↓                                            │
@@ -116,7 +116,7 @@ Quan l'usuari obre l'app per primera vegada:
 # 1. Executa l'aplicació
 python3 main.py
 
-# 2. Crea una nova caixa forta
+# 2. Crea una nova SherLock
 # 3. L'aplicació et mostrarà automàticament la guia
 # 4. Navega amb les fletxes ◀ ▶
 # 5. Finalment s'obrirà el diàleg d'afegir el primer accés

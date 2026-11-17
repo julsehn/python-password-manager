@@ -214,7 +214,7 @@ impl ServerState {
 }
 
 pub fn get_paired_clients_path() -> PathBuf {
-    if let Ok(p) = std::env::var("CAIXA_PAIRED_CLIENTS_PATH") {
+    if let Ok(p) = std::env::var("SHERLOCK_PAIRED_CLIENTS_PATH") {
         return PathBuf::from(p);
     }
     config_dir().join("paired_clients.json")
@@ -225,7 +225,7 @@ pub fn load_paired_clients() -> Vec<PairedClient> {
     let content = match std::fs::read_to_string(&path) {
         Ok(c) => Ok(c),
         Err(_) => {
-            let fallback = std::env::temp_dir().join("caixa_paired_clients.json");
+            let fallback = std::env::temp_dir().join("sherlock_paired_clients.json");
             std::fs::read_to_string(&fallback)
         }
     };
@@ -252,7 +252,7 @@ pub fn save_paired_clients(clients: &[PairedClient]) -> Result<(), String> {
             Ok(())
         }
         Err(e) => {
-            let fallback = std::env::temp_dir().join("caixa_paired_clients.json");
+            let fallback = std::env::temp_dir().join("sherlock_paired_clients.json");
             match std::fs::write(&fallback, &data) {
                 Ok(_) => Ok(()),
                 Err(e2) => Err(format!(
@@ -483,7 +483,7 @@ pub async fn start_server(state: Arc<ServerState>, port: u16) -> Result<(), Stri
     )?;
     let addr = format!("127.0.0.1:{}", actual_port);
 
-    println!("Caixa Forta Extension Server listening on http://{}", addr);
+    println!("SherLock Extension Server listening on http://{}", addr);
 
     loop {
         match listener.accept().await {
@@ -651,7 +651,7 @@ pub async fn route_request(
     if (path == "/health" || path == "/api/v1/health") && method == "GET" {
         let res = serde_json::json!({
             "status": "healthy",
-            "app": "Caixa Forta",
+            "app": "SherLock",
             "version": "1.0.0"
         });
         return (200, res.to_string());
@@ -1302,9 +1302,9 @@ mod tests {
         fn new() -> Self {
             let lock = PAIRED_CLIENTS_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
             let directory = tempfile::tempdir().unwrap();
-            let previous_path = std::env::var_os("CAIXA_PAIRED_CLIENTS_PATH");
+            let previous_path = std::env::var_os("SHERLOCK_PAIRED_CLIENTS_PATH");
             std::env::set_var(
-                "CAIXA_PAIRED_CLIENTS_PATH",
+                "SHERLOCK_PAIRED_CLIENTS_PATH",
                 directory.path().join("paired_clients.json"),
             );
             Self {
@@ -1318,8 +1318,8 @@ mod tests {
     impl Drop for PairedClientsTestIsolation {
         fn drop(&mut self) {
             match self.previous_path.take() {
-                Some(path) => std::env::set_var("CAIXA_PAIRED_CLIENTS_PATH", path),
-                None => std::env::remove_var("CAIXA_PAIRED_CLIENTS_PATH"),
+                Some(path) => std::env::set_var("SHERLOCK_PAIRED_CLIENTS_PATH", path),
+                None => std::env::remove_var("SHERLOCK_PAIRED_CLIENTS_PATH"),
             }
         }
     }

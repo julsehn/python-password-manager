@@ -1,12 +1,12 @@
 [package]
-name = "caixa-forta"
+name = "sherlock"
 version = "0.1.0"
 description = "Gestor local de contrasenyes"
 authors = ["juls"]
 edition = "2021"
 
 [lib]
-name = "caixa_forta_lib"
+name = "sherlock_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
@@ -41,5 +41,5 @@ hex-literal = "0.4"
 tauri-plugin-http = "2.4"
 
 [[bin]]
-name = "caixa-forta"
+name = "sherlock"
 path = "src/main.rs"

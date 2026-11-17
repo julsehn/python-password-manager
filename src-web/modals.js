@@ -1,5 +1,5 @@
 /**
- * Caixa Forta - Modal Dialog Templates
+ * SherLock - Modal Dialog Templates
  * Pure template renderers for all application modals and overlay dialogs.
  */
 
@@ -44,7 +44,7 @@ export function welcomeModal(state) {
       icon: "ShieldCheck",
       kicker: "PROTECCIÓ LOCAL",
       title: "Tot el que necessites, en un sol lloc",
-      text: "La Caixa Forta guarda els teus accessos de manera local i protegida, perquè els tinguis sempre a mà.",
+      text: "SherLock guarda els teus accessos de manera local i protegida, perquè els tinguis sempre a mà.",
     },
     {
       icon: "KeyRound",
@@ -56,7 +56,7 @@ export function welcomeModal(state) {
       icon: "Plus",
       kicker: "A punt per començar",
       title: "Afegeix els teus primers accessos",
-      text: "Després podràs guardar llocs web, usuaris, contrasenyes i notes privades dins la teva caixa forta.",
+      text: "Després podràs guardar llocs web, usuaris, contrasenyes i notes privades dins la teva SherLock.",
     },
   ];
   const slide = slides[state.welcomeStep] || slides[0];
@@ -69,7 +69,7 @@ export function welcomeModal(state) {
           <div class="brand-mark">${icon(slide.icon, 22)}</div>
           <div>
             <p class="welcome-slide-count">PAS ${state.welcomeStep + 1} DE ${slides.length}</p>
-            <h2 id="welcome-title">Benvingut a la Caixa Forta</h2>
+            <h2 id="welcome-title">Benvingut a SherLock</h2>
           </div>
         </header>
         <div class="welcome-slide" aria-live="polite">
@@ -103,7 +103,7 @@ export function authMethodSelectionModal(state) {
             <button class="auth-method-card ${state.authMethodSelected === "password" ? "selected" : ""}" id="auth-method-password">
               ${icon("LockKeyhole", 32)}
               <h3>Contrasenya mestra</h3>
-              <p>Utilitza una contrasenya text per obrir la caixa forta.</p>
+              <p>Utilitza una contrasenya text per obrir la SherLock.</p>
             </button>
             <button class="auth-method-card ${state.authMethodSelected === "image" ? "selected" : ""}" id="auth-method-image">
               ${icon("Camera", 32)}
@@ -184,10 +184,10 @@ export function imageAuthUnlockModal(state) {
               state.loading
                 ? `
               <div class="unlock-loading" role="status" aria-live="polite">
-                <div class="unlock-progress-track" role="progressbar" aria-label="Desxifrant la caixa forta" aria-valuetext="En curs">
+                <div class="unlock-progress-track" role="progressbar" aria-label="Desxifrant la SherLock" aria-valuetext="En curs">
                   <span class="unlock-progress-indicator"></span>
                 </div>
-                <span>Verificant el patró i desxifrant la caixa forta…</span>
+                <span>Verificant el patró i desxifrant la SherLock…</span>
               </div>
             `
                 : ""
@@ -217,7 +217,7 @@ export function changeAuthMethodModal(state) {
             <button type="button" class="auth-method-card ${state.changeAuthSelected === "password" ? "selected" : ""}" id="change-auth-password">
               ${icon("LockKeyhole", 32)}
               <h3>Contrasenya mestra</h3>
-              <p>Tria una contrasenya mestra nova per obrir la caixa forta.</p>
+              <p>Tria una contrasenya mestra nova per obrir la SherLock.</p>
             </button>
             <button type="button" class="auth-method-card ${state.changeAuthSelected === "image" ? "selected" : ""}" id="change-auth-image">
               ${icon("Camera", 32)}
@@ -582,7 +582,7 @@ export function resetConfirmModal() {
           <h2 id="reset-vault-title">Eliminar dades locals?</h2>
         </header>
         <div class="modal-scroll">
-          <p>Aquesta acció eliminarà la caixa forta local, la paperera i l'historial. No es pot desfer.</p>
+          <p>Aquesta acció eliminarà la SherLock local, la paperera i l'historial. No es pot desfer.</p>
         </div>
         <footer class="modal-footer">
           <button type="button" class="secondary" id="cancel-reset-vault-bottom">Cancel·la</button>
@@ -634,7 +634,7 @@ export function cloudLoginModal(state) {
             <div class="cloud-info-box">
               ${icon("ShieldCheck", 18)}
               <span>
-                <strong>Privacitat garantida:</strong> La caixa forta roman sempre xifrada amb AES-256-GCM. El servidor mai coneix la teva contrasenya mestra ni pot desxifrar les teves dades.
+                <strong>Privacitat garantida:</strong> La SherLock roman sempre xifrada amb AES-256-GCM. El servidor mai coneix la teva contrasenya mestra ni pot desxifrar les teves dades.
               </span>
             </div>
 
@@ -670,7 +670,7 @@ export function cloudLoginModal(state) {
             <p class="modal-subtitle">
               ${
                 isDownloadContext
-                  ? "Inicia sessió per descarregar la teva caixa forta del núvol"
+                  ? "Inicia sessió per descarregar la teva SherLock del núvol"
                   : "Còpia de seguretat xifrada d'extrem a extrem al teu compte de Railway"
               }
             </p>
@@ -725,7 +725,7 @@ export function cloudLoginModal(state) {
                   <label class="form-label" for="cloud-railway-url">URL del servidor Railway personalitzat</label>
                   <input class="form-input" id="cloud-railway-url" type="url" value="${escapeHtml(config.railwayUrl || "")}" placeholder="Buit per defecte" />
 
-                  <label class="form-label" for="cloud-vault-id">Identificador de la caixa forta (opcional)</label>
+                  <label class="form-label" for="cloud-vault-id">Identificador de la SherLock (opcional)</label>
                   <input class="form-input" id="cloud-vault-id" value="${escapeHtml(config.vaultId || "")}" placeholder="Buit per generar-ne un de nou" />
                 </div>
               </details>
@@ -782,7 +782,7 @@ export function commandPalette(state) {
           `,
                   )
                   .join("")
-              : `<p class="palette-empty">${query ? "Cap accés coincideix amb la cerca." : "La caixa forta no conté accessos."}</p>`
+              : `<p class="palette-empty">${query ? "Cap accés coincideix amb la cerca." : "La SherLock no conté accessos."}</p>`
           }
         </div>
         <footer class="palette-footer"><span>${results.length} ${results.length === 1 ? "accés" : "accessos"}</span><span><kbd>↑</kbd><kbd>↓</kbd> navegar</span><span><kbd>Enter</kbd> copiar</span></footer>

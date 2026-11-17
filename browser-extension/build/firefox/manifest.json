@@ -1,8 +1,8 @@
 {
   "manifest_version": 2,
-  "name": "Caixa Forta Manager",
+  "name": "SherLock Manager",
   "version": "1.2.0",
-  "description": "Extensió per a emplenat automàtic i sincronització segura amb Caixa Forta",
+  "description": "Extensió per a emplenat automàtic i sincronització segura amb SherLock",
   "icons": {
     "16": "icons/icon16.png",
     "48": "icons/icon48.png",
@@ -20,7 +20,7 @@
   ],
   "browser_action": {
     "default_popup": "popup.html",
-    "default_title": "Caixa Forta Manager"
+    "default_title": "SherLock Manager"
   },
   "content_scripts": [
     {
@@ -35,7 +35,7 @@
   },
   "browser_specific_settings": {
     "gecko": {
-      "id": "caixa-forta@juls.com"
+      "id": "sherlock@juls.com"
     }
   }
 }

@@ -94,7 +94,7 @@ class RemoteVaultStore:
             Exception: If server returns error
         """
         if not self._status.configured:
-            raise ValueError("Caixa forta remota no està configurada")
+            raise ValueError("SherLock remot no està configurat")
 
         try:
             remote = self._client().download()
@@ -134,7 +134,7 @@ class RemoteVaultStore:
             Exception: If server returns error
         """
         if not self._status.configured:
-            raise ValueError("Caixa forta remota no està configurada")
+            raise ValueError("SherLock remot no està configurat")
 
         try:
             blob = serialize_vault(entries, master_password)
@@ -154,7 +154,7 @@ class RemoteVaultStore:
             True if deletion successful
         """
         if not self._status.configured:
-            raise ValueError("La caixa forta remota no està configurada")
+            raise ValueError("La SherLock remota no està configurada")
         try:
             self._client().delete()
             self.config.update(

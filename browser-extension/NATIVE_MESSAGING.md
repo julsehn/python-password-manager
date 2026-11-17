@@ -2,7 +2,7 @@
 
 ## Overview
 
-The Caixa Forta browser extension uses **native messaging** for secure, direct communication with the desktop app. This provides:
+The SherLock browser extension uses **native messaging** for secure, direct communication with the desktop app. This provides:
 
 ✅ **Direct stdio communication** - No network exposure  
 ✅ **AES-256-GCM encryption** - Industry-standard security  
@@ -28,7 +28,7 @@ The Caixa Forta browser extension uses **native messaging** for secure, direct c
 
 ## Native Messaging Host
 
-**Location**: `browser-extension/native/caixa_forta_native.py`
+**Location**: `browser-extension/native/sherlock_native.py`
 
 This Python script:
 
@@ -42,10 +42,10 @@ This Python script:
 
 ### 1. Run the Launcher
 
-The `Obrir_Caixa_Forta.command` script automatically sets up native messaging:
+The `Obrir_SherLock.command` script automatically sets up native messaging:
 
 ```bash
-./Obrir_Caixa_Forta.command
+./Obrir_SherLock.command
 ```
 
 This will:
@@ -60,7 +60,7 @@ If you need to set up native messaging manually:
 
 ```bash
 # Make the native host executable
-chmod +x browser-extension/native/caixa_forta_native.py
+chmod +x browser-extension/native/sherlock_native.py
 
 # Run the setup script
 ./tools/install_native_host.sh
@@ -68,8 +68,8 @@ chmod +x browser-extension/native/caixa_forta_native.py
 
 This creates registration files at:
 
-- **Firefox**: `~/.mozilla/native-messaging-hosts/caixa_forta.json`
-- **Chrome**: `~/.config/google-chrome/NativeMessagingHosts/caixa_forta.json`
+- **Firefox**: `~/.mozilla/native-messaging-hosts/sherlock.json`
+- **Chrome**: `~/.config/google-chrome/NativeMessagingHosts/sherlock.json`
 
 ### 3. Load the Extension
 
@@ -134,13 +134,13 @@ The response flows back through the same path to the extension.
 1. **Check the native host is executable**:
 
    ```bash
-   chmod +x browser-extension/native/caixa_forta_native.py
+   chmod +x browser-extension/native/sherlock_native.py
    ```
 
 2. **Verify native messaging is registered**:
    - Chrome: `chrome://native-messaging/`
    - Firefox: `about:native-messaging`
-   - Look for `caixa_forta` in the list
+   - Look for `sherlock` in the list
 
 3. **Re-run the setup script**:
 
@@ -157,16 +157,16 @@ The response flows back through the same path to the extension.
 
 ### Native host not found
 
-1. Make sure you ran `Obrir_Caixa_Forta.command` or the setup script
+1. Make sure you ran `Obrir_SherLock.command` or the setup script
 2. Check the registration files exist at the paths shown above
 3. Restart the browser
 
 ## Files
 
-- `browser-extension/native/caixa_forta_native.py` - Native messaging host
+- `browser-extension/native/sherlock_native.py` - Native messaging host
 - `browser-extension/manifest.json` - Extension manifest (includes native_messaging config)
 - `tools/install_native_host.sh` - Registration script
-- `Obrir_Caixa_Forta.command` - Main launcher with auto-setup
+- `Obrir_SherLock.command` - Main launcher with auto-setup
 
 ## Security Notes
 

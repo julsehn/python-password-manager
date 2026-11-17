@@ -1,7 +1,7 @@
 """
 native_messaging_tests/test_native_messaging.py
 
-Phase 1 test suite for the Caixa Forta native messaging host.
+Phase 1 test suite for the SherLock native messaging host.
 
 Key invariants tested:
   - Host works with no extensions.json (registry removed).
@@ -25,7 +25,7 @@ from pathlib import Path
 import pytest
 
 HOST_SCRIPT = (
-    Path(__file__).resolve().parents[1] / "browser-extension" / "native" / "caixa_forta_native.py"
+    Path(__file__).resolve().parents[1] / "browser-extension" / "native" / "sherlock_native.py"
 )
 MESSAGE_TIMEOUT_SECONDS = 5
 
@@ -83,7 +83,7 @@ def host_dir(tmp_path):
     """A temporary directory containing a copy of the host script (no registry file)."""
     d = tmp_path / "native"
     d.mkdir()
-    shutil.copy2(HOST_SCRIPT, d / "caixa_forta_native.py")
+    shutil.copy2(HOST_SCRIPT, d / "sherlock_native.py")
     return d
 
 
@@ -92,7 +92,7 @@ def host_process(host_dir, monkeypatch):
     """Host started as the browser would, with no registry file."""
     monkeypatch.setenv("HOME", str(host_dir.parent))
     proc = subprocess.Popen(
-        [sys.executable, str(host_dir / "caixa_forta_native.py")],
+        [sys.executable, str(host_dir / "sherlock_native.py")],
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -159,7 +159,7 @@ class TestRegistryRemoved:
         """Host must NOT create an extensions.json or similar registry file."""
         monkeypatch.setenv("HOME", str(host_dir.parent))
         proc = subprocess.Popen(
-            [sys.executable, str(host_dir / "caixa_forta_native.py")],
+            [sys.executable, str(host_dir / "sherlock_native.py")],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -208,7 +208,7 @@ class TestArgvOriginValidation:
         monkeypatch.setenv("HOME", str(host_dir.parent))
         wrong_origin = "chrome-extension://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/"
         proc = subprocess.Popen(
-            [sys.executable, str(host_dir / "caixa_forta_native.py"), wrong_origin],
+            [sys.executable, str(host_dir / "sherlock_native.py"), wrong_origin],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -274,7 +274,7 @@ class TestArgvOriginValidation:
         monkeypatch.setenv("HOME", str(host_dir.parent))
         allowed_origin = "chrome-extension://lcbgmkafanopplcefoapdfmhhjfoaamd/"
         proc = subprocess.Popen(
-            [sys.executable, str(host_dir / "caixa_forta_native.py"), allowed_origin],
+            [sys.executable, str(host_dir / "sherlock_native.py"), allowed_origin],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -292,7 +292,7 @@ class TestArgvOriginValidation:
         """Host with no origin argv (Firefox / direct) runs normally."""
         monkeypatch.setenv("HOME", str(host_dir.parent))
         proc = subprocess.Popen(
-            [sys.executable, str(host_dir / "caixa_forta_native.py")],
+            [sys.executable, str(host_dir / "sherlock_native.py")],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -353,7 +353,7 @@ class TestExtensionIdCheck:
         gecko_id = (
             data.get("browser_specific_settings", {}).get("gecko", {}).get("id", "")
         )
-        assert gecko_id == "caixa-forta@juls.com", (
-            f"Firefox gecko ID is '{gecko_id}', expected 'caixa-forta@juls.com'. "
+        assert gecko_id == "sherlock@juls.com", (
+            f"Firefox gecko ID is '{gecko_id}', expected 'sherlock@juls.com'. "
             "This must match allowed_extensions in the host manifest."
         )

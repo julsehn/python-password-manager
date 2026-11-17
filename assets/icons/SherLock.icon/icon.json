@@ -1,0 +1,141 @@
+{
+  "color-space-for-untagged-svg-colors" : "display-p3",
+  "features" : [
+    "refractivity"
+  ],
+  "fill-specializations" : [
+    {
+      "value" : {
+        "linear-gradient" : [
+          "srgb:1.00000,0.98799,0.99261,1.00000",
+          "srgb:0.22084,0.74768,0.73956,1.00000"
+        ]
+      }
+    },
+    {
+      "appearance" : "dark",
+      "value" : {
+        "linear-gradient" : [
+          "extended-gray:0.00000,1.00000",
+          "srgb:0.14815,0.49869,0.49011,1.00000"
+        ]
+      }
+    }
+  ],
+  "groups" : [
+    {
+      "blur-material-specializations" : [
+        {
+          "value" : 0.1
+        },
+        {
+          "appearance" : "dark",
+          "value" : 0.42
+        },
+        {
+          "appearance" : "tinted",
+          "value" : 1
+        }
+      ],
+      "layers" : [
+        {
+          "glass" : false,
+          "hidden" : false,
+          "image-name" : "04_Detalles_frontales 2.svg",
+          "name" : "04_Detalles_frontales 2"
+        },
+        {
+          "image-name" : "03_Anilla_metalica.svg",
+          "name" : "03_Anilla_metalica"
+        },
+        {
+          "blend-mode" : "normal",
+          "fill" : "none",
+          "glass" : true,
+          "image-name" : "Degradats interiors de les anelles 2.svg",
+          "name" : "Degradats interiors de les anelles 2",
+          "position" : {
+            "scale" : 1,
+            "translation-in-points" : [
+              0,
+              -118.00000000000006
+            ]
+          }
+        },
+        {
+          "image-name" : "02_Llave_verde 4.svg",
+          "name" : "02_Llave_verde 4"
+        },
+        {
+          "image-name" : "Clau lila 2.svg",
+          "name" : "Clau lila 2"
+        },
+        {
+          "image-name" : "Clau turquesa 2.svg",
+          "name" : "Clau turquesa 2"
+        }
+      ],
+      "lighting" : "individual",
+      "position" : {
+        "scale" : 0.9,
+        "translation-in-points" : [
+          0,
+          0
+        ]
+      },
+      "refractivity" : {
+        "depth" : 1,
+        "enabled" : true,
+        "strength" : 1
+      },
+      "shadow-specializations" : [
+        {
+          "value" : {
+            "kind" : "neutral",
+            "opacity" : 0.5
+          }
+        },
+        {
+          "appearance" : "dark",
+          "value" : {
+            "kind" : "neutral",
+            "opacity" : 0.6
+          }
+        },
+        {
+          "appearance" : "tinted",
+          "value" : {
+            "kind" : "layer-color",
+            "opacity" : 2
+          }
+        }
+      ],
+      "specular" : true,
+      "translucency-specializations" : [
+        {
+          "value" : {
+            "enabled" : true,
+            "value" : 0.4
+          }
+        },
+        {
+          "appearance" : "dark",
+          "value" : {
+            "enabled" : true,
+            "value" : 0.3
+          }
+        },
+        {
+          "appearance" : "tinted",
+          "value" : {
+            "enabled" : true,
+            "value" : 0
+          }
+        }
+      ]
+    }
+  ],
+  "supported-platforms" : {
+    "squares" : "shared"
+  }
+}

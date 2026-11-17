@@ -1,8 +1,8 @@
-# Caixa Forta - Password Manager
+# SherLock - Password Manager
 
 Una aplicació de gestió de contrasenyes de codi obert per a Mac, Windows i Linux construïda amb Tauri, Rust i Vite.
 
-![Caixa Forta](https://img.shields.io/badge/License-MIT-yellow.svg)
+![SherLock](https://img.shields.io/badge/License-MIT-yellow.svg)
 ![Rust](https://img.shields.io/badge/Rust-Tauri-orange)
 
 ## Característiques
@@ -12,7 +12,7 @@ Una aplicació de gestió de contrasenyes de codi obert per a Mac, Windows i Lin
 - 🔒 **Protecció de memòria**: Neteja de memòria amb `zeroize` per a dades sensibles
 - 📱 **Interfície d'escriptori**: Aplicació nativa lleugera amb Tauri 2
 - 🎯 **Autocompliment**: Omple automàticament formularis amb contrasenyes
-- 🔋 **Bloqueig automàtic**: La caixa forta es bloqueja per inactivitat
+- 🔋 **Bloqueig automàtic**: La SherLock es bloqueja per inactivitat
 - 🌐 **Extensió del navegador**: Chrome i Firefox amb missatgeria nativa
 
 ## Requeriments
@@ -66,10 +66,10 @@ Per utilitzar la funció de sync a la núvol:
 2. **Configura l'URL del servei**:
    - Ves a l'apartat "Configuració" a l'aplicació
    - Introdueix l'URL del teu servei Railway
-   - Crea una nova caixa forta núvol (obté un vault_id i token)
+   - Crea una nova SherLock núvol (obté un vault_id i token)
 
 3. **Sincronització**:
-   - Pujar o descarregar la caixa forta des del menú "Remot"
+   - Pujar o descarregar la SherLock des del menú "Remot"
 
 ### Configuració Manual
 
@@ -94,7 +94,7 @@ python-password-manager/
 │   ├── storage.py          # Codi per emmagatzemar/fer una còpia de seguretat
 │   ├── encryption.py       # Codi d'encodinament
 │   ├── railway_client.py   # Client API Railway
-│   ├── remote_vault.py     # Gestió de la caixa forta remota
+│   ├── remote_vault.py     # Gestió de la SherLock remota
 │   ├── password_manager.py # Gestor de contrasenyes en memòria
 │   ├── server.py           # HTTPS servidor amb mTLS, JWT i HMAC
 │   ├── server_integration.py # Integració del servidor

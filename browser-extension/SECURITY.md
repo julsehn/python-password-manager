@@ -2,7 +2,7 @@
 
 ## Communication paths
 
-- The extension uses browser native messaging to communicate with `browser-extension/native/caixa_forta_native.py`.
+- The extension uses browser native messaging to communicate with `browser-extension/native/sherlock_native.py`.
 - The native host sends authenticated requests to the desktop app's loopback HTTP service at `127.0.0.1:8080`.
 - The desktop UI uses Tauri IPC for frontend-to-Rust commands. The extension does not use Tauri IPC.
 - The loopback service accepts connections only from loopback addresses and validates paired-client signatures or session tokens on protected routes.

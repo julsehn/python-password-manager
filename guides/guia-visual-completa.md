@@ -65,7 +65,7 @@ El guide busca automàticament el botó "Afegir accés" amb aquesta prioritat:
 │                                                  │
 │  1. Executar app (python main.py)                │
 │     ↓                                            │
-│  2. Crea nova caixa forta                        │
+│  2. Crea nova SherLock                        │
 │     ↓                                            │
 │  3. Introdueix contrasenya mestra                │
 │     ↓                                            │
@@ -166,7 +166,7 @@ rm -rf ~/.password_manager
 # 2. Executa l'aplicació
 python3 main.py
 
-# 3. Crea una nova caixa forta amb una contrasenya segura (mínim 16 caràcters)
+# 3. Crea una nova SherLock amb una contrasenya segura (mínim 16 caràcters)
 # 4. L'Overlay Guide apareix automàticament sobre la UI
 # 5. Navega per les fletxes i finalitza
 # 6. La fletxa apunta al botó "Afegir accés"
@@ -183,7 +183,7 @@ Si la guia no apareix:
 
 ## 📝 Notes
 
-- La guia només es mostra **una vegada** quan es crea una nova caixa forta
+- La guia només es mostra **una vegada** quan es crea una nova SherLock
 - Si esborren totes les dades i comencen de nou, la guia es mostra de nou
 - La guia detecta automàticament el botó "Afegir accés" a la UI
 - Les fletxes es dibuixen dinàmicament cap al botó real

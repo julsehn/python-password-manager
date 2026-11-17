@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Caixa forta",
+  "productName": "SherLock",
   "version": "0.1.0",
-  "identifier": "com.juls.caixaforta",
+  "identifier": "com.juls.sherlock",
   "build": {
     "beforeDevCommand": "node node_modules/.bin/vite --configLoader runner",
     "devUrl": "http://localhost:1420",
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "Caixa forta",
+        "title": "SherLock",
         "width": 1120,
         "height": 760,
         "minWidth": 880,
@@ -21,7 +21,10 @@
         "fullscreen": false,
         "decorations": true,
         "windowEffects": {
-          "effects": ["sidebar", "mica"],
+          "effects": [
+            "sidebar",
+            "mica"
+          ],
           "state": "active",
           "radius": 14
         }
@@ -33,10 +36,22 @@
   },
   "bundle": {
     "active": true,
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico",
+      "icons/icon.png"
+    ],
     "targets": "all",
     "macOS": {
       "minimumSystemVersion": "11.0",
-      "hardenedRuntime": true
+      "hardenedRuntime": true,
+      "infoPlist": "icons/Info.plist",
+      "files": {
+        "Resources/Assets.car": "icons/Assets.car"
+      }
     },
     "windows": {
       "wix": {
