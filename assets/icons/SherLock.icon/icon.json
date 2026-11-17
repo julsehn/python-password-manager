@@ -1,32 +1,25 @@
 {
   "color-space-for-untagged-svg-colors" : "display-p3",
   "features" : [
-    "refractivity"
+    "refractivity",
+    "specular-location"
   ],
   "fill-specializations" : [
     {
       "value" : {
-        "linear-gradient" : [
-          "srgb:1.00000,0.98799,0.99261,1.00000",
-          "srgb:0.22084,0.74768,0.73956,1.00000"
-        ]
+        "solid" : "srgb:1.00000,1.00000,1.00000,1.00000"
       }
     },
     {
       "appearance" : "dark",
-      "value" : {
-        "linear-gradient" : [
-          "extended-gray:0.00000,1.00000",
-          "srgb:0.14815,0.49869,0.49011,1.00000"
-        ]
-      }
+      "value" : "automatic"
     }
   ],
   "groups" : [
     {
       "blur-material-specializations" : [
         {
-          "value" : 0.1
+          "value" : 1
         },
         {
           "appearance" : "dark",
@@ -77,7 +70,7 @@
       ],
       "lighting" : "individual",
       "position" : {
-        "scale" : 0.9,
+        "scale" : 1.2,
         "translation-in-points" : [
           0,
           0
@@ -91,26 +84,26 @@
       "shadow-specializations" : [
         {
           "value" : {
-            "kind" : "neutral",
-            "opacity" : 0.5
+            "kind" : "layer-color",
+            "opacity" : 0.86
           }
         },
         {
           "appearance" : "dark",
           "value" : {
-            "kind" : "neutral",
-            "opacity" : 0.6
+            "kind" : "layer-color",
+            "opacity" : 0.71
           }
         },
         {
           "appearance" : "tinted",
           "value" : {
-            "kind" : "layer-color",
+            "kind" : "neutral",
             "opacity" : 2
           }
         }
       ],
-      "specular" : true,
+      "specular" : "inside",
       "translucency-specializations" : [
         {
           "value" : {
@@ -122,7 +115,7 @@
           "appearance" : "dark",
           "value" : {
             "enabled" : true,
-            "value" : 0.3
+            "value" : 0.39
           }
         },
         {
@@ -136,6 +129,8 @@
     }
   ],
   "supported-platforms" : {
-    "squares" : "shared"
+    "squares" : [
+      "macOS"
+    ]
   }
 }

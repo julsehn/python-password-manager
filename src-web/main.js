@@ -226,6 +226,8 @@ const state = {
   cloudTab: "login",
   cloudActionContext: "settings",
   cloudShowAdvanced: false,
+  cloudUsernameChecking: false,
+  cloudUsernameAvailable: null,
   formError: "",
   folderFormError: "",
   saving: false,
@@ -369,6 +371,35 @@ function rustCloudConfig(config) {
   };
 }
 
+async function checkUsernameAvailability() {
+  if (state.cloudTab !== "register") return;
+  const username = document.querySelector("#auth-username")?.value.trim() || "";
+  if (username.length < 3) return;
+
+  const customUrl = document.querySelector("#cloud-railway-url")?.value.trim() || "";
+  const baseUrl = customUrl || "https://password-manager-cloud-production.up.railway.app";
+
+  state.cloudUsernameChecking = true;
+  state.cloudUsernameAvailable = null;
+  state.cloudError = "";
+  render();
+
+  try {
+    const res = await fetch(`${baseUrl}/v1/auth/check-username/${encodeURIComponent(username)}`);
+    const data = await res.json();
+    state.cloudUsernameAvailable = data.available === true;
+    if (!data.available) {
+      state.cloudError = `El nom d'usuari "${username}" ja existeix. Tria'n un altre.`;
+    }
+  } catch {
+    // If the check fails (network, etc.), allow continuing — the submit will catch it
+    state.cloudUsernameAvailable = null;
+  } finally {
+    state.cloudUsernameChecking = false;
+    render();
+  }
+}
+
 async function cloudAuthSubmit(event) {
   event.preventDefault();
   state.cloudError = "";
@@ -394,6 +425,13 @@ async function cloudAuthSubmit(event) {
   const isRegister = state.cloudTab === "register";
 
   if (isRegister) {
+    // Block submit if username check shows it's taken
+    if (state.cloudUsernameAvailable === false) {
+      state.cloudError = "Aquest nom d'usuari ja existeix. Tria'n un altre.";
+      render();
+      return;
+    }
+
     const confirmPassword =
       document.querySelector("#auth-confirm-password")?.value || "";
     const privacyAccepted =
@@ -2225,17 +2263,27 @@ function cloudLoginModal() {
             <!-- Common Username -->
             <div class="form-section">
               <label class="form-label" for="auth-username">Nom d'usuari a Railway:</label>
-              <input
-                class="form-input"
-                id="auth-username"
-                name="username"
-                type="text"
-                required
-                minlength="3"
-                placeholder="Ex. joan"
-                value="${escapeHtml(state.cloudFormUsername || config.authUser || "")}"
-                autofocus
-              />
+              <div style="position:relative;">
+                <input
+                  class="form-input"
+                  id="auth-username"
+                  name="username"
+                  type="text"
+                  required
+                  minlength="3"
+                  placeholder="Ex. joan"
+                  value="${escapeHtml(state.cloudFormUsername || config.authUser || "")}"
+                  autofocus
+                  style="${activeTab === "register" && state.cloudUsernameAvailable === false ? "border-color:var(--color-danger,#dc2626);" : activeTab === "register" && state.cloudUsernameAvailable === true ? "border-color:var(--color-success,#16a34a);" : ""}"
+                />
+                ${activeTab === "register" && state.cloudUsernameChecking
+                  ? `<span style="position:absolute;right:10px;top:50%;transform:translateY(-50%);font-size:12px;color:var(--color-muted);">${icon("Loader", 14)} Verificant...</span>`
+                  : activeTab === "register" && state.cloudUsernameAvailable === true
+                    ? `<span style="position:absolute;right:10px;top:50%;transform:translateY(-50%);font-size:12px;color:var(--color-success,#16a34a);">${icon("Check", 14)} Disponible</span>`
+                    : activeTab === "register" && state.cloudUsernameAvailable === false
+                      ? `<span style="position:absolute;right:10px;top:50%;transform:translateY(-50%);font-size:12px;color:var(--color-danger,#dc2626);">${icon("X", 14)} No disponible</span>`
+                      : ""}
+              </div>
             </div>
 
             <!-- Common Password -->
@@ -2251,6 +2299,7 @@ function cloudLoginModal() {
                   minlength="${activeTab === "register" ? "8" : "1"}"
                   placeholder="${activeTab === "register" ? "Mínim 8 caràcters" : "La teva contrasenya de Railway"}"
                   class="form-input cloud-password-input"
+                  ${activeTab === "register" && state.cloudUsernameAvailable !== true ? 'disabled title="Comprova primer el nom d\'usuari"' : ""}
                 />
                 <button type="button" class="reveal cloud-password-reveal" id="reveal-cloud-password" title="Mostrar/Amagar">
                   ${icon("Eye", 16)}
@@ -4111,6 +4160,8 @@ function bindEvents() {
   document.querySelectorAll("#open-cloud-login").forEach((button) =>
     button.addEventListener("click", () => {
       state.cloudError = "";
+      state.cloudUsernameAvailable = null;
+      state.cloudUsernameChecking = false;
       state.cloudActionContext =
         button.dataset.context || (state.locked ? "download" : "settings");
       state.showCloudLogin = true;
@@ -4121,6 +4172,8 @@ function bindEvents() {
     button.addEventListener("click", () => {
       state.showCloudLogin = false;
       state.cloudError = "";
+      state.cloudUsernameAvailable = null;
+      state.cloudUsernameChecking = false;
       render();
     }),
   );
@@ -4131,6 +4184,8 @@ function bindEvents() {
   document.querySelector("#tab-cloud-login")?.addEventListener("click", () => {
     state.cloudTab = "login";
     state.cloudError = "";
+    state.cloudUsernameAvailable = null;
+    state.cloudUsernameChecking = false;
     render();
   });
   document
@@ -4138,6 +4193,8 @@ function bindEvents() {
     ?.addEventListener("click", () => {
       state.cloudTab = "register";
       state.cloudError = "";
+      state.cloudUsernameAvailable = null;
+      state.cloudUsernameChecking = false;
       render();
     });
   document
@@ -4152,6 +4209,11 @@ function bindEvents() {
       const input = document.querySelector("#auth-password");
       if (input) input.type = input.type === "password" ? "text" : "password";
     });
+
+  // Check username availability on blur (register tab only)
+  document
+    .querySelector("#auth-username")
+    ?.addEventListener("blur", checkUsernameAvailability);
 
   document
     .querySelector("#btn-cloud-sync-now")

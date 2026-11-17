@@ -32,6 +32,7 @@ export default [
   },
   {
     files: ["browser-extension/**/*.js"],
+    ignores: ["browser-extension/**/*.test.js"],
     languageOptions: { sourceType: "script" },
   },
 ];

@@ -37,10 +37,11 @@ fi
 cleanup_project_vite
 cleanup_project_app
 
-# Remove generated frontend state so the launcher always uses the current source.
-rm -rf "$PROJECT_DIR/dist" "$PROJECT_DIR/node_modules/.vite"
-
 export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+if [[ -d "/Applications/Xcode.app/Contents/Developer" ]]; then
+    export DEVELOPER_DIR="/Applications/Xcode.app/Contents/Developer"
+    export PATH="/Applications/Xcode.app/Contents/Developer/usr/bin:$PATH"
+fi
 [[ -f "$HOME/.cargo/env" ]] && source "$HOME/.cargo/env"
 if [[ -d "$HOME/.rustup/toolchains" ]]; then
     CARGO_PATH="$(find "$HOME/.rustup/toolchains" -path '*/bin/cargo' -type f -perm -111 -print -quit 2>/dev/null)"
@@ -95,24 +96,37 @@ else
     echo "No s'ha trobat Firefox Developer Edition a: $FIREFOX_APP"
 fi
 
-if [[ -n "$(command -v cargo)" ]]; then
-    echo "Iniciant SherLock amb Tauri..."
-    "$PROJECT_DIR/node_modules/.bin/tauri" dev
-elif [[ -n "$CARGO" && -x "$CARGO" ]]; then
-    echo "Iniciant SherLock amb Tauri..."
-    "$PROJECT_DIR/node_modules/.bin/tauri" dev
+if [[ -n "$(command -v cargo)" || -n "$CARGO" ]]; then
+    echo "Compilant SherLock amb Tauri (versió release)..."
+    "$NPM" run tauri -- build --bundles app || {
+        echo "No s'ha pogut compilar l'aplicació."
+        read -k 1 "?Prem qualsevol tecla per tancar..."
+        exit 1
+    }
+
+    APP_BUNDLE="$PROJECT_DIR/src-tauri/target/release/bundle/macos/SherLock.app"
+    if [[ -d "$APP_BUNDLE" ]]; then
+        echo "Deixant SherLock.app a l'arrel de python-password-manager..."
+        rm -rf "$PROJECT_DIR/SherLock.app"
+        cp -R "$APP_BUNDLE" "$PROJECT_DIR/SherLock.app"
+        echo "✅ SherLock.app disponible a: $PROJECT_DIR/SherLock.app"
+
+        echo "Generant instal·lador SherLock.pkg..."
+        rm -f "$PROJECT_DIR/SherLock.pkg"
+        pkgbuild --component "$PROJECT_DIR/SherLock.app" --install-location /Applications "$PROJECT_DIR/SherLock.pkg" >/dev/null 2>&1
+        echo "✅ SherLock.pkg disponible a: $PROJECT_DIR/SherLock.pkg"
+
+        echo "Iniciant SherLock..."
+        open "$PROJECT_DIR/SherLock.app"
+    else
+        echo "Error: No s'ha trobat el fitxer compilat a: $APP_BUNDLE"
+        read -k 1 "?Prem qualsevol tecla per tancar..."
+        exit 1
+    fi
 else
     echo "Rust/Cargo encara no està disponible."
     echo "Obrint la interfície web al navegador com a alternativa..."
     "$NPM" run dev -- --open
 fi
 
-exit_code=$?
-
-if [[ $exit_code -ne 0 ]]; then
-    echo ""
-    echo "La interfície no s'ha pogut iniciar. Revisa Node.js i Rust/Tauri."
-    read -k 1 "?Prem qualsevol tecla per tancar..."
-fi
-
-exit $exit_code
+exit 0
