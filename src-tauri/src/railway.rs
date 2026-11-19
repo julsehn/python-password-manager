@@ -1,5 +1,6 @@
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
+use std::time::Duration;
 
 pub const DEFAULT_OFFICIAL_URL: &str = "https://password-manager-cloud-production.up.railway.app";
 
@@ -68,6 +69,19 @@ pub enum UploadResult {
     Conflict,
 }
 
+fn http_client(timeout_seconds: u64) -> Result<Client, String> {
+    Client::builder()
+        .timeout(Duration::from_secs(timeout_seconds))
+        .build()
+        .map_err(|error| format!("Error en crear client HTTP: {}", error))
+}
+
+async fn error_details(response: reqwest::Response) -> (reqwest::StatusCode, String) {
+    let status = response.status();
+    let body = response.text().await.unwrap_or_default();
+    (status, body)
+}
+
 #[derive(Debug, Serialize)]
 struct RefreshRequest<'a> {
     refresh_token: &'a str,
@@ -91,8 +105,7 @@ async fn get_access_token(
         .await
         .map_err(|error| format!("Error en actualitzar la sessió de Railway: {}", error))?;
     if !response.status().is_success() {
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
+        let (status, body) = error_details(response).await;
         return Err(format!(
             "La sessió de Railway ha caducat ({}): {}",
             status, body
@@ -122,10 +135,7 @@ pub async fn auth_user(
     let base_url = resolve_url(custom_url.unwrap_or(DEFAULT_OFFICIAL_URL));
     let endpoint = format!("{}/v1/auth/login", base_url);
 
-    let client = Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
-        .build()
-        .map_err(|e| format!("Error en crear client HTTP: {}", e))?;
+    let client = http_client(30)?;
 
     let response = client
         .post(&endpoint)
@@ -139,8 +149,7 @@ pub async fn auth_user(
         .map_err(|e| format!("Error de connexió amb Railway ({}): {}", base_url, e))?;
 
     if !response.status().is_success() {
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
+        let (status, body) = error_details(response).await;
         return Err(format!("Error d'autenticació ({}): {}", status, body));
     }
 
@@ -160,10 +169,7 @@ pub async fn register_user(
     let base_url = resolve_url(custom_url.unwrap_or(DEFAULT_OFFICIAL_URL));
     let endpoint = format!("{}/v1/auth/register", base_url);
 
-    let client = Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
-        .build()
-        .map_err(|e| format!("Error en crear client HTTP: {}", e))?;
+    let client = http_client(30)?;
 
     let response = client
         .post(&endpoint)
@@ -177,8 +183,7 @@ pub async fn register_user(
         .map_err(|e| format!("Error de connexió amb Railway ({}): {}", base_url, e))?;
 
     if !response.status().is_success() {
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
+        let (status, body) = error_details(response).await;
         return Err(format!("Error en el registre ({}): {}", status, body));
     }
 
@@ -195,10 +200,7 @@ pub async fn revoke_refresh_token(config: &SyncConfig) -> Result<(), String> {
         return Ok(());
     }
     let base_url = resolve_url(&config.railway_url);
-    let client = Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
-        .build()
-        .map_err(|error| format!("Error en crear client HTTP: {}", error))?;
+    let client = http_client(30)?;
     let response = client
         .post(format!("{}/v1/auth/logout", base_url))
         .json(&RefreshRequest {
@@ -220,10 +222,7 @@ pub async fn revoke_refresh_token(config: &SyncConfig) -> Result<(), String> {
 pub async fn upload_vault(config: &SyncConfig) -> Result<UploadResult, String> {
     let base_url = resolve_url(&config.railway_url);
 
-    let client = Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
-        .build()
-        .map_err(|e| format!("Error en crear client HTTP: {}", e))?;
+    let client = http_client(30)?;
     let access_token = get_access_token(&client, &base_url, config).await?;
 
     let vault_path = crate::vault_path();
@@ -260,12 +259,8 @@ pub async fn upload_vault(config: &SyncConfig) -> Result<UploadResult, String> {
     }
 
     if !response.status().is_success() {
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        return Err(format!(
-            "Error en pujar SherLock ({}) : {}",
-            status, body
-        ));
+        let (status, body) = error_details(response).await;
+        return Err(format!("Error en pujar SherLock ({}) : {}", status, body));
     }
 
     let vault_response: VaultResponse = response
@@ -293,10 +288,7 @@ pub async fn download_vault(
 ) -> Result<(String, i64), String> {
     let base_url = resolve_url(&config.railway_url);
 
-    let client = Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
-        .build()
-        .map_err(|e| format!("Error en crear client HTTP: {}", e))?;
+    let client = http_client(30)?;
     let access_token = get_access_token(&client, &base_url, config).await?;
 
     let url = if config.vault_id.is_empty() {
@@ -313,8 +305,7 @@ pub async fn download_vault(
         .map_err(|e| format!("Error en connectar amb Railway: {}", e))?;
 
     if !response.status().is_success() {
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
+        let (status, body) = error_details(response).await;
         return Err(format!(
             "Error en descarregar SherLock ({}): {}",
             status, body
@@ -339,10 +330,7 @@ pub async fn register_vault(
         return Err("L'identificador de SherLock no pot estar buit".to_string());
     }
 
-    let client = Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
-        .build()
-        .map_err(|e| format!("Error en crear client HTTP: {}", e))?;
+    let client = http_client(30)?;
 
     let payload = VaultRegistration {
         vault_id: config.vault_id.clone(),
@@ -396,10 +384,7 @@ pub async fn delete_vault(_master_password: String, config: &SyncConfig) -> Resu
         return Err("L'identificador de SherLock no pot estar buit".to_string());
     }
 
-    let client = Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
-        .build()
-        .map_err(|e| format!("Error en crear client HTTP: {}", e))?;
+    let client = http_client(30)?;
 
     let response = client
         .delete(format!("{}/v1/vaults/{}", base_url, config.vault_id))
@@ -413,11 +398,8 @@ pub async fn delete_vault(_master_password: String, config: &SyncConfig) -> Resu
         reqwest::StatusCode::NO_CONTENT => Ok(true),
         reqwest::StatusCode::NOT_FOUND => Ok(false),
         _ => {
-            let body = response.text().await.unwrap_or_default();
-            Err(format!(
-                "Error en eliminar SherLock ({}): {}",
-                status, body
-            ))
+            let (_, body) = error_details(response).await;
+            Err(format!("Error en eliminar SherLock ({}): {}", status, body))
         }
     }
 }
@@ -425,10 +407,7 @@ pub async fn delete_vault(_master_password: String, config: &SyncConfig) -> Resu
 pub async fn check_health(railway_url: Option<&str>) -> Result<bool, String> {
     let base_url = resolve_url(railway_url.unwrap_or(DEFAULT_OFFICIAL_URL));
 
-    let client = Client::builder()
-        .timeout(std::time::Duration::from_secs(10))
-        .build()
-        .map_err(|e| format!("Error en crear client HTTP: {}", e))?;
+    let client = http_client(10)?;
 
     let response = client
         .get(format!("{}/healthz", base_url))

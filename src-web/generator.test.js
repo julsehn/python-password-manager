@@ -5,6 +5,7 @@ import {
   passphraseEntropyBits,
   generateValue,
   passwordOptions,
+  passwordStrength,
   passphraseOptions,
 } from "./generator.js";
 
@@ -42,6 +43,14 @@ describe("passphraseEntropyBits", () => {
           (base + Math.log2(10)),
       ) < 0.001,
     );
+  });
+});
+
+describe("passwordStrength", () => {
+  it("keeps the existing labels and score thresholds", () => {
+    assert.equal(passwordStrength("abc").level, "weak");
+    assert.equal(passwordStrength("Abcdefgh1234").level, "good");
+    assert.equal(passwordStrength("Abcdefghij1234!xyz").level, "strong");
   });
 });
 

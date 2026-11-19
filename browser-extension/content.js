@@ -421,6 +421,7 @@ function createFieldIcon(field) {
 }
 
 function updateIcons() {
+  observeOpenShadowRoots();
   if (window.top !== window.self) return;
   const eligible = new Set(
     collectOpenShadowInputs().filter(isEligibleLoginField),
@@ -456,11 +457,6 @@ function observeOpenShadowRoots(root = document) {
     observeOpenShadowRoots(element.shadowRoot);
   }
 }
-const originalUpdateIcons = updateIcons;
-updateIcons = function () {
-  observeOpenShadowRoots();
-  originalUpdateIcons();
-};
 window.addEventListener("scroll", schedulePositionUpdate, true);
 window.addEventListener("resize", schedulePositionUpdate, true);
 setTimeout(updateIcons, 100);

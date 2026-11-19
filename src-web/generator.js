@@ -136,6 +136,42 @@ export function passphraseEntropyBits(
   return withNumber ? bits + Math.log2(10) : bits;
 }
 
+export function passwordStrength(password) {
+  let score = 0;
+  if (password.length >= 12) score++;
+  if (password.length >= 20) score++;
+  if (/[A-Z]/.test(password) && /[a-z]/.test(password)) score++;
+  if (/\d/.test(password)) score++;
+  if (/[^A-Za-z0-9]/.test(password)) score++;
+  const levels = [
+    {
+      level: "weak",
+      label: "Feble",
+      hint: "Afegeix longitud i varietat de caràcters.",
+      percent: 20,
+    },
+    {
+      level: "fair",
+      label: "Acceptable",
+      hint: "Millorable amb més longitud o símbols.",
+      percent: 45,
+    },
+    {
+      level: "good",
+      label: "Bona",
+      hint: "Una contrasenya raonablement resistent.",
+      percent: 70,
+    },
+    {
+      level: "strong",
+      label: "Molt forta",
+      hint: "Bona combinació de longitud i varietat.",
+      percent: 100,
+    },
+  ];
+  return levels[Math.min(levels.length - 1, Math.max(0, score - 1))];
+}
+
 export function passphraseWordPool(options, language = "Català") {
   const seen = new Set();
   const words = generatorWords(language, options.onlyUnaccented);

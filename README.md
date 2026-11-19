@@ -15,53 +15,36 @@ Una aplicació de gestió de contrasenyes de codi obert per a Mac, Windows i Lin
 - 🔋 **Bloqueig automàtic**: La SherLock es bloqueja per inactivitat
 - 🌐 **Extensió del navegador**: Chrome i Firefox amb missatgeria nativa
 
-## Requeriments
+## Requisits
 
 - Node.js 18+
 - Rust & Cargo
-- Python 3.10+ (per al Native Messaging Host de l'extensió)
+- Python 3.10+ només per a l'host de missatgeria nativa de l'extensió
 
 Per generar una versió macOS signada i notaritzada, executa `npm run tauri:build:macos:release` amb `APPLE_SIGNING_IDENTITY`, `APPLE_API_ISSUER`, `APPLE_API_KEY` i `APPLE_API_KEY_PATH` configurats. L'ordre s'atura si no troba una identitat de codi-signatura vàlida.
 
 ## Instal·lació
 
-### 1. Clona el repositori
+### App d'escriptori
+
+SherLock és una aplicació Tauri (Rust + JavaScript), no una aplicació Python. Des de la carpeta `python-password-manager`:
 
 ```bash
-git clone https://github.com/julsehn/Password-Manager-Cloud.git
-cd password-manager-cloud
-```
-
-### 2. Crea un entorn virtual
-
-```bash
-python -m venv .venv
-source .venv/bin/activate  # Linux/Mac
-# o
-.venv\Scripts\activate  # Windows
-```
-
-### 3. Instala les dependències
-
-```bash
-pip install -r requirements.txt
-```
-
-### 4. Comença a desenvolupar
-
-SherLock és una aplicació Tauri (Rust + JS vanilla), no una app PyQt. Per executar-la en desenvolupament:
-
-**macOS:** fes doble clic a `Obrir_SherLock.command` o executa:
-
-```bash
-./Obrir_SherLock.command
-```
-
-**Qualsevol plataforma:**
-
-```bash
+npm install
 npm run tauri dev
 ```
+
+En macOS també pots obrir-la amb `./Obrir_SherLock.command`.
+
+### Extensió del navegador
+
+La compilació de l'extensió és opcional i genera paquets locals per a Chrome i Firefox:
+
+```bash
+./browser-extension/build.sh
+```
+
+Per instal·lar l'host de missatgeria nativa, segueix [browser-extension/README.md](browser-extension/README.md). Python és necessari només per executar aquest host.
 
 ## Configuració del Servei a la Núvol
 
@@ -81,17 +64,9 @@ Per utilitzar la funció de sync a la núvol:
 3. **Sincronització**:
    - Pujar o descarregar la SherLock des del menú "Remot"
 
-### Configuració Manual
-
-Si prefereixes configurar manualment, crea o edita el fitxer `~/.password_manager/config.json`:
-
-```json
-{
-  "railway_url": "https://el-teu-servici.up.railway.app",
-  "railway_vault_id": "el-teu-vault-id",
-  "railway_token": "el-teu-token"
-}
-```
+La configuració del núvol es gestiona des de l'aplicació. El fitxer
+`~/.password_manager/config.json` només pertany als mòduls Python antics i no
+configura la sincronització de l'app Tauri.
 
 ## Estructura del Projecte
 
@@ -100,14 +75,15 @@ python-password-manager/
 ├── browser-extension/      # Extensió del navegador (Chrome/Firefox)
 │   ├── manifest.chrome.json # Manifest font de Chrome
 │   ├── manifest.firefox.json # Manifest font de Firefox
-│   ├── build/              # Paquets generats per build.sh
+│   ├── build/              # Paquets locals generats per build.sh (no versionats)
 │   ├── background.js       # Service worker
 │   ├── popup.html          # UI de l'extensió
 │   ├── popup.js            # Controlador de l'extensió
 │   ├── content.js          # Script de contingut per autofill
 │   ├── content.css         # Estils de contingut
-│   ├── native_messaging_host.py  # Host de missatgeria nativa
-│   ├── native_messaging_host_wrapper.sh  # Wrapper shell
+│   ├── native/             # Host de missatgeria nativa
+│   │   ├── sherlock_native.py
+│   │   └── sherlock_native.sh
 │   └── README.md           # Documentació de l'extensió
 ├── tools/                  # Scripts de tests
 └── README.md

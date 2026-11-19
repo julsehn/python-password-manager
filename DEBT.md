@@ -1,6 +1,6 @@
 # Technical Debt Audit
 
-Audit date: 2026-10-24
+Audit date: 2026-11-19
 
 ## Scope and architecture
 
@@ -21,22 +21,20 @@ Main dependency groups:
 
 ## Findings
 
-1. `src-web/main.js` remains a large JavaScript module containing the active UI
-   and frontend workflows. Import parsing/normalization has been extracted to
-   `src-web/importers.js`, but view state and event handling still need further
-   decomposition. ESLint and Prettier now cover maintained frontend/extension
-   sources; JavaScript still has no static type checker.
-2. `src-tauri/src/lib.rs` is a roughly 1,500-line module combining Tauri setup,
-   command registration, vault operations, authentication, and sync integration.
-   The first refactoring pass moved shared vault data structures into
-   `src-tauri/src/vault.rs`; command responsibilities still need decomposition.
-3. `src-tauri/src/server.rs` is an 814-line local API module that handles
-   session state and request-facing behavior. It uses mutex locks with
-   `unwrap()`, so poisoned locks can panic the server instead of returning a
-   controlled error.
-4. `src-tauri/src/railway.rs` is a 347-line cloud client. HTTP client setup,
-   configuration validation, and response error handling are repeated across
-   operations. There are no module-local Railway tests in the inspected source.
+1. `src-web/main.js` still owns state transitions, event wiring, and vault
+   workflows. Screen templates are in `src-web/views.js`, and dialog templates
+   are in `src-web/dialogs.js`; JavaScript still has no static type checker.
+2. `src-tauri/src/lib.rs` now contains Tauri setup and core vault commands.
+   Image-grid authentication commands and tests are in
+   `src-tauri/src/image_grid.rs`; remaining command groups can be separated as
+   their contracts are exercised by focused tests.
+3. `src-tauri/src/server.rs` manages vault sessions, pairing, and client state;
+   HTTP parsing, routing, and persistence are now in `src-tauri/src/server/http.rs`.
+   `get_entry_count` still uses `unwrap()` on a mutex and should return a
+   controlled error instead of panicking on a poisoned lock.
+4. `src-tauri/src/railway.rs` is a 424-line cloud client. HTTP client setup and
+   error response parsing are centralized; there are still no module-local
+   Railway tests.
 5. `src-web/styles.css` and `src-web/secure.css` contain 1,694 and 1,645 lines,
    respectively. Their styling ownership and overlap should be checked before
    splitting or removing rules.
@@ -48,22 +46,23 @@ Main dependency groups:
 
 ## Refactoring order
 
-1. **`src-tauri/src/lib.rs`**: extract cohesive command groups while preserving
-   command names, payloads, vault serialization, and authentication behavior.
-2. **`src-tauri/src/server.rs`**: replace panic-prone mutex access with explicit
-   error handling and add tests for poisoned-lock/session behavior.
-3. **`src-web/main.js`**: split rendering, state transitions, and event wiring
-   into modules while preserving Tauri command names and visible behavior.
-4. **`src-web/styles.css` and `src-web/secure.css`**: establish stylesheet
+1. **`src-tauri/src/server.rs`**: replace the remaining panic-prone mutex access
+   with explicit error handling and add tests for poisoned-lock/session behavior.
+2. **`src-web/main.js`**: separate state transitions, event wiring, and vault
+   workflows while preserving Tauri command names and visible behavior.
+3. **`src-web/dialogs.js`**: keep dialog templates cohesive; split further only
+   when it clarifies ownership rather than creating tiny modules.
+4. **`src-tauri/src/railway.rs`**: add focused response and refresh-token tests.
+5. **`src-web/styles.css` and `src-web/secure.css`**: establish stylesheet
    ownership and visual regression checks before consolidating rules.
-5. **Python legacy modules**: `src/*.py` is legacy code without a GUI; only what
-   `tests/` needs is kept. No Qt callback boundaries remain.
-6. **Native host and browser popup**: split the large message router and popup
+6. **Python legacy modules**: `src/*.py` is retained for existing tests. Do not
+   remove it until those tests are migrated and behavior parity is demonstrated.
+7. **Native host and browser popup**: split the large message router and popup
    controller only behind protocol-level tests.
 
 ## Guardrails observed
 
-- `cargo test --manifest-path src-tauri/Cargo.toml` passes all 14 Rust tests.
+- `cargo test --manifest-path src-tauri/Cargo.toml` passes all 32 Rust tests.
 - `cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets` passes.
   The large Tauri command signature retains its frontend contract and uses a
   function-scoped `too_many_arguments` allowance.
@@ -102,8 +101,25 @@ Python suite passes.
   response handling.
 - Removed unsafe test side effects: tests now use temporary vaults/secrets and
   an ephemeral server port. A test must never write to the default user vault.
-- Remaining work is tracked in the refactoring order above; the largest UI,
-  command, and native-host modules have not yet been split into smaller files.
+- Remaining work is tracked in the refactoring order above; server endpoints,
+  event wiring, and native messaging are still large, stateful modules.
+
+## Follow-up refactoring (2026-11-19)
+
+- Moved screen and dialog templates from `src-web/main.js` into `views.js` and
+  `dialogs.js`; reused existing constants, components, and generator modules.
+- Moved image-grid authentication commands and their tests to
+  `src-tauri/src/image_grid.rs` without changing the registered command names.
+- Moved the HTTP server, bounded request parser, routing, and vault-persistence
+  helpers to `src-tauri/src/server/http.rs`; `server.rs` retains session and
+  pairing state while preserving the original public APIs.
+- Centralized Railway HTTP client construction and error-response body parsing.
+- Ignored generated Chrome and Firefox builds; `browser-extension/build.sh`
+  remains the source for recreating them locally.
+- Updated the README to distinguish Tauri setup from the optional Python native
+  messaging host. Python vault modules remain until their tests can be replaced.
+- Current verification: 43 Node tests, 32 Rust tests, 4 Playwright tests,
+  Clippy, frontend build, lint, and format checks pass.
 
 ## Critical flows to protect
 

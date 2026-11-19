@@ -14,5 +14,6 @@ src-tauri/gen/
 *.pkg
 .idea/
 .vscode/
-browser-extension/build/*.zip
+browser-extension/build/
+test-results/sherlock-*.png
 vaults.db
