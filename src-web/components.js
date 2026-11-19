@@ -54,7 +54,7 @@ export function sidebarComponent(state) {
         <span>SherLock</span>
       </div>
       <div class="folders-heading">
-        <p class="side-label">LA TEVA ORGANITZACIÓ</p>
+        <p class="side-label">Les teves carpetes</p>
         <div>
           <button class="folder-control" id="new-folder" title="Afegir carpeta">${icon("Plus", 16)}</button>
           <button class="folder-control" id="edit-folder" title="Editar la carpeta seleccionada" ${state.activeFolderId ? "" : "disabled"}>${icon("Pencil", 15)}</button>

@@ -24,7 +24,7 @@ function connectToNative() {
   if (nativePort) return;
   try {
     nativePort = browser.runtime.connectNative("sherlock");
-    console.log("[caixa] Connected to native messaging host");
+    console.log("[sherlock] Connected to native messaging host");
 
     nativePort.onMessage.addListener((response) => {
       const id = response?.request_id;
@@ -38,8 +38,11 @@ function connectToNative() {
           reject(new Error(response.error || "Unknown native host error"));
         }
       } else {
-        // Legacy: fall back to FIFO only if no request_id present (old host)
-        console.warn("[caixa] Response with no/unknown request_id:", response);
+        // Ignore responses without a matching request_id and log a warning.
+        console.warn(
+          "[sherlock] Response with no/unknown request_id:",
+          response,
+        );
       }
     });
 
@@ -48,7 +51,7 @@ function connectToNative() {
         nativePort?.error?.message ||
         browser.runtime.lastError?.message ||
         "Native messaging host disconnected";
-      console.error("[caixa] Native port disconnected:", errorMessage);
+      console.error("[sherlock] Native port disconnected:", errorMessage);
       nativePort = null;
       // Reject all pending requests
       for (const [_id, { reject, timeoutId }] of pendingRequests) {
@@ -58,7 +61,7 @@ function connectToNative() {
       pendingRequests.clear();
     });
   } catch (error) {
-    console.error("[caixa] Error connecting to native host:", error);
+    console.error("[sherlock] Error connecting to native host:", error);
     nativePort = null;
   }
 }
@@ -271,6 +274,99 @@ async function generatePassword(options = {}) {
 // ── Message router (popup / content scripts) ───────
 
 browser.runtime.onMessage.addListener((request, sender, sendResponse) => {
+  if (
+    request.action === "sherlockGetCredentialChoices" ||
+    request.action === "sherlockSelectCredential"
+  ) {
+    // Only top-frame content scripts may request credentials, and the requested
+    // hostname must match the browser-verified sender URL.
+    const senderUrl = (() => {
+      try {
+        return new URL(sender.url);
+      } catch {
+        return null;
+      }
+    })();
+    const requestedHost = String(request.domain || "")
+      .toLowerCase()
+      .replace(/^www\./, "");
+    const senderHost = senderUrl?.hostname.toLowerCase().replace(/^www\./, "");
+    if (
+      sender.id !== browser.runtime.id ||
+      sender.frameId !== 0 ||
+      !senderUrl ||
+      !["http:", "https:"].includes(senderUrl.protocol) ||
+      !senderHost ||
+      requestedHost !== senderHost
+    ) {
+      sendResponse({ success: false, error: "Untrusted sender" });
+      return false;
+    }
+
+    (async () => {
+      try {
+        const response = await fetchCredentials(senderHost);
+        if (!response?.success) throw new Error("Credential lookup failed");
+        const credentials = (response?.credentials || []).filter(
+          (credential) => {
+            let site = String(
+              credential.site || credential.url || credential.domain || "",
+            ).toLowerCase();
+            try {
+              site = new URL(
+                site.includes("://") ? site : `https://${site}`,
+              ).hostname.toLowerCase();
+            } catch {
+              return false;
+            }
+            site = site.replace(/^www\./, "");
+            return senderHost === site || senderHost.endsWith(`.${site}`);
+          },
+        );
+        if (request.action === "sherlockGetCredentialChoices") {
+          sendResponse({
+            success: true,
+            choices: credentials.map((credential) => ({
+              id: String(credential.id || ""),
+              username: String(credential.username || credential.email || ""),
+              domain: senderHost,
+            })),
+          });
+          return;
+        }
+        const selected = credentials.find((credential) =>
+          request.credentialId
+            ? String(credential.id || "") === String(request.credentialId)
+            : String(credential.username || credential.email || "") ===
+              String(request.username || ""),
+        );
+        if (!selected) {
+          sendResponse({
+            success: false,
+            error: "Credential not found for this site",
+          });
+          return;
+        }
+        // The password crosses into the content script only after the user
+        // selected a visible choice (or clicked the icon for a single match).
+        sendResponse({
+          success: true,
+          credential: {
+            username: String(selected.username || selected.email || ""),
+            password: String(selected.password || ""),
+          },
+        });
+      } catch {
+        sendResponse({
+          success: false,
+          locked: true,
+          error: "SherLock is unavailable or locked",
+        });
+      }
+    })();
+    return true;
+  }
+
   if (request.action === "pairBrowser") {
     pairBrowser(request.code)
       .then(sendResponse)
@@ -282,7 +378,7 @@ browser.runtime.onMessage.addListener((request, sender, sendResponse) => {
     getVaultInfo()
       .then(sendResponse)
       .catch((error) => {
-        console.error("[caixa] getVaultInfo error:", error);
+        console.error("[sherlock] getVaultInfo error:", error);
         sendResponse({ success: false, error: error.message });
       });
     return true;
@@ -292,7 +388,7 @@ browser.runtime.onMessage.addListener((request, sender, sendResponse) => {
     lockVault()
       .then(sendResponse)
       .catch((error) => {
-        console.error("[caixa] lockVault error:", error);
+        console.error("[sherlock] lockVault error:", error);
         sendResponse({ success: false, error: error.message });
       });
     return true;
@@ -303,7 +399,7 @@ browser.runtime.onMessage.addListener((request, sender, sendResponse) => {
     fetchCredentials(domain)
       .then(sendResponse)
       .catch((error) => {
-        console.error("[caixa] fetchCredentials error:", error);
+        console.error("[sherlock] fetchCredentials error:", error);
         sendResponse({ success: false, error: error.message });
       });
     return true;
@@ -317,10 +413,37 @@ browser.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
 
   if (request.action === "saveCredentials") {
+    // Validació de l'emissora: només la pàgina del mateix domini pot desar
+    // credencials per a aquest domini. Evita que una pàgina maliciosa forgi
+    // el missatge "Desar contrasenya".
+    const senderUrl = (() => {
+      try {
+        return new URL(sender.url);
+      } catch {
+        return null;
+      }
+    })();
+    const requestedHost = String(request.data?.site || "")
+      .toLowerCase()
+      .replace(/^www\./, "");
+    const senderHost = senderUrl?.hostname.toLowerCase().replace(/^www\./, "");
+    if (
+      sender.id !== browser.runtime.id ||
+      sender.frameId !== 0 ||
+      !senderUrl ||
+      !["http:", "https:"].includes(senderUrl.protocol) ||
+      !senderHost ||
+      !requestedHost ||
+      requestedHost !== senderHost
+    ) {
+      sendResponse({ success: false, error: "Emisor no de confiança" });
+      return false;
+    }
+
     saveCredential(request.data || request)
       .then(sendResponse)
       .catch((error) => {
-        console.error("[caixa] saveCredentials error:", error);
+        console.error("[sherlock] saveCredentials error:", error);
         sendResponse({ success: false, error: error.message });
       });
     return true;
@@ -330,7 +453,7 @@ browser.runtime.onMessage.addListener((request, sender, sendResponse) => {
     generatePassword(request.options || {})
       .then(sendResponse)
       .catch((error) => {
-        console.error("[caixa] generatePassword error:", error);
+        console.error("[sherlock] generatePassword error:", error);
         sendResponse({ success: false, error: error.message });
       });
     return true;
@@ -351,14 +474,20 @@ browser.runtime.onMessage.addListener((request, sender, sendResponse) => {
               title: tabs[0].title,
             });
           } catch (_) {
-            sendResponse({ id: tabs[0].id, url: "", hostname: "", title: "" });
+            // URL parsing failed (about:, chrome://, etc.)
+            sendResponse({
+              id: tabs[0].id,
+              url: tabs[0].url,
+              hostname: "",
+              title: tabs[0].title,
+            });
           }
         } else {
           sendResponse(null);
         }
       })
       .catch((error) => {
-        console.error("[caixa] getActiveTab error:", error);
+        console.error("[sherlock] getActiveTab error:", error);
         sendResponse(null);
       });
     return true;
@@ -382,7 +511,7 @@ browser.runtime.onInstalled.addListener(() => {
       contexts: ["editable"],
     });
   } catch (e) {
-    console.error("[caixa] Error creating context menus:", e);
+    console.error("[sherlock] Error creating context menus:", e);
   }
 });
 
@@ -399,7 +528,7 @@ browser.contextMenus.onClicked.addListener(async (info, tab) => {
         });
       }
     } catch (e) {
-      console.error("[caixa] Error in autofill context menu:", e);
+      console.error("[sherlock] Error in autofill context menu:", e);
     }
   } else if (info.menuItemId === "sherlock_generate") {
     const gen = await generatePassword({ length: 18 });

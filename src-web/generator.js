@@ -4,6 +4,7 @@
  */
 
 import { escapeHtml } from "./utils.js";
+import { EFF_WORDLIST } from "./wordlist-eff.js";
 
 export const wordsByLanguage = {
   Català: [
@@ -126,6 +127,15 @@ export function formatGeneratorWord(word, removeAccents = false) {
   return removeAccents ? withoutAccents(word) : word;
 }
 
+export function passphraseEntropyBits(
+  wordCount,
+  poolSize = EFF_WORDLIST.length,
+  { withNumber = false } = {},
+) {
+  const bits = wordCount * Math.log2(poolSize);
+  return withNumber ? bits + Math.log2(10) : bits;
+}
+
 export function passphraseWordPool(options, language = "Català") {
   const seen = new Set();
   const words = generatorWords(language, options.onlyUnaccented);
@@ -170,14 +180,13 @@ export function generateValue(type, options, language = "Català") {
     return characters.join("");
   }
   if (type === "passphrase") {
-    const words = passphraseWordPool(options, language);
-    for (let index = words.length - 1; index > 0; index -= 1) {
-      const swapIndex = secureRandomIndex(index + 1);
-      [words[index], words[swapIndex]] = [words[swapIndex], words[index]];
-    }
-    const wordCount = Math.min(options.words, words.length);
+    const wordCount = Math.min(12, Math.max(5, Number(options.words) || 6));
     options.words = wordCount;
-    const value = words.slice(0, wordCount).join(options.separator);
+    const words = [];
+    for (let index = 0; index < wordCount; index += 1) {
+      words.push(EFF_WORDLIST[secureRandomIndex(EFF_WORDLIST.length)]);
+    }
+    const value = words.join(options.separator);
     return options.includeNumber ? `${value}${secureRandomIndex(10)}` : value;
   }
   const words = generatorWords(language, options.onlyUnaccented);
@@ -192,7 +201,7 @@ export function passwordOptions(options) {
       <input
         id="generator-length"
         type="range"
-        min="5"
+        min="8"
         max="128"
         value="${options.length}"
       />
@@ -219,14 +228,16 @@ export function passwordOptions(options) {
 }
 
 export function passphraseOptions(options, language = "Català") {
-  const maxWords = Math.max(
-    3,
-    Math.min(20, passphraseWordPool(options, language).length),
+  const minWords = 5;
+  const maxWords = 12;
+  const wordCount = Math.min(
+    maxWords,
+    Math.max(minWords, Number(options.words) || 6),
   );
   return `
     <label>
       Nombre de paraules
-      <input id="generator-words" type="number" min="3" max="${maxWords}" value="${Math.min(options.words, maxWords)}" />
+      <input id="generator-words" type="number" min="5" max="${maxWords}" value="${wordCount}" />
     </label>
     <label>
       Separador
@@ -248,7 +259,7 @@ export function passphraseOptions(options, language = "Català") {
       <input data-option="onlyUnaccented" type="checkbox" ${options.onlyUnaccented ? "checked" : ""} />
       Només paraules sense accents
     </label>
-    <small class="helper">Cada paraula apareix una sola vegada.</small>
+    <small class="helper">Les paraules s'escollen de la llista EFF (anglès) i poden repetir-se.</small>
   `;
 }
 

@@ -5,27 +5,120 @@ import vm from "node:vm";
 
 const source = await readFile(new URL("./content.js", import.meta.url), "utf8");
 
-// Capture setInterval call for cleanup
-let iconIntervalId;
-const mockSetInterval = (cb, delay) => {
-  iconIntervalId = setInterval(cb, delay);
-  return iconIntervalId;
+function createMockElement(tag) {
+  const el = {
+    tagName: tag.toUpperCase(),
+    style: {},
+    dataset: {},
+    innerHTML: "",
+    textContent: "",
+    children: [],
+    childNodes: [],
+    parentNode: null,
+    getAttribute: () => null,
+    setAttribute: () => {},
+    removeAttribute: () => {},
+    addEventListener: () => {},
+    removeEventListener: () => {},
+    appendChild(child) {
+      child.parentNode = el;
+      el.children.push(child);
+      el.childNodes.push(child);
+      return child;
+    },
+    append(...children) {
+      children.forEach((child) => this.appendChild(child));
+    },
+    removeChild(child) {
+      const index = el.children.indexOf(child);
+      if (index !== -1) el.children.splice(index, 1);
+      return child;
+    },
+    contains(other) {
+      return other && other.parentNode === el;
+    },
+    querySelectorAll() {
+      return [];
+    },
+    querySelector() {
+      return null;
+    },
+    getBoundingClientRect() {
+      return {
+        top: 0,
+        left: 0,
+        right: 300,
+        bottom: 40,
+        width: 300,
+        height: 40,
+      };
+    },
+    getClientRects() {
+      return [{}];
+    },
+    attachShadow() {
+      return createMockElement("shadow");
+    },
+  };
+  return el;
+}
+
+const mockDocument = {
+  createElement: (tag) => createMockElement(tag),
+  addEventListener: () => {},
+  body: createMockElement("body"),
+  documentElement: createMockElement("html"),
+  querySelector: () => null,
+  querySelectorAll: () => [],
+};
+
+const mockWindow = {
+  location: { hostname: "example.test" },
+  innerHeight: 800,
+  innerWidth: 1200,
+  top: null,
+  self: null,
+  addEventListener: () => {},
+};
+mockWindow.top = mockWindow;
+mockWindow.self = mockWindow;
+
+const mockObserver = {
+  observe() {},
+  disconnect() {},
 };
 
 const context = vm.createContext({
-  chrome: { runtime: { onMessage: { addListener() {} } } },
-  document: { addEventListener() {} },
+  chrome: {
+    runtime: {
+      getURL: (path) => path,
+      sendMessage: async () => ({}),
+      onMessage: { addListener() {} },
+    },
+  },
+  document: mockDocument,
+  window: mockWindow,
   HTMLInputElement: function HTMLInputElement() {},
   Event: class Event {},
   setTimeout,
-  setInterval: mockSetInterval,
-  window: { location: { hostname: "example.test" } },
+  requestAnimationFrame: (cb) => setTimeout(cb, 10),
+  getComputedStyle: () => ({
+    display: "block",
+    visibility: "visible",
+    opacity: "1",
+    getPropertyValue: () => null,
+  }),
+  ResizeObserver: function () {
+    return mockObserver;
+  },
+  MutationObserver: function () {
+    return mockObserver;
+  },
 });
-vm.runInContext(`${source}\n;globalThis.detect = findFormFields;`, context);
-
-test.after(() => {
-  if (iconIntervalId) clearInterval(iconIntervalId);
-});
+vm.runInContext(
+  `${source}\n;globalThis.detect = findFormFields; globalThis.computeIconBox = computeIconBox; globalThis.isEligibleLoginField = isEligibleLoginField;`,
+  context,
+);
 
 function input({
   type = "text",
@@ -159,55 +252,200 @@ test("ignores hidden, disabled, readonly, search, and unrelated inputs", () => {
   assert.equal(result.passwordEl, null);
 });
 
-// Tests for inline field icon injection logic
-test("isEligibleField returns true for password and username inputs", () => {
+// Tests for computeIconBox geometry
+test("computeIconBox calculates correct size for large field (56px)", () => {
+  const rect = {
+    top: 0,
+    left: 0,
+    right: 300,
+    bottom: 56,
+    width: 300,
+    height: 56,
+  };
+  const box = context.computeIconBox(rect);
+  assert.equal(box.size, 40);
+  assert.equal(box.margin, 8);
+  assert.equal(box.top, 8);
+  assert.equal(box.left, 252);
+});
+
+test("computeIconBox calculates correct size for medium field (40px)", () => {
+  const rect = {
+    top: 0,
+    left: 0,
+    right: 300,
+    bottom: 40,
+    width: 300,
+    height: 40,
+  };
+  const box = context.computeIconBox(rect);
+  assert.equal(box.size, 28);
+  assert.equal(box.margin, 6);
+  assert.equal(box.top, 6);
+  assert.equal(box.left, 266);
+});
+
+test("computeIconBox calculates correct size for small field (28px)", () => {
+  const rect = {
+    top: 0,
+    left: 0,
+    right: 300,
+    bottom: 28,
+    width: 300,
+    height: 28,
+  };
+  const box = context.computeIconBox(rect);
+  // margin = clamp(4, 4.2, 8) = 4.2
+  // size = clamp(18, 28-8.4, 40) = 19.6
+  assert.ok(Math.abs(box.size - 19.6) < 1e-9);
+  assert.ok(Math.abs(box.margin - 4.2) < 1e-9);
+  assert.ok(Math.abs(box.top - 4.2) < 1e-9);
+  assert.ok(Math.abs(box.left - 276.2) < 1e-9);
+});
+
+test("computeIconBox calculates correct size for tiny field (18px)", () => {
+  const rect = {
+    top: 0,
+    left: 0,
+    right: 300,
+    bottom: 18,
+    width: 300,
+    height: 18,
+  };
+  const box = context.computeIconBox(rect);
+  assert.equal(box.size, 18);
+  assert.equal(box.margin, 4);
+  assert.equal(box.top, 0);
+  assert.equal(box.left, 278);
+});
+
+test("computeIconBox calculates correct size for huge field (100px)", () => {
+  const rect = {
+    top: 0,
+    left: 0,
+    right: 300,
+    bottom: 100,
+    width: 300,
+    height: 100,
+  };
+  const box = context.computeIconBox(rect);
+  assert.equal(box.size, 40);
+  assert.equal(box.margin, 8);
+  assert.equal(box.top, 30);
+  assert.equal(box.left, 252);
+});
+
+// Tests for isEligibleLoginField detection
+test("isEligibleLoginField accepts password inputs", () => {
   const passwordInput = {
+    tagName: "INPUT",
     type: "password",
     disabled: false,
     readOnly: false,
     getClientRects: () => [{}],
   };
-  const usernameInput = {
+  assert.equal(context.isEligibleLoginField(passwordInput), true);
+});
+
+test("isEligibleLoginField accepts email inputs", () => {
+  const emailInput = {
+    tagName: "INPUT",
     type: "email",
-    name: "email",
     disabled: false,
     readOnly: false,
     getClientRects: () => [{}],
   };
-  assert.equal(context.isEligibleField(passwordInput), true);
-  assert.equal(context.isEligibleField(usernameInput), true);
+  assert.equal(context.isEligibleLoginField(emailInput), true);
 });
 
-test("isEligibleField returns false for disabled or readonly inputs", () => {
-  const disabledInput = {
-    type: "password",
-    disabled: true,
+test("isEligibleLoginField accepts text inputs with login hints", () => {
+  const usernameInput = {
+    tagName: "INPUT",
+    type: "text",
+    name: "username",
+    disabled: false,
     readOnly: false,
     getClientRects: () => [{}],
   };
-  const readOnlyInput = {
-    type: "password",
-    disabled: false,
-    readOnly: true,
-    getClientRects: () => [{}],
-  };
-  assert.equal(context.isEligibleField(disabledInput), false);
-  assert.equal(context.isEligibleField(readOnlyInput), false);
+  assert.equal(context.isEligibleLoginField(usernameInput), true);
 });
 
-test("isEligibleField returns false for hidden inputs", () => {
+test("isEligibleLoginField rejects text inputs without login hints", () => {
+  const otherInput = {
+    tagName: "INPUT",
+    type: "text",
+    name: "other",
+    disabled: false,
+    readOnly: false,
+    getClientRects: () => [{}],
+  };
+  assert.equal(context.isEligibleLoginField(otherInput), false);
+});
+
+test("isEligibleLoginField rejects hidden inputs", () => {
   const hiddenInput = {
+    tagName: "INPUT",
     type: "password",
     disabled: false,
     readOnly: false,
     getClientRects: () => [],
   };
-  assert.equal(context.isEligibleField(hiddenInput), false);
+  assert.equal(context.isEligibleLoginField(hiddenInput), false);
 });
 
-test("hasIcon checks for existing SherLock icons", () => {
-  const inputWithIcon = { dataset: { sherlockIcon: "password" } };
-  const inputWithoutIcon = { dataset: {} };
-  assert.equal(context.hasIcon(inputWithIcon), true);
-  assert.equal(context.hasIcon(inputWithoutIcon), false);
+test("isEligibleLoginField rejects disabled inputs", () => {
+  const disabledInput = {
+    tagName: "INPUT",
+    type: "password",
+    disabled: true,
+    readOnly: false,
+    getClientRects: () => [{}],
+  };
+  assert.equal(context.isEligibleLoginField(disabledInput), false);
+});
+
+test("isEligibleLoginField rejects readonly inputs", () => {
+  const readonlyInput = {
+    tagName: "INPUT",
+    type: "password",
+    disabled: false,
+    readOnly: true,
+    getClientRects: () => [{}],
+  };
+  assert.equal(context.isEligibleLoginField(readonlyInput), false);
+});
+
+test("isEligibleLoginField rejects search inputs and undersized fields", () => {
+  const searchInput = {
+    tagName: "INPUT",
+    type: "search",
+    disabled: false,
+    readOnly: false,
+    getBoundingClientRect: () => ({
+      top: 0,
+      left: 0,
+      right: 300,
+      bottom: 40,
+      width: 300,
+      height: 40,
+    }),
+    getClientRects: () => [{}],
+  };
+  const tinyInput = {
+    tagName: "INPUT",
+    type: "password",
+    disabled: false,
+    readOnly: false,
+    getBoundingClientRect: () => ({
+      top: 0,
+      left: 0,
+      right: 70,
+      bottom: 20,
+      width: 70,
+      height: 20,
+    }),
+    getClientRects: () => [{}],
+  };
+  assert.equal(context.isEligibleLoginField(searchInput), false);
+  assert.equal(context.isEligibleLoginField(tinyInput), false);
 });

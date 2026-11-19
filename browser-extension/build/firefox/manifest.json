@@ -1,0 +1,42 @@
+{
+  "manifest_version": 2,
+  "name": "SherLock Manager",
+  "version": "1.2.0",
+  "description": "Extensió per a emplenat automàtic i sincronització segura amb SherLock",
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "permissions": [
+    "activeTab",
+    "storage",
+    "contextMenus",
+    "clipboardWrite",
+    "nativeMessaging",
+    "http://127.0.0.1:8080/*",
+    "http://localhost:8080/*",
+    "<all_urls>"
+  ],
+  "browser_action": {
+    "default_popup": "popup.html",
+    "default_title": "SherLock Manager"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "css": ["content.css"],
+      "run_at": "document_idle"
+    }
+  ],
+  "web_accessible_resources": ["icons/icon128.png"],
+  "background": {
+    "scripts": ["background.js"]
+  },
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "sherlock@juls.com"
+    }
+  }
+}

@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Test Login Forms</title>
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        padding: 20px;
+      }
+      .login-form {
+        margin-bottom: 30px;
+        padding: 20px;
+        border: 1px solid #ccc;
+        border-radius: 5px;
+      }
+      .login-form label {
+        display: block;
+        margin-bottom: 5px;
+      }
+      .login-form input {
+        width: 100%;
+        padding: 10px;
+        margin-bottom: 10px;
+        border: 1px solid #ddd;
+        border-radius: 4px;
+      }
+      .login-form input[type="password"] {
+        padding-right: 40px;
+      }
+      .small-field input {
+        height: 28px;
+      }
+      .medium-field input {
+        height: 40px;
+      }
+      .large-field input {
+        height: 56px;
+      }
+      .dark-theme {
+        background-color: #2d2d2d;
+        color: white;
+      }
+      .dark-theme input {
+        background-color: #404040;
+        color: white;
+        border-color: #555;
+      }
+      .with-toggle button {
+        position: absolute;
+        right: 10px;
+        top: 50%;
+        transform: translateY(-50%);
+      }
+      .password-wrapper {
+        position: relative;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Test Login Forms</h1>
+
+    <div class="login-form">
+      <h2>Standard Login</h2>
+      <label for="email1">Email</label>
+      <input
+        type="email"
+        id="email1"
+        name="email"
+        placeholder="you@example.com"
+      />
+      <label for="pass1">Password</label>
+      <input
+        type="password"
+        id="pass1"
+        name="password"
+        placeholder="••••••••"
+      />
+    </div>
+
+    <div class="login-form small-field">
+      <h2>Small Fields (28px)</h2>
+      <input type="email" id="email2" name="email" placeholder="email" />
+      <input
+        type="password"
+        id="pass2"
+        name="password"
+        placeholder="password"
+      />
+    </div>
+
+    <div class="login-form medium-field">
+      <h2>Medium Fields (40px)</h2>
+      <input type="email" id="email3" name="email" placeholder="email" />
+      <input
+        type="password"
+        id="pass3"
+        name="password"
+        placeholder="password"
+      />
+    </div>
+
+    <div class="login-form large-field">
+      <h2>Large Fields (56px)</h2>
+      <input type="email" id="email4" name="email" placeholder="email" />
+      <input
+        type="password"
+        id="pass4"
+        name="password"
+        placeholder="password"
+      />
+    </div>
+
+    <div class="login-form dark-theme">
+      <h2>Dark Theme</h2>
+      <input type="email" id="email5" name="email" placeholder="email" />
+      <input
+        type="password"
+        id="pass5"
+        name="password"
+        placeholder="password"
+      />
+    </div>
+
+    <div class="login-form with-toggle">
+      <h2>With Password Toggle</h2>
+      <input type="email" id="email6" name="email" placeholder="email" />
+      <div class="password-wrapper">
+        <input
+          type="password"
+          id="pass6"
+          name="password"
+          placeholder="password"
+        />
+        <button type="button" aria-label="Toggle password visibility">👁</button>
+      </div>
+    </div>
+  </body>
+</html>

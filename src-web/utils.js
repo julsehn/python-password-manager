@@ -59,4 +59,24 @@ export function parseEntryNotes(notes = "") {
   return { url, cleanNotes };
 }
 
+export function mapVaultEntry(entry) {
+  return {
+    id: entry.id,
+    site: entry.site,
+    username: entry.username,
+    password: entry.password,
+    notes: entry.notes || "",
+    folderId: entry.folder_id || null,
+    createdAt: entry.created_at,
+    updatedAt: entry.updated_at || null,
+  };
+}
+
 export const isTauriRuntime = () => Boolean(window.__TAURI_INTERNALS__);
+
+/**
+ * Compute remaining seconds until expiration. Returns integer ≥ 0.
+ */
+export function pairingSecondsRemaining(expiresAt, now = Date.now()) {
+  return Math.max(0, Math.floor((expiresAt - now) / 1000));
+}

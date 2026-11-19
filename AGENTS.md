@@ -4,7 +4,7 @@
 
 This repository is the source for SherLock, a local-first password manager with:
 
-- a Python desktop client built with PyQt6
+- a legacy Python desktop client (GUI removed; `src/` is legacy code kept only for `tests/`)
 - secure local vault storage and encryption
 - an HTTPS API server with JWT/HMAC and mTLS concepts
 - browser autofill support for Chrome/Firefox via a native messaging host
@@ -17,9 +17,9 @@ Future AI agents should treat this project as a security-sensitive app. Keep cha
 
 ### 1. Desktop app entry
 
-- `main.py`: application bootstrap and server startup hook
-- `src/ui/main_window.py`: main user interface
-- `src/ui/qt_compat.py`: PyQt6 compatibility wrapper
+The active desktop app is the Tauri shell (`src-tauri/`) with the Vite frontend (`src-web/`).
+The Python GUI (`main.py`, `src/ui/`) was removed in commit `f7c6d8b` (2026-11-16).
+The remaining `src/*.py` modules are legacy Python code kept only to support `tests/`; they are not part of the running desktop app.
 
 ### 2. Security and vault logic
 
@@ -59,7 +59,7 @@ Future AI agents should treat this project as a security-sensitive app. Keep cha
 
 ### 7. Active desktop UI and Tauri workflows
 
-- The usual macOS launcher `Obrir_SherLock.command` starts the Tauri app, whose frontend is `src-web/main.js` with styles in `src-web/secure.css` and `src-web/styles.css`. Changes under `src/ui/` affect the Python/PyQt app, not the normal Tauri launch path.
+- The usual macOS launcher `Obrir_SherLock.command` starts the Tauri app, whose frontend is `src-web/main.js` with styles in `src-web/secure.css` and `src-web/styles.css`. There is no active Python/PyQt GUI launch path (`main.py` and `src/ui/` were removed).
 - Tauri commands and encrypted-vault workflows live in `src-tauri/src/lib.rs`; in-memory server session state is managed by `src-tauri/src/server.rs`.
 - Validate frontend work with `npm run build`; validate Tauri backend work with `cargo test --manifest-path src-tauri/Cargo.toml`.
 
@@ -80,18 +80,15 @@ Future AI agents should treat this project as a security-sensitive app. Keep cha
 
 Typical setup:
 
-```bash
-cd /Users/juls/Documents/GitHub/The-vault-project/python-password-manager
-source .venv-1/bin/activate
-python main.py
-```
-
 For the web/Tauri app:
 
 ```bash
+cd /Users/juls/Documents/GitHub/The-vault-project/python-password-manager
 npm install
-npm run tauri
+npm run tauri dev
 ```
+
+On macOS you can also double-click `Obrir_SherLock.command`.
 
 ## Project conventions
 
@@ -99,7 +96,7 @@ npm run tauri
 - Prefer reading existing implementation patterns before adding new logic.
 - Keep security-sensitive operations centralized in `src/encryption.py`, `src/storage.py`, and `src/server.py`.
 - Treat browser-extension/native-host integration as a trust boundary.
-- When changing config behavior, keep compatibility with `~/.password_manager/config.json` in mind.
+- `~/.password_manager/config.json` belongs only to the legacy Python modules (`src/config.py`, `src/storage.py`); the Rust app does not use it.
 - Favor explicit, readable code over cleverness.
 
 ## Important design notes
@@ -146,7 +143,7 @@ The older root markdown files are historical notes, fixes, and setup guides. The
 ## Suggested workflow for new agents
 
 1. Read this file first.
-2. Inspect `main.py` and the layer you are changing.
+2. Inspect the layer you are changing (`src-tauri/`, `src-web/`, `browser-extension/`, or `src/` for legacy Python tests).
 3. Follow the existing module boundaries instead of introducing a new cross-cutting architecture.
 4. Validate with the smallest relevant runtime or test command.
 5. Keep any new documentation in the same spirit: concise, security-aware, and actionable.
@@ -154,7 +151,6 @@ The older root markdown files are historical notes, fixes, and setup guides. The
 ## Key files to know
 
 - `README.md`: user-facing overview
-- `main.py`: startup entry
 - `src/config.py`: app configuration and cloud provider logic
 - `src/server.py`: secure API internals
 - `src/storage.py`: vault serialization and persistence
@@ -169,6 +165,6 @@ The older root markdown files are historical notes, fixes, and setup guides. The
 - Passwords must not be logged in plain text.
 - Avoid broad file rewrites without understanding the current security model.
 - When changing auth flows, verify related certificate, JWT, and HMAC logic.
-- Preserve backward compatibility unless the change explicitly targets a migration.
+- This project has not been published: do not maintain or add compatibility with earlier file formats, schemas, or protocols. Once there is a first public release, each format will have an explicit version and migrations.
 
 This file is the main context anchor for AI-assisted work in this repository.

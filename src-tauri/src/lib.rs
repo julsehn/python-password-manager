@@ -155,6 +155,22 @@ struct VaultFile {
     version: String,
 }
 
+const VAULT_FORMAT_VERSION: &str = "1";
+const IMAGE_GRID_FORMAT_VERSION: u64 = 5;
+
+fn parse_vault_file(content: &str) -> Result<VaultFile, String> {
+    let vault_file: VaultFile = serde_json::from_str(content).map_err(|e| {
+        format!("Failed to parse vault structure: {}", e)
+    })?;
+    if vault_file.version != VAULT_FORMAT_VERSION {
+        return Err(format!(
+            "Unsupported vault version '{}' (expected '{}').",
+            vault_file.version, VAULT_FORMAT_VERSION
+        ));
+    }
+    Ok(vault_file)
+}
+
 pub fn run() {
     let server_state = Arc::new(ServerState::new());
     let server_state_clone = Arc::clone(&server_state);
@@ -315,15 +331,14 @@ fn unlock_vault(
     let content = std::fs::read_to_string(&vault_path)
         .map_err(|e| format!("Failed to read vault file: {}", e))?;
 
-    let vault_file: VaultFile = serde_json::from_str(&content)
-        .map_err(|e| format!("Failed to parse vault structure: {}", e))?;
+    let vault_file = parse_vault_file(&content)?;
 
-    let salt_bytes = security::decode_hex_or_base64(&vault_file.salt, "salt")?;
+    let salt_bytes = security::decode_base64(&vault_file.salt, "salt")?;
     let key = security::derive_key_from_password(&master_password, &salt_bytes)
         .map_err(|e| format!("Failed to derive key from password: {}", e))?;
 
-    let nonce_bytes = security::decode_hex_or_base64(&vault_file.nonce, "nonce")?;
-    let ciphertext_bytes = security::decode_hex_or_base64(&vault_file.ciphertext, "ciphertext")?;
+    let nonce_bytes = security::decode_base64(&vault_file.nonce, "nonce")?;
+    let ciphertext_bytes = security::decode_base64(&vault_file.ciphertext, "ciphertext")?;
 
     let decrypted =
         security::decrypt_aes_gcm(&key, &nonce_bytes, &ciphertext_bytes).map_err(|e| {
@@ -381,13 +396,8 @@ async fn save_vault(
             .clone()
     };
 
-    let active_entries: Vec<_> = entries
-        .into_iter()
-        .filter(|e| e.deleted_at.is_none())
-        .collect();
-
     let vault_data = VaultData {
-        entries: active_entries,
+        entries,
         folders,
         deleted_entries: trash,
         history,
@@ -529,56 +539,11 @@ fn get_vault_entries(
     }
 }
 
-#[tauri::command]
-#[allow(dead_code)]
-fn generate_password(
-    length: u32,
-    uppercase: bool,
-    lowercase: bool,
-    numbers: bool,
-    symbols: bool,
-) -> String {
-    println!(
-        "Generating password: length={}, uppercase={}, lowercase={}, numbers={}, symbols={}",
-        length, uppercase, lowercase, numbers, symbols
-    );
+// generate_password command removed (dead code). Use server.rs /api/v1/generate-password instead.
 
-    security::generate_password(length, uppercase, lowercase, numbers, symbols)
-}
+// generate_passphrase command removed (dead code).
 
-#[tauri::command]
-#[allow(dead_code)]
-fn generate_passphrase(
-    word_count: u32,
-    separator: String,
-    uppercase_words: bool,
-    include_number: bool,
-    remove_accents: bool,
-    language: String,
-) -> String {
-    println!("Generating passphrase: words={}, separator={}, uppercase={}, include_number={}, language={}", word_count, separator, uppercase_words, include_number, language);
-
-    security::generate_passphrase(
-        word_count,
-        separator,
-        uppercase_words,
-        include_number,
-        remove_accents,
-        language,
-    )
-}
-
-#[tauri::command]
-#[allow(dead_code)]
-fn generate_username(
-    first_name: Option<String>,
-    last_name: Option<String>,
-    include_numbers: bool,
-) -> String {
-    println!("Generating username");
-
-    security::generate_username(first_name, last_name, include_numbers)
-}
+// generate_username command removed (dead code).
 
 #[tauri::command]
 fn update_entry(
@@ -636,7 +601,6 @@ async fn sync_upload_vault(
     sync_state: tauri::State<'_, Mutex<SyncConfig>>,
     server_state: tauri::State<'_, Arc<ServerState>>,
 ) -> Result<SyncResponse, String> {
-    println!("Syncing vault to Railway: {}", config.vault_id);
     attach_refresh_token(&mut config, &sync_state)?;
     let master_password = {
         let unlocked = server_state
@@ -659,15 +623,14 @@ async fn sync_upload_vault(
     let content = std::fs::read_to_string(&vault_path)
         .map_err(|e| format!("Failed to read local vault file: {}", e))?;
 
-    let vault_file: VaultFile = serde_json::from_str(&content)
-        .map_err(|e| format!("Failed to parse vault structure: {}", e))?;
+    let vault_file = parse_vault_file(&content)?;
 
-    let salt_bytes = security::decode_hex_or_base64(&vault_file.salt, "salt")?;
+    let salt_bytes = security::decode_base64(&vault_file.salt, "salt")?;
     let key = security::derive_key_from_password(&master_password, &salt_bytes)
         .map_err(|e| format!("Failed to derive key: {}", e))?;
 
-    let nonce_bytes = security::decode_hex_or_base64(&vault_file.nonce, "nonce")?;
-    let ciphertext_bytes = security::decode_hex_or_base64(&vault_file.ciphertext, "ciphertext")?;
+    let nonce_bytes = security::decode_base64(&vault_file.nonce, "nonce")?;
+    let ciphertext_bytes = security::decode_base64(&vault_file.ciphertext, "ciphertext")?;
 
     let decrypted =
         security::decrypt_aes_gcm(&key, &nonce_bytes, &ciphertext_bytes).map_err(|e| {
@@ -679,7 +642,19 @@ async fn sync_upload_vault(
 
     let _data: String = String::from_utf8_lossy(&decrypted).into();
 
-    railway::upload_vault(&config).await
+    match railway::upload_vault(&config).await? {
+        railway::UploadResult::Ok(response, version) => {
+            // Emmagatzema la versió del núvol per a futures pujades
+            // amb expected_version i evitar l'escriptura per dalt.
+            if let Ok(mut sync_config) = sync_state.lock() {
+                sync_config.cloud_version = Some(version);
+            }
+            Ok(response)
+        }
+        railway::UploadResult::Conflict => Err(
+            "La caixa al núvol és més nova que la local. Descarregueu-la abans de tornar a pujar.".to_string(),
+        ),
+    }
 }
 
 #[tauri::command]
@@ -689,7 +664,6 @@ async fn sync_download_vault(
     sync_state: tauri::State<'_, Mutex<SyncConfig>>,
     server_state: tauri::State<'_, Arc<ServerState>>,
 ) -> Result<String, String> {
-    println!("Downloading vault from Railway: {}", config.vault_id);
     attach_refresh_token(&mut config, &sync_state)?;
     let master_password = match master_password.filter(|password| !password.is_empty()) {
         Some(password) => Zeroizing::new(password),
@@ -705,19 +679,18 @@ async fn sync_download_vault(
                 .clone()
         }
     };
-    let blob = railway::download_vault(master_password.to_string(), &config).await?;
+    let (blob, remote_version) = railway::download_vault(master_password.to_string(), &config).await?;
 
     // 1. Verify downloaded vault structure
-    let vault_file: VaultFile = serde_json::from_str(&blob)
-        .map_err(|e| format!("Failed to parse downloaded vault structure: {}", e))?;
+    let vault_file = parse_vault_file(&blob)?;
 
     // 2. Derive key with Argon2id and decrypt to verify integrity and master password
-    let salt_bytes = security::decode_hex_or_base64(&vault_file.salt, "salt")?;
+    let salt_bytes = security::decode_base64(&vault_file.salt, "salt")?;
     let key = security::derive_key_from_password(&master_password, &salt_bytes)
         .map_err(|e| format!("Failed to derive key: {}", e))?;
 
-    let nonce_bytes = security::decode_hex_or_base64(&vault_file.nonce, "nonce")?;
-    let ciphertext_bytes = security::decode_hex_or_base64(&vault_file.ciphertext, "ciphertext")?;
+    let nonce_bytes = security::decode_base64(&vault_file.nonce, "nonce")?;
+    let ciphertext_bytes = security::decode_base64(&vault_file.ciphertext, "ciphertext")?;
 
     let decrypted =
         security::decrypt_aes_gcm(&key, &nonce_bytes, &ciphertext_bytes).map_err(|e| {
@@ -754,6 +727,11 @@ async fn sync_download_vault(
         vault_data.history.clone(),
     );
 
+    // Emmagatzema la versió del núvol per a futures pujades amb expected_version.
+    if let Ok(mut sync_config) = sync_state.lock() {
+        sync_config.cloud_version = Some(remote_version);
+    }
+
     serde_json::to_string(&vault_data).map_err(|e| format!("Failed to serialize vault: {}", e))
 }
 
@@ -785,6 +763,7 @@ async fn auth_official_cloud(
         vault_id: auth.vault_id.clone(),
         token: auth.access_token.clone(),
         refresh_token,
+        cloud_version: None,
     };
     Ok(auth)
 }
@@ -808,6 +787,7 @@ async fn register_official_cloud(
         vault_id: auth.vault_id.clone(),
         token: auth.access_token.clone(),
         refresh_token,
+        cloud_version: None,
     };
     Ok(auth)
 }
@@ -877,6 +857,7 @@ fn set_railway_sync_config(
         vault_id,
         token,
         refresh_token,
+        cloud_version: None,
     };
 
     println!("Railway sync configured successfully");
@@ -894,125 +875,35 @@ fn get_railway_sync_config(
         .map_err(|_| "Failed to access Railway configuration".to_string())
 }
 
-#[tauri::command]
-#[allow(dead_code)]
-fn change_master_password(
-    current_password: String,
-    new_password: String,
-    entries: Vec<Entry>,
-    folders: Vec<Folder>,
-    trash: Vec<TrashedEntry>,
-    history: Vec<HistoryItem>,
-) -> Result<(), String> {
-    println!("Changing master password...");
-    let _ = (&entries, &folders, &trash, &history);
+// change_master_password command removed (dead code).
 
-    if current_password.is_empty() {
-        return Err("Current password cannot be empty".to_string());
-    }
-    if new_password.is_empty() {
-        return Err("New password cannot be empty".to_string());
-    }
-    if new_password.len() < 12 {
-        return Err("New password must be at least 12 characters".to_string());
-    }
-
-    let vault_path = vault_path();
-
-    if !std::path::Path::new(&vault_path).exists() {
-        return Err(
-            "No existing vault found. Create a vault first with your master password.".to_string(),
-        );
-    }
-
-    let content = std::fs::read_to_string(&vault_path)
-        .map_err(|e| format!("Failed to read encrypted vault file: {}", e))?;
-
-    let old_vault_file: VaultFile = serde_json::from_str(&content)
-        .map_err(|e| format!("Failed to parse encrypted vault structure: {}", e))?;
-
-    let old_salt_bytes = security::decode_hex_or_base64(&old_vault_file.salt, "salt")?;
-    let old_key = security::derive_key_from_password(&current_password, &old_salt_bytes)
-        .map_err(|e| format!("Failed to derive key with current password: {}", e))?;
-
-    let old_nonce_bytes = security::decode_hex_or_base64(&old_vault_file.nonce, "nonce")?;
-    let old_ciphertext_bytes =
-        security::decode_hex_or_base64(&old_vault_file.ciphertext, "ciphertext")?;
-
-    let decrypted = security::decrypt_aes_gcm(&old_key, &old_nonce_bytes, &old_ciphertext_bytes).map_err(|e| {
-        format!("Failed to decrypt vault with current password: {}. Please verify your current master password is correct.", e)
-    })?;
-
-    let old_data: String = String::from_utf8_lossy(&decrypted).into();
-    let old_vault_data: VaultData = serde_json::from_str(&old_data)
-        .map_err(|e| format!("Failed to parse decrypted vault data: {}", e))?;
-
-    println!("Successfully decrypted vault with current password");
-
-    let new_vault_data = VaultData {
-        entries: old_vault_data.entries,
-        folders: old_vault_data.folders,
-        deleted_entries: old_vault_data.deleted_entries,
-        history: old_vault_data.history,
-    };
-
-    let new_salt =
-        security::generate_salt().map_err(|e| format!("Failed to generate salt: {}", e))?;
-    let new_key = security::derive_key_from_password(&new_password, &new_salt)
-        .map_err(|e| format!("Failed to derive key with new password: {}", e))?;
-    let new_nonce_bytes =
-        security::generate_nonce().map_err(|e| format!("Failed to generate nonce: {}", e))?;
-    let new_data = serde_json::to_string(&new_vault_data)
-        .map_err(|e| format!("Failed to serialize updated vault: {}", e))?;
-    let new_ciphertext =
-        security::encrypt_aes_gcm(&new_key, &new_nonce_bytes, &new_data.into_bytes())
-            .map_err(|e| format!("Failed to re-encrypt vault with new password: {}", e))?;
-
-    let payload = serde_json::json!({
-        "salt": base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &new_salt),
-        "nonce": base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &new_nonce_bytes),
-        "ciphertext": base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &new_ciphertext),
-        "version": "1"
-    });
-
-    atomic_write(&vault_path, payload.to_string().as_bytes())?;
-
-    println!("Master password changed successfully - vault re-encrypted with new password");
-    Ok(())
+/// Retorna `true` només si el contingut del fitxer descriu una autenticació per
+/// graella d'imatge del format actualment suportat (type == "image_grid" i
+/// versió == 5). Funció pura: no toca el sistema de fitxers ni el keyring.
+fn is_supported_grid_auth(content: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(content)
+        .ok()
+        .map(|metadata| {
+            metadata.get("type").and_then(serde_json::Value::as_str) == Some("image_grid")
+                && metadata.get("version").and_then(serde_json::Value::as_u64)
+                    == Some(IMAGE_GRID_FORMAT_VERSION)
+        })
+        .unwrap_or(false)
 }
 
 #[tauri::command]
 fn get_auth_info() -> Result<VaultInfo, String> {
     let path = grid_auth_path();
-    let exists = path.exists();
-    if exists {
-        let supported = std::fs::read_to_string(&path)
-            .ok()
-            .and_then(|content| serde_json::from_str::<serde_json::Value>(&content).ok())
-            .map(|metadata| {
-                metadata.get("type").and_then(serde_json::Value::as_str) == Some("image_grid")
-                    && metadata.get("version").and_then(serde_json::Value::as_u64) == Some(5)
-            })
+    let supported = path.exists()
+        && std::fs::read_to_string(&path)
+            .map(|content| is_supported_grid_auth(&content))
             .unwrap_or(false);
-        if !supported {
-            std::fs::remove_file(&path).map_err(|error| {
-                format!(
-                    "Failed to remove unsupported image authentication: {}",
-                    error
-                )
-            })?;
-            security::delete_os_secret(IMAGE_GRID_SERVICE, IMAGE_GRID_ACCOUNT)?;
-            return Ok(VaultInfo {
-                exists: false,
-                entry_count: 0,
-                folder_count: 0,
-                trash_count: 0,
-            });
-        }
-    }
 
+    // Nunca esborrem res al llegir la informació d'autenticació: un fitxer
+    // corrupte, tallat o d'una versió desconeguda no ha de destruir la graella
+    // ni el secret del keyring.
     Ok(VaultInfo {
-        exists: path.exists(),
+        exists: supported,
         entry_count: 0,
         folder_count: 0,
         trash_count: 0,
@@ -1193,7 +1084,8 @@ fn get_image_grid_auth() -> Result<Option<serde_json::Value>, String> {
     let data: serde_json::Value = serde_json::from_str(&content)
         .map_err(|error| format!("Failed to parse grid auth data: {}", error))?;
     if data.get("type").and_then(serde_json::Value::as_str) != Some("image_grid")
-        || data.get("version").and_then(serde_json::Value::as_u64) != Some(5)
+        || data.get("version").and_then(serde_json::Value::as_u64)
+            != Some(IMAGE_GRID_FORMAT_VERSION)
     {
         return Err("Unsupported image authentication format".to_string());
     }
@@ -1224,7 +1116,8 @@ async fn init_empty_grid_vault(
     let metadata: serde_json::Value = serde_json::from_str(&metadata_content)
         .map_err(|error| format!("Failed to parse image authentication: {}", error))?;
     if metadata.get("type").and_then(serde_json::Value::as_str) != Some("image_grid")
-        || metadata.get("version").and_then(serde_json::Value::as_u64) != Some(5)
+        || metadata.get("version").and_then(serde_json::Value::as_u64)
+            != Some(IMAGE_GRID_FORMAT_VERSION)
     {
         return Err("Unsupported image authentication format".to_string());
     }
@@ -1262,12 +1155,11 @@ fn change_vault_to_image_grid(
     let previous_auth = std::fs::read_to_string(&auth_path).ok();
     let content = std::fs::read_to_string(&vault_path)
         .map_err(|error| format!("Failed to read encrypted vault: {}", error))?;
-    let old_vault: VaultFile = serde_json::from_str(&content)
-        .map_err(|error| format!("Failed to parse encrypted vault: {}", error))?;
-    let old_salt = security::decode_hex_or_base64(&old_vault.salt, "salt")?;
+    let old_vault = parse_vault_file(&content)?;
+    let old_salt = security::decode_base64(&old_vault.salt, "salt")?;
     let old_key = security::derive_key_from_password(&current_password, &old_salt)?;
-    let old_nonce = security::decode_hex_or_base64(&old_vault.nonce, "nonce")?;
-    let old_ciphertext = security::decode_hex_or_base64(&old_vault.ciphertext, "ciphertext")?;
+    let old_nonce = security::decode_base64(&old_vault.nonce, "nonce")?;
+    let old_ciphertext = security::decode_base64(&old_vault.ciphertext, "ciphertext")?;
     let plaintext = security::decrypt_aes_gcm(&old_key, &old_nonce, &old_ciphertext)
         .map_err(|error| format!("Failed to decrypt existing vault: {}", error))?;
     let vault_data: VaultData = serde_json::from_slice(&plaintext)
@@ -1356,12 +1248,11 @@ fn change_vault_to_password(
     let auth_path = grid_auth_path();
     let old_content = std::fs::read_to_string(&vault_path)
         .map_err(|error| format!("Failed to read encrypted vault: {}", error))?;
-    let old_vault: VaultFile = serde_json::from_str(&old_content)
-        .map_err(|error| format!("Failed to parse encrypted vault: {}", error))?;
-    let old_salt = security::decode_hex_or_base64(&old_vault.salt, "salt")?;
+    let old_vault = parse_vault_file(&old_content)?;
+    let old_salt = security::decode_base64(&old_vault.salt, "salt")?;
     let old_key = security::derive_key_from_password(&current_password, &old_salt)?;
-    let old_nonce = security::decode_hex_or_base64(&old_vault.nonce, "nonce")?;
-    let old_ciphertext = security::decode_hex_or_base64(&old_vault.ciphertext, "ciphertext")?;
+    let old_nonce = security::decode_base64(&old_vault.nonce, "nonce")?;
+    let old_ciphertext = security::decode_base64(&old_vault.ciphertext, "ciphertext")?;
     let plaintext = security::decrypt_aes_gcm(&old_key, &old_nonce, &old_ciphertext)
         .map_err(|error| format!("Failed to decrypt existing vault: {}", error))?;
     let vault_data: VaultData = serde_json::from_slice(&plaintext)
@@ -1439,7 +1330,8 @@ fn unlock_vault_grid(
         .map_err(|e| format!("Failed to parse grid auth data: {}", e))?;
 
     if grid_auth.get("type").and_then(serde_json::Value::as_str) != Some("image_grid")
-        || grid_auth.get("version").and_then(serde_json::Value::as_u64) != Some(5)
+        || grid_auth.get("version").and_then(serde_json::Value::as_u64)
+            != Some(IMAGE_GRID_FORMAT_VERSION)
     {
         return Err("Unsupported image authentication format".to_string());
     }
@@ -1451,19 +1343,7 @@ fn unlock_vault_grid(
     unlock_vault(master_password, server_state)
 }
 
-#[tauri::command]
-#[allow(dead_code)]
-fn export_vault(path: String) -> Result<(), String> {
-    let _ = path;
-    Err("Legacy path-based export is disabled; use the frontend export flow".to_string())
-}
-
-#[tauri::command]
-#[allow(dead_code)]
-fn import_vault(path: String) -> Result<(), String> {
-    let _ = path;
-    Err("Legacy path-based import is disabled; use the frontend import flow".to_string())
-}
+// export_vault/import_vault path-based commands removed (dead code).
 
 #[cfg(test)]
 mod image_grid_tests {
@@ -1531,7 +1411,7 @@ mod image_grid_tests {
     }
 
     #[test]
-    fn image_grid_metadata_rejects_legacy_two_character_fragments() {
+    fn image_grid_metadata_rejects_short_two_character_fragments() {
         let values: Vec<String> = (0..25).map(|index| format!("{:02}", index)).collect();
 
         assert!(validate_image_grid("data:image/png;base64,AA==", &values).is_err());
@@ -1596,5 +1476,47 @@ mod sync_download_tests {
             decrypt_result.is_err(),
             "Decryption must fail when password does not match"
         );
+    }
+}
+
+#[cfg(test)]
+mod grid_auth_info_tests {
+    use super::is_supported_grid_auth;
+
+    #[test]
+    fn supported_grid_auth_is_recognized() {
+        assert!(is_supported_grid_auth(r#"{"type":"image_grid","version":5}"#));
+    }
+
+    #[test]
+    fn corrupt_json_is_not_supported() {
+        assert!(!is_supported_grid_auth("{ not valid json"));
+    }
+
+    #[test]
+    fn unknown_version_is_not_supported() {
+        assert!(!is_supported_grid_auth(r#"{"type":"image_grid","version":4}"#));
+    }
+
+    #[test]
+    fn wrong_type_is_not_supported() {
+        assert!(!is_supported_grid_auth(r#"{"type":"other","version":5}"#));
+    }
+
+    #[test]
+    fn missing_fields_are_not_supported() {
+        assert!(!is_supported_grid_auth(r#"{}"#));
+        assert!(!is_supported_grid_auth(r#"{"type":"image_grid"}"#));
+        assert!(!is_supported_grid_auth(r#"{"version":5}"#));
+    }
+
+    #[test]
+    fn get_auth_info_never_deletes_real_vault_file() {
+        // Crida la comanda de lectura sobre la ruta real. No ha de petar ni
+        // esborrar el fitxer (el codi d'esborrat s'ha eliminat).
+        let info = super::get_auth_info().expect("get_auth_info no ha de fallar");
+        assert_eq!(info.entry_count, 0);
+        assert_eq!(info.folder_count, 0);
+        assert_eq!(info.trash_count, 0);
     }
 }

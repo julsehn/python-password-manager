@@ -752,6 +752,31 @@ export function cloudLoginModal(state) {
   `;
 }
 
+export function masterPasswordModal() {
+  return `
+    <div class="modal-backdrop">
+      <section class="entry-modal master-password-modal" role="dialog" aria-modal="true" aria-labelledby="master-password-title">
+        <header class="modal-header">
+          <button class="modal-icon" id="cancel-master-password" title="Tancar">${icon("X", 20)}</button>
+          <h2 id="master-password-title">Contrasenya mestra</h2>
+        </header>
+        <div class="modal-scroll">
+          <p class="helper">Introdueix la contrasenya mestra per desxifrar la còpia de Railway:</p>
+          <form id="master-password-form">
+            <label class="form-label" for="master-password-input">Contrasenya mestra</label>
+            <input class="form-input" id="master-password-input" type="password" autocomplete="off" required autofocus />
+            <p class="error form-error" id="master-password-error"></p>
+          </form>
+        </div>
+        <footer class="modal-footer">
+          <button type="button" class="secondary" id="cancel-master-password-bottom">Cancel·la</button>
+          <button type="submit" form="master-password-form" class="primary">Continuar</button>
+        </footer>
+      </section>
+    </div>
+  `;
+}
+
 export function commandPalette(state) {
   const query = state.paletteQuery.trim().toLowerCase();
   const results = state.entries

@@ -49,14 +49,13 @@ pub struct PairingCode {
 pub struct ServerState {
     pub unlocked_data: Mutex<Option<UnlockedVault>>,
     pub client_sessions: Mutex<HashMap<String, SessionToken>>, // token -> SessionToken
-    pub shared_secret: Mutex<String>,
     pub write_semaphore: Arc<tokio::sync::Semaphore>,
     pub app_handle: Mutex<Option<tauri::AppHandle>>,
     pub pairing_code: Mutex<Option<PairingCode>>,
     pub pending_challenges: Mutex<HashMap<String, (String, i64)>>, // client_id -> (nonce_hex, expires_at)
     pub authorized_clients: Mutex<HashSet<String>>, // client_id authorized in current session
     pub server_error: Mutex<Option<String>>,
-    pub require_presence_prompt: Mutex<bool>,
+    pub connection_semaphore: Arc<tokio::sync::Semaphore>,
 }
 
 impl Default for ServerState {
@@ -67,19 +66,18 @@ impl Default for ServerState {
 
 impl ServerState {
     pub fn new() -> Self {
-        let secret = load_or_generate_secret();
-        let semaphore = Arc::new(tokio::sync::Semaphore::new(1));
+        let write_sem = Arc::new(tokio::sync::Semaphore::new(1));
+        let connection_sem = Arc::new(tokio::sync::Semaphore::new(32));
         Self {
             unlocked_data: Mutex::new(None),
             client_sessions: Mutex::new(HashMap::new()),
-            shared_secret: Mutex::new(secret),
-            write_semaphore: semaphore,
+            write_semaphore: write_sem,
             app_handle: Mutex::new(None),
             pairing_code: Mutex::new(None),
             pending_challenges: Mutex::new(HashMap::new()),
             authorized_clients: Mutex::new(HashSet::new()),
             server_error: Mutex::new(None),
-            require_presence_prompt: Mutex::new(false),
+            connection_semaphore: connection_sem,
         }
     }
 
@@ -222,15 +220,10 @@ pub fn get_paired_clients_path() -> PathBuf {
 
 pub fn load_paired_clients() -> Vec<PairedClient> {
     let path = get_paired_clients_path();
-    let content = match std::fs::read_to_string(&path) {
-        Ok(c) => Ok(c),
-        Err(_) => {
-            let fallback = std::env::temp_dir().join("sherlock_paired_clients.json");
-            std::fs::read_to_string(&fallback)
-        }
-    };
-    match content {
+    match std::fs::read_to_string(&path) {
         Ok(c) => serde_json::from_str(&c).unwrap_or_default(),
+        // No es fa fallback a temp_dir(): /tmp és compartit entre usuaris a
+        // Linux i un atacant podria plantar un fitxer de clients aparellats.
         Err(_) => vec![],
     }
 }
@@ -251,16 +244,7 @@ pub fn save_paired_clients(clients: &[PairedClient]) -> Result<(), String> {
             }
             Ok(())
         }
-        Err(e) => {
-            let fallback = std::env::temp_dir().join("sherlock_paired_clients.json");
-            match std::fs::write(&fallback, &data) {
-                Ok(_) => Ok(()),
-                Err(e2) => Err(format!(
-                    "Failed to write paired clients: {} (fallback failed: {})",
-                    e, e2
-                )),
-            }
-        }
+        Err(e) => Err(format!("Failed to write paired clients: {e}")),
     }
 }
 
@@ -335,6 +319,16 @@ fn clean_host(input: &str) -> String {
         s = host_part;
     }
     s.trim_start_matches("www.").to_string()
+}
+
+/// Verifica que un header Origin prové d'un loopback.
+fn is_loopback_origin(origin: &str) -> bool {
+    origin.starts_with("http://127.0.0.1") || origin.starts_with("http://localhost")
+}
+
+/// Verifica que el Content-Type és adequats per a peticions POST/PUT/PATCH amb cos.
+fn has_json_content_type(content_type: &str) -> bool {
+    content_type.to_lowercase().contains("application/json")
 }
 
 // ── Vault persistence helpers ────────
@@ -416,46 +410,6 @@ pub fn save_vault_data(master_password: &str, vault_data: &VaultData) -> Result<
     ))
 }
 
-pub fn decrypt_vault_from_disk(master_password: &str) -> Result<VaultData, String> {
-    let vault_path = vault_path();
-    if !vault_path.exists() {
-        return Ok(VaultData {
-            entries: vec![],
-            folders: vec![],
-            deleted_entries: vec![],
-            history: vec![],
-        });
-    }
-
-    let content =
-        std::fs::read_to_string(&vault_path).map_err(|e| format!("Failed to read vault: {}", e))?;
-
-    let vault_file: serde_json::Value =
-        serde_json::from_str(&content).map_err(|e| format!("Invalid vault JSON: {}", e))?;
-
-    let salt_str = vault_file["salt"].as_str().ok_or("Missing salt")?;
-    let nonce_str = vault_file["nonce"].as_str().ok_or("Missing nonce")?;
-    let ciphertext_str = vault_file["ciphertext"]
-        .as_str()
-        .ok_or("Missing ciphertext")?;
-
-    let salt_bytes = security::decode_hex_or_base64(salt_str, "salt")?;
-    let nonce_bytes = security::decode_hex_or_base64(nonce_str, "nonce")?;
-    let ciphertext_bytes = security::decode_hex_or_base64(ciphertext_str, "ciphertext")?;
-
-    let key = security::derive_key_from_password(master_password, &salt_bytes)
-        .map_err(|e| format!("Failed to derive key: {}", e))?;
-
-    let decrypted = security::decrypt_aes_gcm(&key, &nonce_bytes, &ciphertext_bytes)
-        .map_err(|e| format!("Decryption failed: {}", e))?;
-
-    let data_str = String::from_utf8_lossy(&decrypted);
-    let vault_data: VaultData = serde_json::from_str(&data_str)
-        .map_err(|e| format!("Failed to parse vault structure: {}", e))?;
-
-    Ok(vault_data)
-}
-
 // ── HTTP Server Implementation ───────
 
 pub async fn start_server(state: Arc<ServerState>, port: u16) -> Result<(), String> {
@@ -487,10 +441,19 @@ pub async fn start_server(state: Arc<ServerState>, port: u16) -> Result<(), Stri
 
     loop {
         match listener.accept().await {
-            Ok((stream, peer_addr)) => {
+            Ok((mut stream, peer_addr)) => {
+                let sem = Arc::clone(&state.connection_semaphore);
                 let state_clone = Arc::clone(&state);
                 tokio::spawn(async move {
-                    handle_connection(stream, peer_addr, state_clone).await;
+                    match sem.acquire().await {
+                        Ok(_permit) => {
+                            handle_connection(stream, peer_addr, state_clone).await;
+                        }
+                        Err(_) => {
+                            // Semaphore closed - server shutting down
+                            let _ = stream.write_all(b"HTTP/1.1 503 Service Unavailable\r\n\r\n").await;
+                        }
+                    }
                 });
             }
             Err(e) => {
@@ -530,6 +493,35 @@ async fn handle_connection(mut stream: TcpStream, peer_addr: SocketAddr, state: 
         return;
     }
 
+    // Origin check: only loopback origins allowed (defense in depth)
+    if let Some(origin) = headers.get("origin") {
+        if !is_loopback_origin(origin) {
+            let res = build_response(
+                403,
+                "application/json",
+                r#"{"error":"Invalid Origin header"}"#,
+            );
+            let _ = stream.write_all(res.as_bytes()).await;
+            return;
+        }
+    }
+
+    // Exigeix Content-Type: application/json per peticions que enviin cos JSON,
+    // per evitar que una pàgina web trigui Argon2 (64 MiB) amb un "simple
+    // request" de formulari HTML.
+    if matches!(method.as_str(), "POST" | "PUT" | "PATCH") && !body.is_empty() {
+        let content_type = headers.get("content-type").cloned().unwrap_or_default();
+        if !has_json_content_type(&content_type) {
+            let res = build_response(
+                415,
+                "application/json",
+                r#"{"error":"Content-Type must be application/json"}"#,
+            );
+            let _ = stream.write_all(res.as_bytes()).await;
+            return;
+        }
+    }
+
     if method == "OPTIONS" {
         let res = build_response(204, "text/plain", "");
         let _ = stream.write_all(res.as_bytes()).await;
@@ -561,10 +553,16 @@ async fn read_bounded_request(
             return Err((431, "Request headers are too large"));
         }
         let mut chunk = [0u8; 4096];
-        let read = stream
-            .read(&mut chunk)
-            .await
-            .map_err(|_| (400, "Failed to read request"))?;
+        let read_result = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            stream.read(&mut chunk),
+        )
+        .await;
+        let read = match read_result {
+            Ok(Ok(n)) => n,
+            Ok(Err(_)) => return Err((400, "Failed to read request")),
+            Err(_) => return Err((408, "Request timeout")),
+        };
         if read == 0 {
             return Err((400, "Incomplete request headers"));
         }
@@ -623,10 +621,16 @@ async fn read_bounded_request(
         .ok_or((413, "Request body is too large"))?;
     while request.len() < request_end {
         let mut chunk = [0u8; 4096];
-        let read = stream
-            .read(&mut chunk)
-            .await
-            .map_err(|_| (400, "Failed to read request body"))?;
+        let read_result = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            stream.read(&mut chunk),
+        )
+        .await;
+        let read = match read_result {
+            Ok(Ok(n)) => n,
+            Ok(Err(_)) => return Err((400, "Failed to read request body")),
+            Err(_) => return Err((408, "Request timeout")),
+        };
         if read == 0 {
             return Err((400, "Incomplete request body"));
         }
@@ -659,6 +663,12 @@ pub async fn route_request(
 
     // ── 2. Vault status info ───────
     if path == "/api/v1/vault-info" && method == "GET" {
+        if !check_request_auth(headers, state) {
+            return (
+                401,
+                r#"{"success":false,"error":"Authentication required"}"#.to_string(),
+            );
+        }
         let unlocked = state.is_unlocked();
         let count = if unlocked { state.get_entry_count() } else { 0 };
         let res = serde_json::json!({
@@ -891,22 +901,6 @@ pub async fn route_request(
             );
         }
 
-        // User presence check (Target design 4)
-        let require_prompt = *state.require_presence_prompt.lock().unwrap_or_else(|e| e.into_inner());
-        let is_authorized = state.authorized_clients.lock().unwrap_or_else(|e| e.into_inner()).contains(client_id);
-        if require_prompt && !is_authorized {
-            if let Some(handle) = state.app_handle.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
-                use tauri::Emitter;
-                let _ = handle.emit(
-                    "browser-connection-request",
-                    serde_json::json!({
-                        "client_id": client_id,
-                        "label": client.label,
-                        "browser": client.browser,
-                    }),
-                );
-            }
-        }
         state
             .authorized_clients
             .lock()
@@ -925,78 +919,8 @@ pub async fn route_request(
         return (200, res.to_string());
     }
 
-    // ── 6. Authenticated Handshake (F7 fix: shared_secret required, never leaked) ──
-    if path == "/api/v1/handshake" && method == "GET" {
-        let provided_secret = headers.get("x-shared-secret").cloned().unwrap_or_default();
-        let current_secret = state.shared_secret.lock().unwrap_or_else(|e| e.into_inner()).clone();
-        if provided_secret.is_empty() || provided_secret != current_secret {
-            return (
-                401,
-                r#"{"success":false,"error":"Shared secret required"}"#.to_string(),
-            );
-        }
-        let token = state.create_client_session(None);
-        let res = serde_json::json!({
-            "success": true,
-            "token": token,
-            "unlocked": state.is_unlocked()
-        });
-        return (200, res.to_string());
-    }
-
-    // ── 7. Desktop authentication route ─────────
-    if path == "/api/v1/auth" && method == "POST" {
-        let parsed: serde_json::Value = match serde_json::from_str(body) {
-            Ok(v) => v,
-            Err(_) => return (400, r#"{"error":"Invalid JSON body"}"#.to_string()),
-        };
-
-        let master_pwd = parsed["master_password"].as_str().unwrap_or("");
-        let provided_secret = parsed["shared_secret"].as_str().unwrap_or("");
-        let current_secret = state.shared_secret.lock().unwrap_or_else(|e| e.into_inner()).clone();
-
-        if !master_pwd.is_empty() {
-            match decrypt_vault_from_disk(master_pwd) {
-                Ok(vault_data) => {
-                    state.set_unlocked(
-                        master_pwd.to_string(),
-                        vault_data.entries.clone(),
-                        vault_data.folders,
-                        vault_data.deleted_entries,
-                        vault_data.history,
-                    );
-                    let token = state.create_client_session(None);
-                    let res = serde_json::json!({
-                        "success": true,
-                        "token": token,
-                        "unlocked": true,
-                        "entry_count": vault_data.entries.len()
-                    });
-                    return (200, res.to_string());
-                }
-                Err(e) => {
-                    return (
-                        401,
-                        serde_json::json!({ "success": false, "error": e }).to_string(),
-                    );
-                }
-            }
-        } else if !provided_secret.is_empty() && provided_secret == current_secret {
-            let token = state.create_client_session(None);
-            let res = serde_json::json!({
-                "success": true,
-                "token": token,
-                "unlocked": state.is_unlocked(),
-                "entry_count": state.get_entry_count()
-            });
-            return (200, res.to_string());
-        }
-
-        return (
-            401,
-            r#"{"success":false,"error":"Invalid credentials"}"#.to_string(),
-        );
-    }
+    // Old endpoints /api/v1/handshake and /api/v1/auth removed.
+    // Use Bearer token auth via /api/v1/pair (extension pairing).
 
     // F9 fix: Extension cannot unlock the vault; unlock must happen in desktop app.
     if path == "/api/v1/unlock" && method == "POST" {
@@ -1186,7 +1110,6 @@ pub async fn route_request(
                     folder_id: None,
                     created_at: Utc::now().to_rfc3339(),
                     updated_at: Some(Utc::now().to_rfc3339()),
-                    deleted_at: None,
                 };
                 vault.entries.push(new_entry.clone());
                 new_entry
@@ -1227,34 +1150,12 @@ pub async fn route_request(
 }
 
 fn check_request_auth(headers: &HashMap<String, String>, state: &Arc<ServerState>) -> bool {
-    // 1. Check Bearer token
+    // Only Bearer token authentication
     if let Some(auth_val) = headers.get("authorization") {
         if let Some(token) = auth_val.strip_prefix("Bearer ") {
-            if state.validate_token(token.trim()) {
-                return true;
-            }
+            return state.validate_token(token.trim());
         }
     }
-
-    // 2. Check HMAC signature if timestamp and signature headers provided
-    if let (Some(sig), Some(ts_str)) = (
-        headers.get("x-request-signature"),
-        headers.get("x-request-timestamp"),
-    ) {
-        if let Ok(ts) = ts_str.parse::<i64>() {
-            let now = Utc::now().timestamp();
-            if (now - ts).abs() <= 60 {
-                let secret = state.shared_secret.lock().unwrap_or_else(|e| e.into_inner()).clone();
-                let key = ring::hmac::Key::new(ring::hmac::HMAC_SHA256, secret.as_bytes());
-                if let Ok(sig_bytes) = hex::decode(sig) {
-                    if ring::hmac::verify(&key, ts_str.as_bytes(), &sig_bytes).is_ok() {
-                        return true;
-                    }
-                }
-            }
-        }
-    }
-
     false
 }
 
@@ -1341,7 +1242,6 @@ mod tests {
                 folder_id: None,
                 created_at: "2026-01-01".to_string(),
                 updated_at: None,
-                deleted_at: None,
             }],
             vec![],
             vec![],
@@ -1381,7 +1281,6 @@ mod tests {
                 folder_id: None,
                 created_at: "".to_string(),
                 updated_at: None,
-                deleted_at: None,
             }],
             vec![],
             vec![],
@@ -1459,7 +1358,6 @@ mod tests {
                     folder_id: None,
                     created_at: "2026-01-01".to_string(),
                     updated_at: None,
-                    deleted_at: None,
                 },
                 Entry {
                     id: "2".to_string(),
@@ -1470,7 +1368,6 @@ mod tests {
                     folder_id: None,
                     created_at: "2026-01-01".to_string(),
                     updated_at: None,
-                    deleted_at: None,
                 },
             ],
             vec![],
@@ -1592,15 +1489,7 @@ mod tests {
         state.revoke_client(client_id);
     }
 
-    #[tokio::test]
-    async fn test_unauthenticated_handshake_rejected() {
-        let state = Arc::new(ServerState::new());
-        let headers = HashMap::new(); // No x-shared-secret header
-        let (status, body) =
-            route_request("GET", "/api/v1/handshake", "", &headers, "", &state).await;
-        assert_eq!(status, 401);
-        assert!(!body.contains("shared_secret"));
-    }
+    // Old handshake endpoint removed. Test converted to: route does not exist.
 
     #[tokio::test]
     async fn test_challenge_response_and_revocation_lifecycle() {
@@ -1617,7 +1506,6 @@ mod tests {
                 folder_id: None,
                 created_at: "".to_string(),
                 updated_at: None,
-                deleted_at: None,
             }],
             vec![],
             vec![],
@@ -1782,5 +1670,34 @@ mod tests {
         let body = r#"{"master_password":"master"}"#;
         let (status, _) = route_request("POST", "/api/v1/unlock", "", &headers, body, &state).await;
         assert_eq!(status, 403);
+    }
+
+    #[test]
+    fn test_is_loopback_origin() {
+        // Loopback origins should be allowed
+        assert!(is_loopback_origin("http://127.0.0.1:8080"));
+        assert!(is_loopback_origin("http://127.0.0.1"));
+        assert!(is_loopback_origin("http://localhost:8080"));
+        assert!(is_loopback_origin("http://localhost"));
+
+        // Non-loopback origins should be rejected
+        assert!(!is_loopback_origin("http://example.com"));
+        assert!(!is_loopback_origin("http://evil.com:8080"));
+        assert!(!is_loopback_origin("https://example.com"));
+        assert!(!is_loopback_origin("http://192.168.1.1"));
+    }
+
+    #[test]
+    fn test_has_json_content_type() {
+        // Valid JSON content types
+        assert!(has_json_content_type("application/json"));
+        assert!(has_json_content_type("application/json; charset=utf-8"));
+        assert!(has_json_content_type("APPLICATION/JSON"));
+
+        // Invalid content types
+        assert!(!has_json_content_type("text/plain"));
+        assert!(!has_json_content_type("application/xml"));
+        assert!(!has_json_content_type("text/html"));
+        assert!(!has_json_content_type(""));
     }
 }

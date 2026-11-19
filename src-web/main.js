@@ -8,13 +8,16 @@ import {
   appendMarkup,
   formatDate,
   parseEntryNotes,
+  mapVaultEntry,
   isTauriRuntime,
+  pairingSecondsRemaining,
 } from "./utils.js";
 import {
   normalizeImportedEntries,
   normalizeImportedFolders,
   parseCsv,
 } from "./importers.js";
+import { EFF_WORDLIST } from "./wordlist-eff.js";
 import {
   createIcons,
   Search,
@@ -224,6 +227,8 @@ const state = {
   cloudLoading: false,
   cloudError: "",
   cloudTab: "login",
+  showDownloadPassword: false,
+  downloadPassword: "",
   cloudActionContext: "settings",
   cloudShowAdvanced: false,
   cloudUsernameChecking: false,
@@ -297,6 +302,12 @@ function resetAutoLock() {
 async function lockVault() {
   if (state.locked) return;
   clearTimeout(autoLockTimer);
+  clearTimeout(clipboardCleanupTimer);
+  try {
+    await navigator.clipboard.writeText("");
+  } catch (e) {
+    // Failed to clear clipboard; silently give up
+  }
   stopBrowserPairingTimers();
   state.browserPairingCode = "";
   try {
@@ -376,8 +387,10 @@ async function checkUsernameAvailability() {
   const username = document.querySelector("#auth-username")?.value.trim() || "";
   if (username.length < 3) return;
 
-  const customUrl = document.querySelector("#cloud-railway-url")?.value.trim() || "";
-  const baseUrl = customUrl || "https://password-manager-cloud-production.up.railway.app";
+  const customUrl =
+    document.querySelector("#cloud-railway-url")?.value.trim() || "";
+  const baseUrl =
+    customUrl || "https://password-manager-cloud-production.up.railway.app";
 
   state.cloudUsernameChecking = true;
   state.cloudUsernameAvailable = null;
@@ -385,7 +398,9 @@ async function checkUsernameAvailability() {
   render();
 
   try {
-    const res = await fetch(`${baseUrl}/v1/auth/check-username/${encodeURIComponent(username)}`);
+    const res = await fetch(
+      `${baseUrl}/v1/auth/check-username/${encodeURIComponent(username)}`,
+    );
     const data = await res.json();
     state.cloudUsernameAvailable = data.available === true;
     if (!data.available) {
@@ -545,12 +560,7 @@ async function cloudAuthSubmit(event) {
       });
 
       const vault = JSON.parse(serialized);
-      state.entries = (vault.entries || []).map((entry) => ({
-        ...entry,
-        folderId: entry.folder_id || null,
-        createdAt: entry.created_at,
-        updatedAt: entry.updated_at,
-      }));
+      state.entries = (vault.entries || []).map(mapVaultEntry);
       state.folders = vault.folders || [];
       state.trash = (vault.deleted_entries || []).map((entry) => ({
         ...entry,
@@ -631,19 +641,29 @@ async function handleCloudDownloadNow() {
     return;
   }
 
-  let masterPassword = null;
   if (state.locked) {
-    masterPassword = prompt(
-      "Introdueix la contrasenya mestra per desxifrar la còpia de Railway:",
-    );
-    if (!masterPassword) return;
+    state.showDownloadPassword = true;
+    state.downloadPassword = "";
+    state.cloudError = "";
+    render();
+    return;
   }
 
-  if (
-    !confirm(
-      "Això sincronitzarà les dades locals amb la còpia de Railway. Vols continuar?",
-    )
-  ) {
+  if (!confirmDownload()) {
+    return;
+  }
+
+  await downloadVaultFromCloud(null);
+}
+
+function confirmDownload() {
+  return confirm(
+    "Això sincronitzarà les dades locals amb la còpia de Railway. Vols continuar?",
+  );
+}
+
+async function downloadVaultFromCloud(masterPassword) {
+  if (!confirmDownload()) {
     return;
   }
 
@@ -656,12 +676,7 @@ async function handleCloudDownloadNow() {
       config: rustCloudConfig(state.cloudConfig),
     });
     const vault = JSON.parse(serialized);
-    state.entries = (vault.entries || []).map((entry) => ({
-      ...entry,
-      folderId: entry.folder_id || null,
-      createdAt: entry.created_at,
-      updatedAt: entry.updated_at,
-    }));
+    state.entries = (vault.entries || []).map(mapVaultEntry);
     state.folders = vault.folders || [];
     state.trash = (vault.deleted_entries || []).map((entry) => ({
       ...entry,
@@ -938,7 +953,7 @@ function sidebarComponent() {
         <span>SherLock</span>
       </div>
       <div class="folders-heading">
-        <p class="side-label">LA TEVA ORGANITZACIÓ</p>
+        <p class="side-label">Les teves carpetes</p>
         <div>
           <button class="folder-control" id="new-folder" title="Afegir carpeta">${icon("Plus", 16)}</button>
           <button class="folder-control" id="edit-folder" title="Editar la carpeta seleccionada" ${state.activeFolderId ? "" : "disabled"}>${icon("Pencil", 15)}</button>
@@ -1123,6 +1138,39 @@ function lockScreen() {
     ${state.showGridUnlock ? imageAuthUnlockModal() : ""}
     ${state.showChangeAuthModal ? changeAuthMethodModal() : ""}
     ${state.showCloudLogin ? cloudLoginModal() : ""}
+    ${state.showDownloadPassword ? downloadPasswordModal() : ""}
+  `;
+}
+
+function downloadPasswordModal() {
+  return `
+    <div class="modal-backdrop">
+      <section class="entry-modal master-password-modal" role="dialog" aria-modal="true" aria-labelledby="download-password-title">
+        <header class="modal-header">
+          <button class="modal-icon" id="cancel-download-password" title="Tancar">${icon("X", 20)}</button>
+          <h2 id="download-password-title">Contrasenya mestra</h2>
+        </header>
+        <div class="modal-scroll">
+          <p class="helper">Introdueix la contrasenya mestra per desxifrar la còpia de Railway:</p>
+          <form id="download-password-form">
+            <label class="form-label" for="download-password-input">Contrasenya mestra</label>
+            <input
+              class="form-input"
+              id="download-password-input"
+              type="password"
+              autocomplete="off"
+              required
+              autofocus
+            />
+            <p class="error form-error" id="download-password-error"></p>
+          </form>
+        </div>
+        <footer class="modal-footer">
+          <button type="button" class="secondary" id="cancel-download-password-bottom">Cancel·la</button>
+          <button type="submit" form="download-password-form" class="primary">Continuar</button>
+        </footer>
+      </section>
+    </div>
   `;
 }
 
@@ -1618,14 +1666,10 @@ function settingsScreen() {
             state.browserPairingCode
               ? `
             <div class="cloud-status-card browser-pairing-code" role="status">
-              <strong>${escapeHtml(state.browserPairingCode)}</strong>
+              <strong class="pairing-code-value">${escapeHtml(state.browserPairingCode)}</strong>
               <small>
                 Introdueix aquest codi a l'extensió.
-                ${
-                  state.browserPairingExpiresAt
-                    ? ` Temps restant: ${Math.max(0, Math.floor((state.browserPairingExpiresAt - Date.now()) / 1000))} s.`
-                    : ""
-                }
+                Temps restant: <span data-pairing-remaining>${pairingSecondsRemaining(state.browserPairingExpiresAt)}</span> s.
               </small>
             </div>
           `
@@ -1810,7 +1854,8 @@ function startBrowserPairingMonitoring() {
     try {
       state.pairedBrowsers = await invoke("list_paired_clients");
     } catch {
-      state.pairedBrowsers = [];
+      // Keep previous state on error; don't reset to empty array
+      return;
     }
     if (state.pairedBrowsers.length > prevCount) {
       stopBrowserPairingTimers();
@@ -1831,13 +1876,12 @@ function startBrowserPairingMonitoring() {
       render();
     } else {
       // Update countdown display without full render
-      const pairingCodeEl = document.querySelector(".browser-pairing-code");
-      if (pairingCodeEl) {
-        const remaining = Math.max(
-          0,
-          Math.floor((state.browserPairingExpiresAt - Date.now()) / 1000),
+      const remainingEl = document.querySelector("[data-pairing-remaining]");
+      if (remainingEl) {
+        const remaining = pairingSecondsRemaining(
+          state.browserPairingExpiresAt,
         );
-        pairingCodeEl.textContent = `Temp restant: ${remaining} s.`;
+        remainingEl.textContent = remaining;
       }
     }
   }, 1000);
@@ -2276,13 +2320,17 @@ function cloudLoginModal() {
                   autofocus
                   style="${activeTab === "register" && state.cloudUsernameAvailable === false ? "border-color:var(--color-danger,#dc2626);" : activeTab === "register" && state.cloudUsernameAvailable === true ? "border-color:var(--color-success,#16a34a);" : ""}"
                 />
-                ${activeTab === "register" && state.cloudUsernameChecking
-                  ? `<span style="position:absolute;right:10px;top:50%;transform:translateY(-50%);font-size:12px;color:var(--color-muted);">${icon("Loader", 14)} Verificant...</span>`
-                  : activeTab === "register" && state.cloudUsernameAvailable === true
-                    ? `<span style="position:absolute;right:10px;top:50%;transform:translateY(-50%);font-size:12px;color:var(--color-success,#16a34a);">${icon("Check", 14)} Disponible</span>`
-                    : activeTab === "register" && state.cloudUsernameAvailable === false
-                      ? `<span style="position:absolute;right:10px;top:50%;transform:translateY(-50%);font-size:12px;color:var(--color-danger,#dc2626);">${icon("X", 14)} No disponible</span>`
-                      : ""}
+                ${
+                  activeTab === "register" && state.cloudUsernameChecking
+                    ? `<span style="position:absolute;right:10px;top:50%;transform:translateY(-50%);font-size:12px;color:var(--color-muted);">${icon("Loader", 14)} Verificant...</span>`
+                    : activeTab === "register" &&
+                        state.cloudUsernameAvailable === true
+                      ? `<span style="position:absolute;right:10px;top:50%;transform:translateY(-50%);font-size:12px;color:var(--color-success,#16a34a);">${icon("Check", 14)} Disponible</span>`
+                      : activeTab === "register" &&
+                          state.cloudUsernameAvailable === false
+                        ? `<span style="position:absolute;right:10px;top:50%;transform:translateY(-50%);font-size:12px;color:var(--color-danger,#dc2626);">${icon("X", 14)} No disponible</span>`
+                        : ""
+                }
               </div>
             </div>
 
@@ -2534,11 +2582,16 @@ function passwordOptions() {
 }
 
 function passphraseOptions() {
-  const maxWords = Math.max(3, Math.min(20, passphraseWordPool().length));
+  const minWords = 5;
+  const maxWords = 12;
+  const wordCount = Math.min(
+    maxWords,
+    Math.max(minWords, state.generatorOptions.words || 6),
+  );
   return `
     <label>
       Nombre de paraules
-      <input id="generator-words" type="number" min="3" max="${maxWords}" value="${Math.min(state.generatorOptions.words, maxWords)}" />
+      <input id="generator-words" type="number" min="5" max="${maxWords}" value="${wordCount}" />
     </label>
     <label>
       Separador
@@ -2560,7 +2613,7 @@ function passphraseOptions() {
       <input data-option="onlyUnaccented" type="checkbox" ${state.generatorOptions.onlyUnaccented ? "checked" : ""} />
       Només paraules sense accents
     </label>
-    <small class="helper">Cada paraula apareix una sola vegada.</small>
+    <small class="helper">Les paraules s'escollen de la llista EFF (anglès) i poden repetir-se.</small>
   `;
 }
 
@@ -2714,23 +2767,6 @@ function formatGeneratorWord(word) {
   return state.generatorOptions.removeAccents ? withoutAccents(word) : word;
 }
 
-function passphraseWordPool() {
-  const seen = new Set();
-  return generatorWords().reduce((pool, word) => {
-    const formatted = formatGeneratorWord(word);
-    const displayWord =
-      state.generatorOptions.uppercaseWords === false
-        ? formatted
-        : formatted.charAt(0).toUpperCase() + formatted.slice(1);
-    const key = displayWord.normalize("NFC").toLocaleLowerCase();
-    if (!seen.has(key)) {
-      seen.add(key);
-      pool.push(displayWord);
-    }
-    return pool;
-  }, []);
-}
-
 function generateValue() {
   if (state.generatorType === "password") {
     const characterSets = [
@@ -2757,16 +2793,16 @@ function generateValue() {
     return characters.join("");
   }
   if (state.generatorType === "passphrase") {
-    const words = passphraseWordPool();
-    for (let index = words.length - 1; index > 0; index -= 1) {
-      const swapIndex = secureRandomIndex(index + 1);
-      [words[index], words[swapIndex]] = [words[swapIndex], words[index]];
-    }
-    const wordCount = Math.min(state.generatorOptions.words, words.length);
+    const wordCount = Math.min(
+      12,
+      Math.max(5, Number(state.generatorOptions.words) || 6),
+    );
     state.generatorOptions.words = wordCount;
-    const value = words
-      .slice(0, wordCount)
-      .join(state.generatorOptions.separator);
+    const words = [];
+    for (let index = 0; index < wordCount; index += 1) {
+      words.push(EFF_WORDLIST[secureRandomIndex(EFF_WORDLIST.length)]);
+    }
+    const value = words.join(state.generatorOptions.separator);
     return state.generatorOptions.includeNumber
       ? `${value}${secureRandomIndex(10)}`
       : value;
@@ -2784,12 +2820,12 @@ function updateGeneratorOptions(event) {
   if (event.target.id === "generator-length")
     state.generatorOptions.length = Math.min(
       128,
-      Math.max(5, Number(event.target.value) || 20),
+      Math.max(8, Number(event.target.value) || 20),
     );
   if (event.target.id === "generator-words")
     state.generatorOptions.words = Math.min(
-      Math.max(3, Math.min(20, passphraseWordPool().length)),
-      Math.max(3, Number(event.target.value) || 6),
+      12,
+      Math.max(5, Number(event.target.value) || 6),
     );
   if (event.target.id === "generator-separator")
     state.generatorOptions.separator = event.target.value;
@@ -2815,6 +2851,8 @@ async function copyGenerated() {
   }
 }
 
+let clipboardCleanupTimer = null;
+
 async function copySensitiveText(value, successMessage, button = null) {
   try {
     await navigator.clipboard.writeText(value);
@@ -2823,12 +2861,29 @@ async function copySensitiveText(value, successMessage, button = null) {
     return false;
   }
 
+  clearTimeout(clipboardCleanupTimer);
+  clipboardCleanupTimer = setTimeout(async () => {
+    try {
+      const current = await navigator.clipboard.readText();
+      if (current === value) {
+        await navigator.clipboard.writeText("");
+      }
+    } catch (e) {
+      // readText not available; try clearing anyway
+      try {
+        await navigator.clipboard.writeText("");
+      } catch (clearError) {
+        // Failed to clear; silently give up
+      }
+    }
+  }, 30_000);
+
   const feedbackTarget = button?.id
     ? `#${CSS.escape(button.id)}`
     : button?.dataset.copy
       ? `[data-copy="${CSS.escape(button.dataset.copy)}"]`
       : null;
-  showToast(successMessage);
+  showToast(successMessage + " S'esborrarà del portapapers en 30 s.");
   const feedbackButton = feedbackTarget
     ? document.querySelector(feedbackTarget)
     : null;
@@ -2942,12 +2997,7 @@ async function unlock(event) {
     masterPassword = "";
     if (input) input.value = "";
     document.querySelector("#master-password")?.setAttribute("value", "");
-    state.entries = (result.entries || []).map((entry) => ({
-      ...entry,
-      folderId: entry.folder_id || entry.folderId || null,
-      createdAt: entry.created_at || entry.createdAt,
-      updatedAt: entry.updated_at || entry.updatedAt || null,
-    }));
+    state.entries = (result.entries || []).map(mapVaultEntry);
     state.history = result.history || [];
     state.trash = result.trash || [];
     state.folders = result.folders || [];
@@ -3001,7 +3051,6 @@ async function saveVault(syncToRailway = false, backupExisting = false) {
     folder_id: e.folderId || null,
     created_at: e.createdAt,
     updated_at: e.updatedAt || null,
-    deleted_at: null,
   }));
 
   const folders = state.folders.map((f) => ({
@@ -3499,7 +3548,6 @@ function bindEvents() {
         state.gridSetupError = "";
         state.imageAuthImage = "";
         imageAuthRenderSource = "";
-        localStorage.removeItem("image_auth_image");
         render();
       }
     });
@@ -3618,12 +3666,7 @@ function bindEvents() {
             selectedCells: state.imageGridPattern,
             imageData: state.imageAuthImage,
           });
-          state.entries = (result.entries || []).map((entry) => ({
-            ...entry,
-            folderId: entry.folder_id || entry.folderId || null,
-            createdAt: entry.created_at || entry.createdAt,
-            updatedAt: entry.updated_at || entry.updatedAt || null,
-          }));
+          state.entries = (result.entries || []).map(mapVaultEntry);
           state.history = result.history || [];
           state.trash = (result.trash || []).map((entry) => ({
             ...entry,
@@ -3641,7 +3684,6 @@ function bindEvents() {
             selectedCells: state.imageGridPattern,
           });
         }
-        localStorage.removeItem("image_auth_image");
         state.imageGridConfigured = true;
         state.locked = false;
         state.changingAuthMethod = false;
@@ -3668,7 +3710,6 @@ function bindEvents() {
       state.changingAuthMethod = false;
       imageAuthRenderSource = "";
       if (!returningToChangeAuth) {
-        localStorage.removeItem("image_auth_image");
       }
       render();
     });
@@ -3799,12 +3840,7 @@ function bindEvents() {
         const result = await invoke("unlock_vault_grid", {
           pattern: selectedCells.slice(),
         });
-        state.entries = (result.entries || []).map((entry) => ({
-          ...entry,
-          folderId: entry.folder_id || null,
-          createdAt: entry.created_at || entry.createdAt,
-          updatedAt: entry.updated_at || entry.updatedAt || null,
-        }));
+        state.entries = (result.entries || []).map(mapVaultEntry);
         state.history = result.history || [];
         state.trash = result.trash || [];
         state.folders = result.folders || [];
@@ -4102,7 +4138,6 @@ function bindEvents() {
         state.showChangeAuthModal = false;
         state.changeAuthError = "";
         state.changeAuthSelected = "password";
-        localStorage.removeItem("image_auth_image");
         showToast("Mètode d'autenticació canviat a contrasenya.");
         render();
       } catch (error) {
@@ -4180,6 +4215,46 @@ function bindEvents() {
   document
     .querySelector("#cloud-login-form")
     ?.addEventListener("submit", cloudAuthSubmit);
+
+  document
+    .querySelector("#download-password-form")
+    ?.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const input = document.querySelector("#download-password-input");
+      if (!input) return;
+
+      const password = input.value;
+      if (!password) {
+        document
+          .querySelector("#download-password-error")
+          ?.insertAdjacentHTML("beforeend", "<p>Contrasenya necessària</p>");
+        return;
+      }
+
+      state.showDownloadPassword = false;
+      state.downloadPassword = "";
+      render();
+
+      await downloadVaultFromCloud(password);
+    });
+
+  document
+    .querySelector("#cancel-download-password-bottom")
+    ?.addEventListener("click", () => {
+      state.showDownloadPassword = false;
+      state.downloadPassword = "";
+      state.cloudError = "";
+      render();
+    });
+
+  document
+    .querySelector("#cancel-download-password")
+    ?.addEventListener("click", () => {
+      state.showDownloadPassword = false;
+      state.downloadPassword = "";
+      state.cloudError = "";
+      render();
+    });
 
   document.querySelector("#tab-cloud-login")?.addEventListener("click", () => {
     state.cloudTab = "login";
@@ -4714,17 +4789,7 @@ async function reloadVaultEntries() {
   try {
     const vault = await invoke("get_vault_entries");
     if (vault && vault.entries) {
-      state.entries = (vault.entries || []).map((entry) => ({
-        id: entry.id,
-        site: entry.site,
-        username: entry.username,
-        password: entry.password,
-        notes: entry.notes || "",
-        folderId: entry.folder_id || entry.folderId || null,
-        createdAt: entry.created_at || entry.createdAt,
-        updatedAt: entry.updated_at || entry.updatedAt || null,
-        deletedAt: entry.deleted_at || entry.deletedAt || null,
-      }));
+      state.entries = (vault.entries || []).map(mapVaultEntry);
       if (vault.folders) {
         state.folders = vault.folders.map((folder) => ({
           id: folder.id,

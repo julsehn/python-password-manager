@@ -49,8 +49,18 @@ pip install -r requirements.txt
 
 ### 4. Comença a desenvolupar
 
+SherLock és una aplicació Tauri (Rust + JS vanilla), no una app PyQt. Per executar-la en desenvolupament:
+
+**macOS:** fes doble clic a `Obrir_SherLock.command` o executa:
+
 ```bash
-python main.py
+./Obrir_SherLock.command
+```
+
+**Qualsevol plataforma:**
+
+```bash
+npm run tauri dev
 ```
 
 ## Configuració del Servei a la Núvol
@@ -87,23 +97,10 @@ Si prefereixes configurar manualment, crea o edita el fitxer `~/.password_manage
 
 ```
 python-password-manager/
-├── main.py                 # Entrada de l'aplicació
-├── src/
-│   ├── config.py           # Gestió de configuració
-│   ├── models.py           # Model de dades d'entrada
-│   ├── storage.py          # Codi per emmagatzemar/fer una còpia de seguretat
-│   ├── encryption.py       # Codi d'encodinament
-│   ├── railway_client.py   # Client API Railway
-│   ├── remote_vault.py     # Gestió de la SherLock remota
-│   ├── password_manager.py # Gestor de contrasenyes en memòria
-│   ├── server.py           # HTTPS servidor amb mTLS, JWT i HMAC
-│   ├── server_integration.py # Integració del servidor
-│   └── ui/
-│       ├── main_window.py  # Finestra principal
-│       ├── qt_compat.py    # Compatibilitat PyQt6
-│       └── dialogs.py      # Diàlegs addicionals
 ├── browser-extension/      # Extensió del navegador (Chrome/Firefox)
-│   ├── manifest.json       # Manifest de l'extensió
+│   ├── manifest.chrome.json # Manifest font de Chrome
+│   ├── manifest.firefox.json # Manifest font de Firefox
+│   ├── build/              # Paquets generats per build.sh
 │   ├── background.js       # Service worker
 │   ├── popup.html          # UI de l'extensió
 │   ├── popup.js            # Controlador de l'extensió
@@ -112,7 +109,6 @@ python-password-manager/
 │   ├── native_messaging_host.py  # Host de missatgeria nativa
 │   ├── native_messaging_host_wrapper.sh  # Wrapper shell
 │   └── README.md           # Documentació de l'extensió
-├── tests/                  # Tests de seguretat
 ├── tools/                  # Scripts de tests
 └── README.md
 ```
@@ -123,6 +119,8 @@ python-password-manager/
 - Els fills de contrasenya s'esborren immediatament de la memòria
 - Les contrasenyes no s'estalvien en fitxers (només al fitxer blocat)
 - Bloqueig automàtic per a atacs de força bruta
+
+- L'autenticació per graella d'imatge depèn dels fragments guardats al keyring d'aquest dispositiu; sense ells la caixa no es pot desxifrar ni traslladar a un altre dispositiu.
 
 ## Enllaços
 

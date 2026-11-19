@@ -6,7 +6,7 @@ Audit date: 2026-10-24
 
 The normal macOS launcher starts the Tauri application. Its active interface is
 the Vite frontend in `src-web/`, and its Rust commands and vault workflows are
-in `src-tauri/`. The repository also contains a Python/PyQt application in
+in `src-tauri/`. The repository also contains legacy Python code (no GUI) in
 `src/` and a browser extension with native messaging support. Those are separate
 runtime surfaces and should not be refactored as if they were one application.
 
@@ -15,7 +15,7 @@ Main dependency groups:
 - Rust/Tauri: dependencies are declared in `src-tauri/Cargo.toml`; they include
   Tauri, Tokio, Reqwest, Serde, and the vault cryptography crates.
 - Frontend: `package.json` declares Vite, the Tauri JavaScript API, and Lucide.
-- Python: `requirements.txt` declares PyQt6, Cryptography, Argon2, and Pytest.
+- Python: `requirements.txt` declares Cryptography, Argon2, Pytest and Requests.
 - Browser extension: source is plain JavaScript and browser APIs; its build
   entry point is `browser-extension/build.sh`.
 
@@ -56,8 +56,8 @@ Main dependency groups:
    into modules while preserving Tauri command names and visible behavior.
 4. **`src-web/styles.css` and `src-web/secure.css`**: establish stylesheet
    ownership and visual regression checks before consolidating rules.
-5. **Python UI modules**: continue reducing `main_window.py` and `dialogs.py`,
-   and finish type contracts for storage and Qt callback boundaries.
+5. **Python legacy modules**: `src/*.py` is legacy code without a GUI; only what
+   `tests/` needs is kept. No Qt callback boundaries remain.
 6. **Native host and browser popup**: split the large message router and popup
    controller only behind protocol-level tests.
 
@@ -84,9 +84,9 @@ Python suite passes.
 ## First refactoring pass
 
 - Centralized the vault models in `src-tauri/src/vault.rs` while preserving the
-  existing Tauri crate-root types and Serde defaults for older vault data.
+  existing Tauri crate-root types.
 - Extracted the shared trash-visibility rule into a pure helper and added tests
-  for legacy deserialization and timestamp boundaries.
+  for timestamp boundaries.
 - Resolved all 14 initial Clippy findings without changing the frontend command
   contract. The full Tauri command signature remains explicitly exempted from
   Clippy's argument-count heuristic.

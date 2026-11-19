@@ -43,10 +43,10 @@ pub fn delete_os_secret(service: &str, account: &str) -> Result<(), String> {
 
 const ASSOCIATED_DATA: &[u8] = b"";
 
-pub fn decode_hex_or_base64(value: &str, field: &str) -> Result<Vec<u8>, String> {
-    hex::decode(value)
-        .or_else(|_| BASE64.decode(value))
-        .map_err(|e| format!("Invalid {} format: {}", field, e))
+pub fn decode_base64(value: &str, field: &str) -> Result<Vec<u8>, String> {
+    BASE64
+        .decode(value)
+        .map_err(|_| format!("Invalid {} format", field))
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -358,5 +358,33 @@ mod kdf_tests {
             hex::encode(key),
             "24f35b029273a54b22a71e1aba8fb6d92d7eb469d00ed3eae30d735f0b0a5017"
         );
+    }
+}
+
+#[cfg(test)]
+mod base64_tests {
+    use super::decode_base64;
+    use super::BASE64;
+    use base64::Engine;
+
+    #[test]
+    fn decode_base64_round_trip() {
+        let original = b"test data";
+        let encoded = BASE64.encode(original);
+        let decoded = decode_base64(&encoded, "test").unwrap();
+        assert_eq!(decoded, original);
+    }
+
+    #[test]
+    fn decode_base64_invalid_length() {
+        // Invalid base64: padding error
+        assert!(decode_base64("zz!", "test").is_err());
+    }
+
+    #[test]
+    fn decode_base64_hex_string_is_not_hex() {
+        // "ABCDEF0123456789" as base64 decodes to 12 bytes (not 8 as hex would)
+        let result = decode_base64("ABCDEF0123456789", "test").unwrap();
+        assert_eq!(result.len(), 12);
     }
 }

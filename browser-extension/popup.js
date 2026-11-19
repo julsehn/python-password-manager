@@ -836,18 +836,6 @@ class PopupController {
       this.showToast("Sincronitzant...");
       this.checkStatus();
     });
-
-    document
-      .getElementById("clearSessionBtn")
-      ?.addEventListener("click", () => {
-        chrome.storage.local.remove(
-          ["sherlock_session_token", "sherlock_shared_secret"],
-          () => {
-            this.showToast("Sessió tancada");
-            this.checkStatus();
-          },
-        );
-      });
   }
 
   // --- TOAST NOTIFICATIONS ---

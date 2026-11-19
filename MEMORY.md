@@ -6,7 +6,7 @@ This repository is a local-first password manager called SherLock. It combines a
 
 ## Current architecture summary
 
-- Desktop app: PyQt6 application launched from `main.py`
+- Desktop app: Tauri (Rust + JS vanilla) shell under `src-tauri/`; Chrome/Firefox browser extension via native messaging host
 - Local secure API: Python HTTPS server using concepts like mTLS, JWT, and HMAC verification
 - Encryption: AES-style key derivation and field-level security around vault entries
 - Browser integration: Chrome/Firefox extension plus native host bridge
@@ -32,8 +32,6 @@ The app is intended to keep sensitive data local and encrypted, while allowing:
 
 ## Files that matter most
 
-- `main.py`: bootstraps the GUI and secure server lifecycle
-- `src/ui/main_window.py`: main app experience
 - `src/server.py`: secure server request handling
 - `src/config.py`: runtime config, Railway URL, user settings
 - `src/storage.py`: vault persistence and serialization

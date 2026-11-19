@@ -11,8 +11,6 @@ pub struct Entry {
     pub folder_id: Option<String>,
     pub created_at: String,
     pub updated_at: Option<String>,
-    #[serde(default)]
-    pub deleted_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -48,11 +46,8 @@ pub struct HistoryItem {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VaultData {
     pub entries: Vec<Entry>,
-    #[serde(default)]
     pub folders: Vec<Folder>,
-    #[serde(default)]
     pub deleted_entries: Vec<TrashedEntry>,
-    #[serde(default)]
     pub history: Vec<HistoryItem>,
 }
 
@@ -85,21 +80,9 @@ pub(super) fn visible_trash(
 
 #[cfg(test)]
 mod tests {
-    use super::{visible_trash, TrashedEntry, VaultData};
+    use super::{visible_trash, TrashedEntry};
 
-    #[test]
-    fn legacy_vault_data_defaults_new_fields() {
-        let data: VaultData = serde_json::from_str(
-            r#"{"entries":[{"id":"1","site":"example.test","username":"user","password":"secret","notes":"","created_at":"2024-01-01","updated_at":null}]}"#,
-        )
-        .unwrap();
-
-        assert!(data.folders.is_empty());
-        assert!(data.deleted_entries.is_empty());
-        assert!(data.history.is_empty());
-        assert!(data.entries[0].folder_id.is_none());
-        assert!(data.entries[0].deleted_at.is_none());
-    }
+    // Legacy vault data no longer supported: missing fields are errors.
 
     #[test]
     fn visible_trash_keeps_expired_and_boundary_entries() {

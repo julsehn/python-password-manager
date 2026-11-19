@@ -513,7 +513,30 @@
              height: 14px;
            }
 
-           /* Empty / Disconnected / Locked State */
+           /* Credential Section Styles */
+            .credential-section {
+              margin-bottom: 16px;
+            }
+
+            .credential-section-title {
+              font-family: "Manrope", sans-serif;
+              font-size: 0.875rem;
+              font-weight: 700;
+              color: var(--text-title);
+              margin: 0 0 8px;
+              line-height: 1.2;
+              display: block;
+            }
+
+            .credential-empty {
+              color: var(--text-subtitle);
+              font-size: 0.8rem;
+              line-height: 1.4;
+              margin-bottom: 10px;
+              display: block;
+            }
+
+            /* Empty / Disconnected / Locked State */
            .state-box {
              text-align: center;
              padding: 24px 16px;
@@ -773,7 +796,12 @@
 
     <!-- Navigation Tabs -->
     <nav class="nav-bar">
-      <button class="tab-btn active" data-tab="vault">
+      <button
+        class="tab-btn active"
+        data-tab="vault"
+        role="tab"
+        aria-selected="true"
+      >
         <svg
           viewBox="0 0 24 24"
           fill="none"
@@ -787,7 +815,12 @@
         </svg>
         Accessos
       </button>
-      <button class="tab-btn" data-tab="generator">
+      <button
+        class="tab-btn"
+        data-tab="generator"
+        role="tab"
+        aria-selected="false"
+      >
         <svg
           viewBox="0 0 24 24"
           fill="none"
@@ -800,7 +833,7 @@
         </svg>
         Generador
       </button>
-      <button class="tab-btn" data-tab="save">
+      <button class="tab-btn" data-tab="save" role="tab" aria-selected="false">
         <svg
           viewBox="0 0 24 24"
           fill="none"
@@ -817,7 +850,12 @@
         </svg>
         Desar
       </button>
-      <button class="tab-btn" data-tab="settings">
+      <button
+        class="tab-btn"
+        data-tab="settings"
+        role="tab"
+        aria-selected="false"
+      >
         <svg
           viewBox="0 0 24 24"
           fill="none"
@@ -831,7 +869,7 @@
             d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"
           ></path>
         </svg>
-        Ajustos
+        Opcions
       </button>
     </nav>
 
@@ -1193,7 +1231,7 @@
       <div class="pairing-card">
         <h3>Vincula aquest navegador</h3>
         <p class="state-desc">
-          A l'app SherLock, obre Ajustos i genera un codi de vinculació. El codi
+          A l'app SherLock, obre Opcions i genera un codi de vinculació. El codi
           només es pot fer servir una vegada.
         </p>
         <label class="form-label" for="pairingCodeInput"
@@ -1241,13 +1279,6 @@
       >
         <button id="reconnectBtn" class="btn btn-secondary">
           Reintentar sincronització
-        </button>
-        <button
-          id="clearSessionBtn"
-          class="btn btn-secondary"
-          style="color: var(--badge-red-text)"
-        >
-          Tancar sessió de l'extensió
         </button>
       </div>
 

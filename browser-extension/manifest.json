@@ -16,20 +16,9 @@
     "clipboardWrite",
     "nativeMessaging"
   ],
-  "native_messaging": ["sherlock"],
-  "host_permissions": [
-    "http://127.0.0.1:8080/*",
-    "http://localhost:8080/*",
-    "<all_urls>"
-  ],
   "action": {
     "default_popup": "popup.html",
-    "default_title": "SherLock Manager",
-    "default_icon": {
-      "16": "icons/icon16.png",
-      "48": "icons/icon48.png",
-      "128": "icons/icon128.png"
-    }
+    "default_title": "SherLock Manager"
   },
   "content_scripts": [
     {
@@ -39,12 +28,13 @@
       "run_at": "document_idle"
     }
   ],
+  "web_accessible_resources": [
+    {
+      "resources": ["icons/icon128.png"],
+      "matches": ["<all_urls>"]
+    }
+  ],
   "background": {
     "service_worker": "background.js"
-  },
-  "browser_specific_settings": {
-    "gecko": {
-      "id": "sherlock@juls.com"
-    }
   }
 }

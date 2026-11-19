@@ -20,6 +20,8 @@ This browser extension provides local autofill functionality for SherLock creden
    - Run `./tools/install_native_host.sh` from the project root.
    - The installer registers `browser-extension/native/sherlock_native.sh` for both browsers.
 
+Before loading the extension, run `./browser-extension/build.sh` from the project root.
+
 ### Chrome Installation
 
 1. Open Chrome and navigate to `chrome://extensions/`
@@ -50,8 +52,8 @@ The extension uses **native messaging** to communicate directly with the desktop
    - Communicates with the desktop app's vault
 
 2. **Manifest Configuration**:
-   - The extension's `manifest.json` declares the native messaging host
-   - Browser registers the host after installation
+   - The browser-specific manifest grants native messaging permission
+   - The installer registers the native host with the browser
 
 3. **Communication Flow**:
    ```
@@ -108,7 +110,6 @@ The extension has a fallback to HTTP API if native messaging fails:
 
 2. **Verify the server endpoints**:
    - `/health` - Health check
-   - `/api/v1/vault/handshake` - Get shared secret
    - `/api/v1/vault/unlock` - Unlock vault
    - `/api/v1/vault/credentials` - Get credentials
    - `/api/v1/vault/lock` - Lock vault
@@ -123,7 +124,8 @@ The extension has a fallback to HTTP API if native messaging fails:
 
 ## Files
 
-- `manifest.json` - Extension manifest (Manifest V3)
+- `manifest.chrome.json` and `manifest.firefox.json` - Browser-specific source manifests
+- `build/chrome/` and `build/firefox/` - Generated packages for loading in each browser
 - `background.js` - Background service worker
 - `popup.html` - Popup UI
 - `popup.js` - Popup controller

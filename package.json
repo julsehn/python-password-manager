@@ -9,7 +9,8 @@
     "format:check": "prettier --check \"src-web/**/*.{js,css,html}\" \"browser-extension/**/*.{js,css,html,json}\" index.html package.json vite.config.js eslint.config.js",
     "lint": "eslint .",
     "preview": "node node_modules/.bin/vite preview --configLoader runner",
-    "test": "node --test src-web/*.test.js browser-extension/*.test.js",
+    "test": "node --test src-web/*.test.js browser-extension/content.test.js",
+    "test:extension:visual": "playwright test browser-extension/test-icon-injection.test.js",
     "tauri": "DEVELOPER_DIR=\"/Applications/Xcode.app/Contents/Developer\" PATH=\"/Applications/Xcode.app/Contents/Developer/usr/bin:$HOME/.cargo/bin:$HOME/.rustup/toolchains/stable-aarch64-apple-darwin/bin:$PATH\" tauri",
     "icons:compile": "sh tools/compile_icons.sh",
     "build:app": "npm run tauri -- build --bundles app && rm -rf ../SherLock.app && cp -R src-tauri/target/release/bundle/macos/SherLock.app ../SherLock.app",
@@ -22,6 +23,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
+    "@playwright/test": "^1.65.1",
     "@tauri-apps/cli": "^2.12.5",
     "eslint": "^10.15.0",
     "globals": "^17.14.0",

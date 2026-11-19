@@ -73,12 +73,14 @@ This creates registration files at:
 
 ### 3. Load the Extension
 
+From the project root, run `./browser-extension/build.sh` before loading either browser package.
+
 #### Chrome:
 
 1. Go to `chrome://extensions/`
 2. Enable **Developer mode**
 3. Click **"Load unpacked"**
-4. Select the `browser-extension` folder
+4. Select the `browser-extension/build/chrome` folder
 5. **Accept native messaging permissions** when prompted
 
 #### Firefox:
@@ -86,7 +88,7 @@ This creates registration files at:
 1. Go to `about:debugging`
 2. Click **"This Firefox"**
 3. Click **"Load Temporary Add-on"**
-4. Select `browser-extension/manifest.json`
+4. Select `browser-extension/build/firefox/manifest.json`
 5. **Accept native messaging permissions** when prompted
 
 ## How It Works
@@ -164,7 +166,8 @@ The response flows back through the same path to the extension.
 ## Files
 
 - `browser-extension/native/sherlock_native.py` - Native messaging host
-- `browser-extension/manifest.json` - Extension manifest (includes native_messaging config)
+- `browser-extension/manifest.chrome.json` and `browser-extension/manifest.firefox.json` - Browser-specific source manifests
+- `browser-extension/build/chrome/` and `browser-extension/build/firefox/` - Generated packages for loading in each browser
 - `tools/install_native_host.sh` - Registration script
 - `Obrir_SherLock.command` - Main launcher with auto-setup
 

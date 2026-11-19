@@ -10,6 +10,8 @@ pub struct SyncConfig {
     pub token: String,
     #[serde(default)]
     pub refresh_token: String,
+    #[serde(default)]
+    pub cloud_version: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -56,6 +58,14 @@ struct VaultResponse {
     blob: String,
     version: i64,
     updated_at: String,
+}
+
+/// Resultat d'una pujada al núvol. El conflict (409) indica que la caixa al
+/// núbol és més nova que la local i no s'ha sobreescrit res.
+#[derive(Debug)]
+pub enum UploadResult {
+    Ok(SyncResponse, i64),
+    Conflict,
 }
 
 #[derive(Debug, Serialize)]
@@ -207,7 +217,7 @@ pub async fn revoke_refresh_token(config: &SyncConfig) -> Result<(), String> {
     }
 }
 
-pub async fn upload_vault(config: &SyncConfig) -> Result<SyncResponse, String> {
+pub async fn upload_vault(config: &SyncConfig) -> Result<UploadResult, String> {
     let base_url = resolve_url(&config.railway_url);
 
     let client = Client::builder()
@@ -227,7 +237,7 @@ pub async fn upload_vault(config: &SyncConfig) -> Result<SyncResponse, String> {
 
     let payload = VaultBlob {
         blob: content,
-        expected_version: None,
+        expected_version: config.cloud_version,
     };
 
     let url = if config.vault_id.is_empty() {
@@ -245,6 +255,10 @@ pub async fn upload_vault(config: &SyncConfig) -> Result<SyncResponse, String> {
         .await
         .map_err(|e| format!("Error en connectar amb Railway: {}", e))?;
 
+    if response.status() == reqwest::StatusCode::CONFLICT {
+        return Ok(UploadResult::Conflict);
+    }
+
     if !response.status().is_success() {
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
@@ -259,21 +273,24 @@ pub async fn upload_vault(config: &SyncConfig) -> Result<SyncResponse, String> {
         .await
         .map_err(|e| format!("Error en interpretar la resposta del servidor: {}", e))?;
 
-    Ok(SyncResponse {
-        success: true,
-        message: format!(
-            "Caixa sincronitzada correctament amb Railway (versió {})",
-            vault_response.version
-        ),
-        timestamp: chrono::Utc::now().timestamp() as u64,
-        error: None,
-    })
+    Ok(UploadResult::Ok(
+        SyncResponse {
+            success: true,
+            message: format!(
+                "Caixa sincronitzada correctament amb Railway (versió {})",
+                vault_response.version
+            ),
+            timestamp: chrono::Utc::now().timestamp() as u64,
+            error: None,
+        },
+        vault_response.version,
+    ))
 }
 
 pub async fn download_vault(
     _master_password: String,
     config: &SyncConfig,
-) -> Result<String, String> {
+) -> Result<(String, i64), String> {
     let base_url = resolve_url(&config.railway_url);
 
     let client = Client::builder()
@@ -309,7 +326,7 @@ pub async fn download_vault(
         .await
         .map_err(|e| format!("Error en interpretar la resposta del servidor: {}", e))?;
 
-    Ok(vault_response.blob)
+    Ok((vault_response.blob, vault_response.version))
 }
 
 pub async fn register_vault(
