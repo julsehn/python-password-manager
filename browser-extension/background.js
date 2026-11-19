@@ -248,6 +248,18 @@ async function sendToNative(action, payload = {}) {
 // ── Public vault actions ──────────────
 
 async function getVaultInfo() {
+  const {
+    sherlock_browser_client_id: clientId,
+    sherlock_browser_private_key: privateKey,
+  } = await browser.storage.local.get([
+    "sherlock_browser_client_id",
+    "sherlock_browser_private_key",
+  ]);
+
+  if (clientId && privateKey) {
+    await authenticatePairedBrowser();
+  }
+
   return sendToNative("getVaultInfo");
 }
 

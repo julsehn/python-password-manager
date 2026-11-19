@@ -4,7 +4,7 @@ import {
   entryCard,
   sidebarComponent,
 } from "./components.js";
-import { escapeHtml } from "./utils.js";
+import { escapeHtml, pairingSecondsRemaining } from "./utils.js";
 import {
   passwordOptions,
   passphraseOptions,

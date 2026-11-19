@@ -218,6 +218,18 @@ def app_request(
 
 def get_vault_info() -> Dict[str, Any]:
     """Read the live vault state from the desktop app."""
+    if not APP_TOKEN:
+        health = app_request("GET", "/health")
+        if health.get("status") != "healthy":
+            return {"success": False, **health}
+        return {
+            "success": True,
+            "connected": True,
+            "unlocked": False,
+            "entry_count": 0,
+            "paired": False,
+        }
+
     response = app_request("GET", "/vault-info")
     response["entryCount"] = response.get("entry_count", 0)
     response["exists"] = os.path.exists(VAULT_PATH)

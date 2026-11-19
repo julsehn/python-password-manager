@@ -112,7 +112,15 @@ class PopupController {
         const statusText = document.getElementById("statusText");
         const lockBtn = document.getElementById("lockBtn");
 
-        if (res && res.connected) {
+        if (res && res.connected && res.paired === false) {
+          this.state.connected = true;
+          this.state.unlocked = false;
+          this.state.entryCount = 0;
+          pill.className = "status-pill locked";
+          statusText.textContent = "No vinculat";
+          if (lockBtn) lockBtn.style.display = "none";
+          this.renderPairRequiredState();
+        } else if (res && res.connected) {
           this.state.connected = true;
           this.state.unlocked = res.unlocked;
           this.state.entryCount = res.entryCount || 0;

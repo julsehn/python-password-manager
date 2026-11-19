@@ -21,6 +21,7 @@ import {
   defaultSettings,
   folderColors,
   folderIcons,
+  icon,
   icons,
 } from "./constants.js";
 import {

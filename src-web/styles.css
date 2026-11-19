@@ -1153,6 +1153,11 @@ html[data-theme="dark"] .brand-icon {
   box-shadow:
     0 12px 32px rgba(23, 43, 77, 0.2),
     0 0 0 5px var(--accent-focus-ring);
+  /* Let the highlighted controls beneath the guide receive their clicks. */
+  pointer-events: none;
+}
+
+.guide-callout button {
   pointer-events: auto;
 }
 
