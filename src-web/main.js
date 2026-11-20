@@ -605,11 +605,12 @@ async function handleCloudLogout() {
     await invoke("revoke_official_cloud_session", {
       railwayUrl: config.railway_url,
       vaultId: config.vault_id,
+      token: config.token || null,
     });
   } catch (error) {
-    showToast(`No s'ha pogut revocar la sessió cloud: ${error}`);
-    return;
+    showToast(`No s'ha pogut revocar la sessió al servidor, però es tancarà localment: ${error}`);
   }
+  // Neteja l'estat local igual (els errors del servidor no bloqueixen el logout local)
   state.cloudConfig = {
     railwayUrl: "",
     vaultId: "",
@@ -625,6 +626,60 @@ async function handleCloudLogout() {
     });
   } catch {}
   showToast("Sessió tancada a Railway.");
+  render();
+}
+
+async function handleDeleteCloudAccount() {
+  if (!state.cloudConfig.token || !state.cloudConfig.vaultId) {
+    showToast("No hi ha cap sessió de cloud activa.");
+    return;
+  }
+
+  const username = state.cloudConfig.authUser || state.cloudConfig.vaultId;
+  const confirmText = `ELIMINAR els meus dades del nuvol (${username})`;
+  const typed = prompt(
+    `Aquesta acció eliminarà el vault xifrat al nuvol i revocarà la sessió de Railway.\n\nAquest procés no es pot desfer.\n\nPer confirmar, escriviu: ${confirmText}`,
+    "",
+  );
+  if (typed !== confirmText) {
+    return;
+  }
+
+  const masterPassword = prompt(
+    "Introdueix la contrasenya mestra del vault local (necessària per eliminar el vault al nuvol):",
+    "",
+  );
+  if (!masterPassword) {
+    return;
+  }
+
+  const config = rustCloudConfig(state.cloudConfig);
+  try {
+    await invoke("delete_cloud_account", {
+      master_password: masterPassword,
+      config,
+    });
+  } catch (error) {
+    showToast(`No s'ha pogut eliminar el compte al nuvol: ${error}`);
+    return;
+  }
+
+  // Neteja l'estat local de cloud
+  state.cloudConfig = {
+    railwayUrl: "",
+    vaultId: "",
+    token: "",
+    authUser: "",
+  };
+  localStorage.removeItem("sherlock-cloud");
+  try {
+    await invoke("set_railway_sync_config", {
+      railway_url: "",
+      vault_id: "",
+      token: "",
+    });
+  } catch {}
+  showToast("Compte i dades al nuvol eliminats.");
   render();
 }
 
@@ -1345,7 +1400,7 @@ function closeFolderModal() {
 async function saveFolder(event) {
   event.preventDefault();
   const form = new FormData(event.currentTarget);
-  const name = String(form.get("name") || "").trim();
+  const name = String(form.get("folderName") || "").trim();
   const iconName = String(form.get("icon") || "Folder");
   const color = String(form.get("color") || folderColors[0]);
   if (!name) {
@@ -1389,15 +1444,20 @@ async function saveFolder(event) {
 async function saveEntry(event) {
   event.preventDefault();
   const form = new FormData(event.currentTarget);
-  const name = String(form.get("name") || "").trim();
+  const name = String(form.get("site") || "").trim();
   const username = String(form.get("username") || "").trim();
   const password = String(form.get("password") || "");
   const url = String(form.get("url") || "").trim();
   const notes = String(form.get("notes") || "").trim();
-  const folderId = String(form.get("folder") || "");
+  const folderId = String(form.get("folderId") || "");
+
+  const draft = { site: name, folderId, username, password, url, notes };
 
   if (!name || !password) {
-    state.formError = "El nom i la contrasenya són obligatoris.";
+    state.entryFormDraft = draft;
+    state.formError = !name
+      ? "Introdueix el nom de l'element."
+      : "Introdueix la contrasenya.";
     render();
     return;
   }
@@ -1437,6 +1497,7 @@ async function saveEntry(event) {
         showToast("Accés actualitzat correctament.");
         return;
       } catch (error) {
+        state.entryFormDraft = draft;
         state.saving = false;
         state.formError = String(error);
         render();
@@ -1467,6 +1528,7 @@ async function saveEntry(event) {
     showToast("Accés desat de forma xifrada.");
   } catch (error) {
     state.entries.pop();
+    state.entryFormDraft = draft;
     state.saving = false;
     state.formError = String(error);
     render();
@@ -1554,7 +1616,7 @@ function captureEntryFormDraft() {
 
   const formData = new FormData(form);
   return {
-    site: String(formData.get("name") || ""),
+    site: String(formData.get("site") || ""),
     folderId: String(formData.get("folder") || ""),
     username: String(formData.get("username") || ""),
     password: String(formData.get("password") || ""),
@@ -2400,6 +2462,9 @@ function bindEvents() {
     ?.addEventListener("click", handleCloudLogout);
 
   document
+    .querySelector("#btn-cloud-delete-account")
+    ?.addEventListener("click", handleDeleteCloudAccount);
+  document
     .querySelector("#btn-cloud-sync-modal")
     ?.addEventListener("click", handleCloudSyncNow);
   document
@@ -2408,6 +2473,9 @@ function bindEvents() {
   document
     .querySelector("#btn-cloud-logout-modal")
     ?.addEventListener("click", handleCloudLogout);
+  document
+    .querySelector("#btn-cloud-delete-account-modal")
+    ?.addEventListener("click", handleDeleteCloudAccount);
   document
     .querySelector("#reset-vault")
     ?.addEventListener("click", resetLocalVault);

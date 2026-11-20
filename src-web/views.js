@@ -435,6 +435,9 @@ export function createViews(state) {
                 <button type="button" class="secondary danger" id="btn-cloud-logout">
                   ${icon("LogOut", 16)} Tancar sessió
                 </button>
+                <button type="button" class="secondary danger" id="btn-cloud-delete-account">
+                  ${icon("Trash2", 16)} Eliminar compte i dades
+                </button>
               </div>
             </div>
           `

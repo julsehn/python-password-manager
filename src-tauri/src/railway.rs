@@ -462,6 +462,36 @@ pub async fn delete_vault(_master_password: String, config: &SyncConfig) -> Resu
     }
 }
 
+
+/// Elimina el compte d'usuari autenticat al servidor Railway (GDPR right to erasure).
+/// Es requereix l'access token JWT (config.token).
+pub async fn delete_user_account(config: &SyncConfig) -> Result<(), String> {
+    if config.token.is_empty() {
+        return Err("No hi ha token d'autenticació al núvol".to_string());
+    }
+    let base_url = resolve_url(&config.railway_url);
+    let client = http_client(30)?;
+    let response = client
+        .delete(format!("{}/v1/auth/me", base_url))
+        .header("Authorization", format!("Bearer {}", config.token))
+        .send()
+        .await
+        .map_err(|e| format!("Error en connectar amb Railway: {e}"))?;
+    let status = response.status();
+    match status {
+        reqwest::StatusCode::NO_CONTENT => Ok(()),
+        reqwest::StatusCode::NOT_FOUND => Ok(()), // compte ja no existeix
+        _ => {
+            let (_, body) = error_details(response).await;
+            Err(format!(
+                "Error en eliminar el compte al núvol ({}): {}",
+                status,
+                body
+            ))
+        }
+    }
+}
+
 pub async fn check_health(railway_url: Option<&str>) -> Result<bool, String> {
     let base_url = resolve_url(railway_url.unwrap_or(DEFAULT_OFFICIAL_URL));
 

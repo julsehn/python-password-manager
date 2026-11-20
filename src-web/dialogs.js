@@ -455,8 +455,7 @@ export function createDialogViews(state) {
               <input
                 class="form-input ${state.showFirstEntryGuide && state.firstEntryGuideStep === 2 ? "guide-highlight" : ""}"
                 id="entry-name"
-                name="name"
-                required
+                name="site"
                 autofocus
                 placeholder="Ex. YouTube"
                 value="${escapeHtml(values.site)}"
@@ -663,6 +662,9 @@ export function createDialogViews(state) {
               </button>
               <button type="button" class="secondary full danger" id="btn-cloud-logout-modal">
                 ${icon("LogOut", 16)} Tancar sessió a Railway
+              </button>
+              <button type="button" class="secondary full danger" id="btn-cloud-delete-account-modal">
+                ${icon("Trash2", 16)} Eliminar compte i dades del núvol
               </button>
             </div>
           </div>
@@ -904,7 +906,7 @@ export function createDialogViews(state) {
           <div class="modal-scroll">
             <section class="form-section master-password-section">
               <label class="form-label" for="folder-name">Nom de la carpeta</label>
-              <input class="form-input" id="folder-name" name="name" maxlength="80" required autofocus value="${escapeHtml(folder.name)}" placeholder="Ex. Feina" />
+              <input class="form-input" id="folder-name" name="folderName" maxlength="80" required autofocus value="${escapeHtml(folder.name)}" placeholder="Ex. Feina" />
 
               <label class="form-label">Icona</label>
               <div class="folder-picker" role="group" aria-label="Icona de la carpeta">

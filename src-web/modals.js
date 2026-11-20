@@ -426,7 +426,7 @@ export function entryFormModal(state) {
                 ${icon("Star", 18)}
               </div>
               <label class="form-label" for="entry-name">Nom de l'element <b>*</b></label>
-              <input class="form-input ${state.showFirstEntryGuide && state.firstEntryGuideStep === 2 ? "guide-highlight" : ""}" id="entry-name" name="site" required value="${escapeHtml(values.site)}" placeholder="Ex. GitHub, Google, CaixaBank..." />
+              <input class="form-input ${state.showFirstEntryGuide && state.firstEntryGuideStep === 2 ? "guide-highlight" : ""}" id="entry-name" name="site" value="${escapeHtml(values.site)}" placeholder="Ex. GitHub, Google, CaixaBank..." />
 
               <label class="form-label" for="entry-folder">Carpeta</label>
               <select class="form-select" id="entry-folder" name="folderId">
@@ -469,6 +469,7 @@ export function entryFormModal(state) {
               <label class="form-label" for="entry-notes">Notes addicionals</label>
               <textarea class="form-textarea" id="entry-notes" name="notes" rows="3" placeholder="Preguntes de seguretat, codis de recuperació...">${escapeHtml(values.notes)}</textarea>
             </section>
+            ${state.formError ? `<p class="error form-error">${escapeHtml(state.formError)}</p>` : ""}
           </div>
 
           <footer class="modal-footer">
@@ -647,6 +648,9 @@ export function cloudLoginModal(state) {
               </button>
               <button type="button" class="secondary full danger" id="btn-cloud-logout-modal">
                 ${icon("LogOut", 16)} Tancar sessió a Railway
+              </button>
+              <button type="button" class="secondary full danger" id="btn-cloud-delete-account-modal">
+                ${icon("Trash2", 16)} Eliminar compte i dades del núvol
               </button>
             </div>
 

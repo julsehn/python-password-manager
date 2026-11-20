@@ -251,6 +251,7 @@ pub fn run() {
             register_official_cloud,
             check_railway_username,
             revoke_official_cloud_session,
+            delete_cloud_account,
             set_railway_sync_config,
             get_cloud_version,
             image_grid::get_auth_info,
@@ -860,6 +861,7 @@ async fn check_railway_username(
 async fn revoke_official_cloud_session(
     railway_url: String,
     vault_id: String,
+    token: Option<String>,
     state: tauri::State<'_, Mutex<SyncConfig>>,
 ) -> Result<(), String> {
     let mut config = state
@@ -868,10 +870,52 @@ async fn revoke_official_cloud_session(
         .clone();
     config.railway_url = normalized_cloud_url(&railway_url);
     config.vault_id = vault_id;
-    attach_sync_metadata(&mut config, &state)?;
+    if let Some(token) = token {
+        config.token = token;
+    }
+
+    // Sempre intenta recuperar el refresh_token abans de decidir si cal revocar.
+    // Primer de l'estat intern, després de l'emmagatzematge segurut del SO.
+    if config.refresh_token.is_empty() {
+        let stored = state
+            .lock()
+            .map_err(|_| "Failed to access Railway configuration".to_string())?;
+        if stored.token == config.token
+            && stored.vault_id == config.vault_id
+            && (config.railway_url.is_empty() || stored.railway_url == config.railway_url)
+            && !stored.refresh_token.is_empty()
+        {
+            config.refresh_token.clone_from(&stored.refresh_token);
+        }
+        drop(stored);
+    }
+    if config.refresh_token.is_empty() {
+        if let Ok(Some(secret)) =
+            security::load_os_secret(CLOUD_SESSION_SERVICE, CLOUD_SESSION_ACCOUNT)
+        {
+            if let Ok(session) = serde_json::from_str::<StoredCloudSession>(&secret) {
+                let configured_url = normalized_cloud_url(&config.railway_url);
+                if session.railway_url == configured_url && session.vault_id == config.vault_id {
+                    config.refresh_token = session.refresh_token;
+                }
+            }
+        }
+    }
+
+    // Si encara no hi ha refresh_token, no hi havia sessió al servidor.
+    if config.refresh_token.is_empty() {
+        delete_cloud_version();
+        if let Ok(mut config) = state.lock() {
+            config.token.clear();
+            config.refresh_token.clear();
+            config.cloud_version = None;
+        }
+        return Ok(());
+    }
+
     let result = railway::revoke_refresh_token(&config).await;
     if result.is_ok() {
-        security::delete_os_secret(CLOUD_SESSION_SERVICE, CLOUD_SESSION_ACCOUNT)?;
+        let _ = security::delete_os_secret(CLOUD_SESSION_SERVICE, CLOUD_SESSION_ACCOUNT);
     }
     delete_cloud_version();
     if let Ok(mut config) = state.lock() {
@@ -880,6 +924,23 @@ async fn revoke_official_cloud_session(
         config.cloud_version = None;
     }
     result
+}
+
+/// Elimina el vault al nuvol i revoca la sessió de l'usuari autenticat.
+/// (L'eliminació completa del compte d'usuari requereix l'endpoint DELETE /v1/auth/me
+/// al servidor Railway, que encara no està implementat al client.)
+#[tauri::command]
+async fn delete_cloud_account(
+    master_password: String,
+    config: SyncConfig,
+) -> Result<(), String> {
+    // 1. Eliminar el vault xifrat al nuvol
+    railway::delete_vault(master_password.clone(), &config).await?;
+    // 2. Eliminar el compte d'usuari al servidor (tots els seus vaults + perfil)
+    let _ = railway::delete_user_account(&config).await;
+    // 3. Revocar la sessió (refresh token) si n'hi ha una
+    let _ = railway::revoke_refresh_token(&config).await;
+    Ok(())
 }
 
 #[tauri::command]
