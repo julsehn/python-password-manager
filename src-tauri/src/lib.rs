@@ -249,6 +249,7 @@ pub fn run() {
             sync_download_vault,
             auth_official_cloud,
             register_official_cloud,
+            check_railway_username,
             revoke_official_cloud_session,
             set_railway_sync_config,
             get_cloud_version,
@@ -845,6 +846,14 @@ async fn register_official_cloud(
         cloud_version: load_cloud_version(),
     };
     Ok(auth)
+}
+
+#[tauri::command]
+async fn check_railway_username(
+    username: String,
+    railway_url: Option<String>,
+) -> Result<bool, String> {
+    railway::check_username_availability(&username, railway_url.as_deref()).await
 }
 
 #[tauri::command]

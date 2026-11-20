@@ -42,6 +42,11 @@ struct UserAuthRequest {
     password: String,
 }
 
+#[derive(Debug, Deserialize)]
+struct UsernameAvailabilityResponse {
+    available: bool,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 struct VaultRegistration {
     vault_id: String,
@@ -196,6 +201,40 @@ pub async fn register_user(
         .map_err(|e| format!("Error en descodificar resposta de Railway: {}", e))?;
 
     Ok(auth_data)
+}
+
+pub async fn check_username_availability(
+    username: &str,
+    custom_url: Option<&str>,
+) -> Result<bool, String> {
+    let base_url = resolve_url(custom_url.unwrap_or(DEFAULT_OFFICIAL_URL));
+    let mut endpoint = reqwest::Url::parse(&format!(
+        "{}/v1/auth/check-username/",
+        base_url
+    ))
+    .map_err(|error| format!("URL de Railway no vàlida: {}", error))?;
+    endpoint
+        .path_segments_mut()
+        .map_err(|_| "URL de Railway no vàlida".to_string())?
+        .push(username);
+    let client = http_client(15)?;
+    let response = client
+        .get(endpoint)
+        .send()
+        .await
+        .map_err(|error| format!("Error de connexió amb Railway ({}): {}", base_url, error))?;
+    if !response.status().is_success() {
+        let (status, body) = error_details(response).await;
+        return Err(format!(
+            "Error en comprovar el nom d'usuari ({}): {}",
+            status, body
+        ));
+    }
+    let result: UsernameAvailabilityResponse = response
+        .json()
+        .await
+        .map_err(|error| format!("Error en llegir la resposta de Railway: {}", error))?;
+    Ok(result.available)
 }
 
 pub async fn revoke_refresh_token(config: &SyncConfig) -> Result<(), String> {

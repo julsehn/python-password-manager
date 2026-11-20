@@ -270,8 +270,6 @@ async function checkUsernameAvailability() {
 
   const customUrl =
     document.querySelector("#cloud-railway-url")?.value.trim() || "";
-  const baseUrl =
-    customUrl || "https://password-manager-cloud-production.up.railway.app";
 
   state.cloudUsernameChecking = true;
   state.cloudUsernameAvailable = null;
@@ -280,18 +278,17 @@ async function checkUsernameAvailability() {
   render();
 
   try {
-    const res = await fetch(
-      `${baseUrl}/v1/auth/check-username/${encodeURIComponent(username)}`,
-    );
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const data = await res.json();
-    state.cloudUsernameAvailable = data.available === true;
-    if (!data.available) {
+    const available = await invoke("check_railway_username", {
+      username,
+      railwayUrl: customUrl || null,
+    });
+    state.cloudUsernameAvailable = available === true;
+    if (!available) {
       state.cloudError = `El nom d'usuari "${username}" ja existeix. Tria'n un altre.`;
     }
-  } catch {
+  } catch (error) {
     state.cloudUsernameAvailable = null;
-    state.cloudUsernameCheckError = "No s'ha pogut comprovar el nom d'usuari. Revisa la connexió i torna-ho a provar.";
+    state.cloudUsernameCheckError = String(error || "No s'ha pogut comprovar el nom d'usuari.");
   } finally {
     state.cloudUsernameChecking = false;
     render();
