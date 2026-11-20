@@ -746,6 +746,7 @@ export function createDialogViews(state) {
                         : ""
                 }
               </div>
+              ${activeTab === "register" && state.cloudUsernameCheckError ? `<small role="status" style="display:block;margin-top:6px;color:var(--color-danger,#dc2626);">${escapeHtml(state.cloudUsernameCheckError)}</small>` : ""}
             </div>
 
             <!-- Common Password -->
@@ -761,7 +762,6 @@ export function createDialogViews(state) {
                   minlength="${activeTab === "register" ? "8" : "1"}"
                   placeholder="${activeTab === "register" ? "Mínim 8 caràcters" : "La teva contrasenya de Railway"}"
                   class="form-input cloud-password-input"
-                  ${activeTab === "register" && state.cloudUsernameAvailable !== true ? 'disabled title="Comprova primer el nom d\'usuari"' : ""}
                 />
                 <button type="button" class="reveal cloud-password-reveal" id="reveal-cloud-password" title="Mostrar/Amagar">
                   ${icon("Eye", 16)}

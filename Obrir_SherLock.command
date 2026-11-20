@@ -19,16 +19,25 @@ cleanup_project_app() {
     fi
 }
 
-VAULT_PATH="$HOME/.password_manager/vault.json"
-if [[ -f "$VAULT_PATH" ]]; then
+PM_DIR="$HOME/.password_manager"
+if [[ -f "$PM_DIR/vault.json" ]]; then
     echo ""
     echo "S'ha trobat una instància de SherLock local."
     local delete_vault="n"
     read -q -k 1 "delete_vault?Vols eliminar-la i començar de nou? [y/N] "
     echo ""
     if [[ "$delete_vault" == "y" || "$delete_vault" == "Y" ]]; then
-        rm -f "$VAULT_PATH"
-        echo "SherLock local eliminada."
+        # Esborra tots els fitxers de dades (equivalent a reset_vault del backend)
+        rm -rf "$PM_DIR"
+        echo "Dades locals de SherLock eliminades."
+
+        # Esborra les claus del Keychain (patró d'imatge + sessió Railway)
+        security delete-generic-password \
+            -s "com.juls.sherlock" -a "image-grid-cell-values" 2>/dev/null && \
+            echo "Clau del patró d'imatge eliminada del Keychain." || true
+        security delete-generic-password \
+            -s "com.juls.sherlock" -a "official-cloud-refresh" 2>/dev/null && \
+            echo "Sessió de Railway eliminada del Keychain." || true
     else
         echo "L'instància de SherLock local es conservarà."
     fi

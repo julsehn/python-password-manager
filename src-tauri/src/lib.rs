@@ -78,7 +78,34 @@ pub(crate) fn atomic_write(path: &Path, contents: &[u8]) -> Result<(), String> {
     Ok(())
 }
 
-fn attach_refresh_token(
+pub(crate) fn cloud_version_path() -> PathBuf {
+    std::env::var_os("CLOUD_VERSION_PATH")
+        .filter(|path| !path.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| config_dir().join("cloud_version"))
+}
+
+pub(crate) fn store_cloud_version(version: i64) -> Result<(), String> {
+    atomic_write(&cloud_version_path(), version.to_string().as_bytes())
+}
+
+pub(crate) fn load_cloud_version() -> Option<i64> {
+    let path = cloud_version_path();
+    if path.exists() {
+        std::fs::read_to_string(path)
+            .ok()
+            .and_then(|s| s.trim().parse::<i64>().ok())
+    } else {
+        None
+    }
+}
+
+pub(crate) fn delete_cloud_version() {
+    let path = cloud_version_path();
+    let _ = std::fs::remove_file(path);
+}
+
+fn attach_sync_metadata(
     config: &mut SyncConfig,
     stored_config: &Mutex<SyncConfig>,
 ) -> Result<(), String> {
@@ -103,6 +130,16 @@ fn attach_refresh_token(
             if session.railway_url == configured_url && session.vault_id == config.vault_id {
                 config.refresh_token = session.refresh_token;
             }
+        }
+    }
+    if config.cloud_version.is_none() {
+        if let Ok(stored) = stored_config.lock() {
+            if stored.cloud_version.is_some() {
+                config.cloud_version = stored.cloud_version;
+            }
+        }
+        if config.cloud_version.is_none() {
+            config.cloud_version = load_cloud_version();
         }
     }
     Ok(())
@@ -214,6 +251,7 @@ pub fn run() {
             register_official_cloud,
             revoke_official_cloud_session,
             set_railway_sync_config,
+            get_cloud_version,
             image_grid::get_auth_info,
             generate_pairing_code,
             list_paired_clients,
@@ -225,7 +263,10 @@ pub fn run() {
             image_grid::change_vault_to_password,
             image_grid::unlock_vault_grid,
         ])
-        .manage(Mutex::new(SyncConfig::default()))
+        .manage(Mutex::new(SyncConfig {
+            cloud_version: load_cloud_version(),
+            ..SyncConfig::default()
+        }))
         .manage(server_state)
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -298,6 +339,7 @@ fn reset_vault(server_state: tauri::State<'_, Arc<ServerState>>) -> Result<(), S
             .map_err(|error| format!("Failed to remove local vault: {}", error))?;
     }
     image_grid::remove_image_auth()?;
+    delete_cloud_version();
 
     server_state.lock();
 
@@ -612,7 +654,7 @@ async fn sync_upload_vault(
     sync_state: tauri::State<'_, Mutex<SyncConfig>>,
     server_state: tauri::State<'_, Arc<ServerState>>,
 ) -> Result<SyncResponse, String> {
-    attach_refresh_token(&mut config, &sync_state)?;
+    attach_sync_metadata(&mut config, &sync_state)?;
     let master_password = {
         let unlocked = server_state
             .unlocked_data
@@ -655,8 +697,7 @@ async fn sync_upload_vault(
 
     match railway::upload_vault(&config).await? {
         railway::UploadResult::Ok(response, version) => {
-            // Emmagatzema la versió del núvol per a futures pujades
-            // amb expected_version i evitar l'escriptura per dalt.
+            let _ = store_cloud_version(version);
             if let Ok(mut sync_config) = sync_state.lock() {
                 sync_config.cloud_version = Some(version);
             }
@@ -676,7 +717,7 @@ async fn sync_download_vault(
     sync_state: tauri::State<'_, Mutex<SyncConfig>>,
     server_state: tauri::State<'_, Arc<ServerState>>,
 ) -> Result<String, String> {
-    attach_refresh_token(&mut config, &sync_state)?;
+    attach_sync_metadata(&mut config, &sync_state)?;
     let master_password = match master_password.filter(|password| !password.is_empty()) {
         Some(password) => Zeroizing::new(password),
         None => {
@@ -741,6 +782,7 @@ async fn sync_download_vault(
     );
 
     // Emmagatzema la versió del núvol per a futures pujades amb expected_version.
+    let _ = store_cloud_version(remote_version);
     if let Ok(mut sync_config) = sync_state.lock() {
         sync_config.cloud_version = Some(remote_version);
     }
@@ -776,7 +818,7 @@ async fn auth_official_cloud(
         vault_id: auth.vault_id.clone(),
         token: auth.access_token.clone(),
         refresh_token,
-        cloud_version: None,
+        cloud_version: load_cloud_version(),
     };
     Ok(auth)
 }
@@ -800,7 +842,7 @@ async fn register_official_cloud(
         vault_id: auth.vault_id.clone(),
         token: auth.access_token.clone(),
         refresh_token,
-        cloud_version: None,
+        cloud_version: load_cloud_version(),
     };
     Ok(auth)
 }
@@ -817,14 +859,16 @@ async fn revoke_official_cloud_session(
         .clone();
     config.railway_url = normalized_cloud_url(&railway_url);
     config.vault_id = vault_id;
-    attach_refresh_token(&mut config, &state)?;
+    attach_sync_metadata(&mut config, &state)?;
     let result = railway::revoke_refresh_token(&config).await;
     if result.is_ok() {
         security::delete_os_secret(CLOUD_SESSION_SERVICE, CLOUD_SESSION_ACCOUNT)?;
     }
+    delete_cloud_version();
     if let Ok(mut config) = state.lock() {
         config.token.clear();
         config.refresh_token.clear();
+        config.cloud_version = None;
     }
     result
 }
@@ -842,10 +886,20 @@ async fn delete_vault(master_password: String, config: SyncConfig) -> Result<boo
 }
 
 #[tauri::command]
+fn get_cloud_version(sync_state: tauri::State<'_, Mutex<SyncConfig>>) -> Option<i64> {
+    sync_state
+        .lock()
+        .ok()
+        .and_then(|c| c.cloud_version)
+        .or_else(load_cloud_version)
+}
+
+#[tauri::command]
 fn set_railway_sync_config(
     railway_url: String,
     vault_id: String,
     token: String,
+    cloud_version: Option<i64>,
     state: tauri::State<'_, Mutex<SyncConfig>>,
 ) -> Result<(), String> {
     println!("Setting Railway sync configuration...");
@@ -865,12 +919,18 @@ fn set_railway_sync_config(
         } else {
             String::new()
         };
+    let effective_version = cloud_version
+        .or(config.cloud_version)
+        .or_else(load_cloud_version);
+    if let Some(v) = effective_version {
+        let _ = store_cloud_version(v);
+    }
     *config = SyncConfig {
         railway_url: url,
         vault_id,
         token,
         refresh_token,
-        cloud_version: None,
+        cloud_version: effective_version,
     };
 
     println!("Railway sync configured successfully");
@@ -935,5 +995,47 @@ mod sync_download_tests {
             decrypt_result.is_err(),
             "Decryption must fail when password does not match"
         );
+    }
+
+    static SYNC_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[test]
+    fn cloud_version_stores_and_loads_correctly() {
+        let _guard = SYNC_ENV_LOCK.lock().unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("cloud_version");
+        std::env::set_var("CLOUD_VERSION_PATH", &path);
+
+        assert_eq!(load_cloud_version(), None);
+        store_cloud_version(42).unwrap();
+        assert_eq!(load_cloud_version(), Some(42));
+
+        delete_cloud_version();
+        assert_eq!(load_cloud_version(), None);
+
+        std::env::remove_var("CLOUD_VERSION_PATH");
+    }
+
+    #[test]
+    fn attach_sync_metadata_populates_cloud_version_when_none() {
+        let _guard = SYNC_ENV_LOCK.lock().unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("cloud_version");
+        std::env::set_var("CLOUD_VERSION_PATH", &path);
+        store_cloud_version(15).unwrap();
+
+        let mut config = SyncConfig {
+            railway_url: "https://example.test".to_string(),
+            vault_id: "v-1".to_string(),
+            token: "tok-1".to_string(),
+            refresh_token: "ref-1".to_string(),
+            cloud_version: None,
+        };
+        let stored = Mutex::new(SyncConfig::default());
+
+        attach_sync_metadata(&mut config, &stored).unwrap();
+        assert_eq!(config.cloud_version, Some(15));
+
+        std::env::remove_var("CLOUD_VERSION_PATH");
     }
 }

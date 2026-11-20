@@ -8,6 +8,8 @@ export function rustCloudConfig(config = {}) {
     railway_url: config.railwayUrl || "",
     vault_id: config.vaultId || "",
     token: config.token || "",
+    cloud_version:
+      typeof config.cloudVersion === "number" ? config.cloudVersion : null,
   };
 }
 

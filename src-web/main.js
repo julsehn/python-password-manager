@@ -101,6 +101,8 @@ const state = {
   cloudShowAdvanced: false,
   cloudUsernameChecking: false,
   cloudUsernameAvailable: null,
+  cloudFormUsername: "",
+  cloudUsernameCheckError: "",
   formError: "",
   folderFormError: "",
   saving: false,
@@ -236,15 +238,34 @@ async function initializeApp() {
 
 function rustCloudConfig(config) {
   return {
-    railway_url: config.railwayUrl || "",
-    vault_id: config.vaultId || "",
-    token: config.token || "",
+    railway_url: config?.railwayUrl || "",
+    vault_id: config?.vaultId || "",
+    token: config?.token || "",
+    cloud_version:
+      typeof config?.cloudVersion === "number" ? config.cloudVersion : null,
   };
+}
+
+function updateLocalCloudVersion(version) {
+  if (typeof version === "number") {
+    state.cloudConfig.cloudVersion = version;
+    localStorage.setItem("sherlock-cloud", JSON.stringify(state.cloudConfig));
+  }
+}
+
+async function refreshCloudVersionFromBackend() {
+  try {
+    const version = await invoke("get_cloud_version");
+    if (typeof version === "number") {
+      updateLocalCloudVersion(version);
+    }
+  } catch {}
 }
 
 async function checkUsernameAvailability() {
   if (state.cloudTab !== "register") return;
   const username = document.querySelector("#auth-username")?.value.trim() || "";
+  state.cloudFormUsername = username;
   if (username.length < 3) return;
 
   const customUrl =
@@ -254,6 +275,7 @@ async function checkUsernameAvailability() {
 
   state.cloudUsernameChecking = true;
   state.cloudUsernameAvailable = null;
+  state.cloudUsernameCheckError = "";
   state.cloudError = "";
   render();
 
@@ -261,14 +283,15 @@ async function checkUsernameAvailability() {
     const res = await fetch(
       `${baseUrl}/v1/auth/check-username/${encodeURIComponent(username)}`,
     );
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
     state.cloudUsernameAvailable = data.available === true;
     if (!data.available) {
       state.cloudError = `El nom d'usuari "${username}" ja existeix. Tria'n un altre.`;
     }
   } catch {
-    // If the check fails (network, etc.), allow continuing — the submit will catch it
     state.cloudUsernameAvailable = null;
+    state.cloudUsernameCheckError = "No s'ha pogut comprovar el nom d'usuari. Revisa la connexió i torna-ho a provar.";
   } finally {
     state.cloudUsernameChecking = false;
     render();
@@ -355,9 +378,12 @@ async function cloudAuthSubmit(event) {
 
       if (!state.locked) {
         try {
-          await invoke("sync_upload_vault", {
+          const uploadRes = await invoke("sync_upload_vault", {
             config: rustCloudConfig(updatedConfig),
           });
+          if (uploadRes && typeof uploadRes.version === "number") {
+            updateLocalCloudVersion(uploadRes.version);
+          }
           showToast("Compte creat i SherLock sincronitzada a Railway!");
         } catch {
           showToast(`Compte creat com a ${authData.username} a Railway.`);
@@ -418,6 +444,7 @@ async function cloudAuthSubmit(event) {
         masterPassword,
         config: rustCloudConfig(updatedConfig),
       });
+      await refreshCloudVersionFromBackend();
 
       const vault = JSON.parse(serialized);
       state.entries = (vault.entries || []).map(mapVaultEntry);
@@ -445,6 +472,9 @@ async function cloudAuthSubmit(event) {
           const result = await invoke("sync_upload_vault", {
             config: rustCloudConfig(updatedConfig),
           });
+          if (result && typeof result.version === "number") {
+            updateLocalCloudVersion(result.version);
+          }
           showToast(result.message || "Canvis sincronitzats amb Railway!");
         } catch (error) {
           showToast(
@@ -484,6 +514,9 @@ async function handleCloudSyncNow() {
     const res = await invoke("sync_upload_vault", {
       config: rustCloudConfig(state.cloudConfig),
     });
+    if (res && typeof res.version === "number") {
+      updateLocalCloudVersion(res.version);
+    }
     showToast(res.message || "SherLock pujat correctament a Railway!");
   } catch (err) {
     showToast(`Error de sincronització: ${err}`);
@@ -535,6 +568,7 @@ async function downloadVaultFromCloud(masterPassword) {
       masterPassword,
       config: rustCloudConfig(state.cloudConfig),
     });
+    await refreshCloudVersionFromBackend();
     const vault = JSON.parse(serialized);
     state.entries = (vault.entries || []).map(mapVaultEntry);
     state.folders = vault.folders || [];
@@ -622,6 +656,20 @@ async function confirmResetLocalVault() {
     state.welcomeStep = 0;
     state.firstEntryGuideStep = 1;
     state.view = "vault";
+    // Esborra el patró d'imatge i tot l'estat d'autenticació per imatge
+    state.imageAuthImage = "";
+    state.imageGridConfigured = false;
+    state.imageGridPattern = [];
+    state.imageGridBrushPath = [];
+    state.imageUnlockBrushPath = [];
+    state.showGridUnlock = false;
+    state.showGridSetup = false;
+    state.gridSetupError = "";
+    state.gridUnlockError = "";
+    state.showAuthMethodSelection = true;
+    state.authMethodSelected = "password";
+    imageAuthRenderSource = "";
+    imageAuthRenderBitmap = null;
     showToast("Dades locals eliminades.");
   } catch (error) {
     showToast(`No s'han pogut eliminar les dades: ${error}`);
@@ -2335,6 +2383,11 @@ function bindEvents() {
     });
 
   // Check username availability on blur (register tab only)
+  document.querySelector("#auth-username")?.addEventListener("input", (event) => {
+    state.cloudFormUsername = event.currentTarget.value;
+    state.cloudUsernameAvailable = null;
+    state.cloudUsernameCheckError = "";
+  });
   document
     .querySelector("#auth-username")
     ?.addEventListener("blur", checkUsernameAvailability);
