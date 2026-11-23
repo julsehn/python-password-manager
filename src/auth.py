@@ -111,7 +111,6 @@ def verify_jwt_token(token: str) -> Optional[JWTClaims]:
 
         header, payload, signature = parts
 
-        # Decode and verify header
         import json
 
         header_data = base64.urlsafe_b64decode(header + "==" * (len(header) % 4))
@@ -120,13 +119,11 @@ def verify_jwt_token(token: str) -> Optional[JWTClaims]:
         if not isinstance(header_dict, dict) or header_dict.get("alg") != "HS256":
             return None
 
-        # Verify signature
         secret = _load_secret(JWT_SECRET)
         key = _derive_key_from_secret(secret)
 
         expected_sig = hmac.new(key, f"{header}.{payload}".encode(), hashlib.sha256).digest()
 
-        # Decode signature from base64 to bytes
         try:
             signature_bytes = base64.urlsafe_b64decode(signature + "==" * (len(signature) % 4))
         except Exception:
@@ -135,7 +132,6 @@ def verify_jwt_token(token: str) -> Optional[JWTClaims]:
         if not hmac.compare_digest(signature_bytes, expected_sig):
             return None
 
-        # Decode and verify payload
         payload_data = base64.urlsafe_b64decode(payload + "==" * (len(payload) % 4))
         payload_json = payload_data.decode()
         payload_dict = json.loads(payload_json)
@@ -158,11 +154,9 @@ def verify_jwt_token(token: str) -> Optional[JWTClaims]:
         ):
             return None
 
-        # Check expiration
         if expires_at < int(time.time()):
             return None
 
-        # Check vault is unlocked
         if not vault_unlocked:
             return None
 
@@ -193,13 +187,10 @@ def sign_request(payload: Mapping[str, object]) -> Tuple[str, str]:
     """
     secret = _load_secret(HMAC_SECRET)
 
-    # Create message to sign
     message = f"POST{VAULT_PATH}{payload.get('data', '')}".encode()
 
-    # Sign with HMAC-SHA256
     signature = hmac.new(secret, message, hashlib.sha256).hexdigest()
 
-    # Generate timestamp
     timestamp = str(int(time.time()))
 
     return signature, timestamp
@@ -232,13 +223,10 @@ def verify_request_signature(
     except ValueError:
         return False
 
-    # Verify signature
     secret = _load_secret(HMAC_SECRET)
 
-    # Reconstruct message
     message = f"POST{str(VAULT_PATH)}{payload.get('data', '')}".encode()
 
-    # Compute expected signature
     expected_sig = hmac.new(secret, message, hashlib.sha256).hexdigest()
 
     return hmac.compare_digest(signature, expected_sig)

@@ -56,7 +56,6 @@ class PasswordManager:
         if len(password) < 8:
             raise ValueError("La contrasenya és massa curta (mínim 8 caràcters).")
 
-        # Sanitize inputs
         site = self._sanitize_url(site)
         username = self._sanitize_text(username, 256)
         notes = self._sanitize_text(notes, max_length=1000)
@@ -108,13 +107,10 @@ class PasswordManager:
         if use_symbols:
             character_sets.append("!@#$%^&*()-_=+[]{};:,.<>?")
 
-        # Ensure minimum length
         password_length = max(len(character_sets), 4, length)
 
-        # Guarantee at least one character from each required set
         password = [secrets.choice(cs) for cs in character_sets]
 
-        # Fill remaining length with random characters from all sets
         alphabet = "".join(character_sets)
         password.extend(secrets.choice(alphabet) for _ in range(password_length - len(password)))
 

@@ -1,21 +1,22 @@
-# Browser Extension Security
+# Browser extension security
 
-## Communication paths
+## Where the trust sits
 
-- The extension uses browser native messaging to communicate with `browser-extension/native/sherlock_native.py`.
-- The native host sends authenticated requests to the desktop app's loopback HTTP service at `127.0.0.1:8080`.
-- The desktop UI uses Tauri IPC for frontend-to-Rust commands. The extension does not use Tauri IPC.
-- The loopback service accepts connections only from loopback addresses and validates paired-client signatures or session tokens on protected routes.
+- The extension only talks to `browser-extension/native/sherlock_native.py` through browser native messaging. The browser enforces which extension may start that host via the manifest (`allowed_origins` for Chrome, `allowed_extensions` for Firefox). The host's own check on the launcher argument is a second line, not the main one.
+- The host calls the desktop app's loopback service at `http://127.0.0.1:<port>/api/v1`, where the port is published in `~/.password_manager/extension_port`.
+- Pairing is separate from installation. A browser that has not been paired gets nothing: the app issues a six-digit code that expires in two minutes, the extension registers an ECDSA P-256 public key, and each request is authorised by signing a fresh nonce.
+- The desktop UI uses Tauri IPC. The extension never does.
 
-## Data handling
+## What is stored where
 
-- The local vault is encrypted by the desktop app before it is written to disk or uploaded.
-- The cloud service stores encrypted vault blobs and account password hashes; it does not receive the master password used for local vault encryption.
-- Extension content scripts create save prompts with text nodes. Credential passwords are not stored in popup DOM attributes.
-- Keep browser extension permissions limited to the supported local service and sites where autofill is needed.
+- The vault stays encrypted on disk and is only decrypted inside the desktop app.
+- The extension keeps its own private key and client id in `browser.storage.local`. It does not keep credentials, and it does not cache the vault.
+- The cloud service receives encrypted blobs and account metadata. It never receives the master password or the derived key.
+- Content scripts build save prompts from text nodes. Passwords are not written into popup DOM attributes.
 
-## Operational notes
+## Worth knowing
 
-- The local service prefers port `8080`; if occupied, it binds an available loopback port and publishes it for the native host.
-- The native host and browser extension must be installed and paired with the desktop app before credential access is available.
-- Do not treat this document as a substitute for reviewing the implementation and platform-specific packaging configuration.
+- The loopback service only accepts connections from loopback addresses and validates the paired-client signature or the session token on protected routes.
+- If port 8080 is taken, the app binds another loopback port and publishes it for the host. Browser extension manifests that hardcode 8080 are only used as a fallback.
+- Installing the host is not the same as authorising a browser. If a machine is shared, revoke the pairing in **Configuració → Browsers vinculats**.
+- This document is a summary, not a substitute for reading the host and the Rust server code.

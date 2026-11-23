@@ -35,7 +35,6 @@ def generate_extension_certs():
     print(f"Client certificate created at: {CLIENT_CERT_PATH}")
     print(f"Client key created at: {CLIENT_KEY_PATH}")
 
-    # Copy to browser-extension build directory
     build_dir = Path(__file__).resolve().parent.parent / "browser-extension" / "certs"
     build_dir.mkdir(parents=True, exist_ok=True)
 

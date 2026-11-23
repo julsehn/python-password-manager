@@ -1,6 +1,5 @@
 /* SherLock inline field icons: styles moved to Shadow DOM in content.js */
 
-/* SherLock Save Notification Banner */
 .sherlock-save-prompt {
   position: fixed !important;
   top: 16px !important;

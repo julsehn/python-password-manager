@@ -28,7 +28,6 @@ import urllib.request
 from pathlib import Path
 from typing import Any, Dict, NoReturn, Optional
 
-# ── Allowed launcher origin ───────────
 # Chrome passes the extension origin as argv[1].
 # Firefox passes the host-manifest path as argv[1]; the extension ID may appear
 # in argv[2] in some versions. The primary trust boundary is the browser
@@ -36,7 +35,6 @@ from typing import Any, Dict, NoReturn, Optional
 ALLOWED_CHROME_ORIGIN = "chrome-extension://lcbgmkafanopplcefoapdfmhhjfoaamd/"
 ALLOWED_FIREFOX_ID = "sherlock@juls.com"
 
-# ── Constants 
 MAX_MESSAGE_SIZE = 1024 * 1024  # 1 MB
 VAULT_DIR: str = os.path.expanduser("~/.password_manager")
 VAULT_PATH: str = os.path.abspath(
@@ -64,7 +62,6 @@ logging.basicConfig(
 logger: logging.Logger = logging.getLogger("sherlock_native")
 
 
-# ── Origin check (defence-in-depth) ──
 
 def _validate_argv_origin() -> None:
     """
@@ -98,7 +95,6 @@ def _send_and_exit(msg: Dict[str, Any]) -> NoReturn:
     sys.exit(1)
 
 
-# ── Wire protocol ─────────────────────
 
 def write_native(data: bytes) -> None:
     """Write all native-messaging bytes to stdout without text buffering."""
@@ -178,7 +174,6 @@ def send_message(message: Dict[str, Any]) -> None:
             pass
 
 
-# ── App communication ─────────────────
 
 def app_request(
     method: str,
@@ -264,7 +259,6 @@ def generate_password(options: Dict[str, Any]) -> Dict[str, Any]:
         return {"success": False, "error": str(exc)}
 
 
-# ── Main loop 
 
 def main() -> None:
     global APP_TOKEN
@@ -375,7 +369,6 @@ def main() -> None:
                         APP_TOKEN = None
 
                 elif action == "lockVault":
-                    # Phase 2 will remove this; for now relay to app
                     response = app_request("POST", "/lock")
                     if response.get("success"):
                         APP_TOKEN = None

@@ -1,108 +1,90 @@
-# SherLock - Password Manager
+# SherLock
 
-Una aplicació de gestió de contrasenyes de codi obert per a Mac, Windows i Linux construïda amb Tauri, Rust i Vite.
+Gestor de contrasenyes local per a Mac, Windows i Linux. L'aplicació és Tauri 2: Rust al darrere, Vite al davant. Les dades s'xifren al teu ordinador; si actives el núvol, el servidor només rep el fitxer xifrat i no el pot obrir.
 
-![SherLock](https://img.shields.io/badge/License-MIT-yellow.svg)
-![Rust](https://img.shields.io/badge/Rust-Tauri-orange)
+## Què fa
 
-## Característiques
-
-- 🔐 **Criptografia end-a-end**: Totes les dades s'encifren localment amb AES-256-GCM i derivació de claus Argon2id (64 MiB, 3 passades)
-- ☁️ **Sync a la núvol**: Sync automàtic amb Railway API
-- 🔒 **Protecció de memòria**: Neteja de memòria amb `zeroize` per a dades sensibles
-- 📱 **Interfície d'escriptori**: Aplicació nativa lleugera amb Tauri 2
-- 🎯 **Autocompliment**: Omple automàticament formularis amb contrasenyes
-- 🔋 **Bloqueig automàtic**: La SherLock es bloqueja per inactivitat
-- 🌐 **Extensió del navegador**: Chrome i Firefox amb missatgeria nativa
+- Xifra la caixa amb AES-256-GCM i deriva la clau de la contrasenya mestra amb Argon2id (64 MiB de memòria, 3 passades).
+- Sincronitza amb l'API de Railway quan la vols tenir en més d'un dispositiu. El servidor no veu mai el contingut.
+- Es bloqueja sola per inactivitat, 15 minuts per defecte, i esborra de memòria les dades sensibles amb `zeroize`.
+- Extensió per a Chrome i Firefox que parla amb l'aplicació per missatgeria nativa, sense exposar res a la xarxa.
+- Generador de contrasenyes i frases, carpetes, historial i paperera.
 
 ## Requisits
 
-- Node.js 18+
-- Rust & Cargo
-- Python 3.10+ només per a l'host de missatgeria nativa de l'extensió
+- Node.js 18 o superior.
+- Rust i Cargo.
+- Python 3.10 o superior, només per a l'host de missatgeria nativa de l'extensió.
 
-Per generar una versió macOS signada i notaritzada, executa `npm run tauri:build:macos:release` amb `APPLE_SIGNING_IDENTITY`, `APPLE_API_ISSUER`, `APPLE_API_KEY` i `APPLE_API_KEY_PATH` configurats. L'ordre s'atura si no troba una identitat de codi-signatura vàlida.
+Per generar una versió de macOS signada i notaritzada cal executar `npm run tauri:build:macos:release` amb `APPLE_SIGNING_IDENTITY`, `APPLE_API_ISSUER`, `APPLE_API_KEY` i `APPLE_API_KEY_PATH` configurats. L'ordre s'atura si no troba una identitat de codi-signatura vàlida.
 
-## Instal·lació
+## Posar-lo en marxa
 
-### App d'escriptori
-
-SherLock és una aplicació Tauri (Rust + JavaScript), no una aplicació Python. Des de la carpeta `python-password-manager`:
+Des de la carpeta `python-password-manager`:
 
 ```bash
 npm install
-npm run tauri dev
+npm run tauri:dev
 ```
 
-En macOS també pots obrir-la amb `./Obrir_SherLock.command`.
+Aquesta ordre compila en perfil release i no omple `src-tauri/target/debug`. Si estàs tocant codi i vols recompilacions ràpides, `npm run tauri -- dev` genera el perfil de depuració, molt més gran. Per netejar només aquests artefactes: `cargo clean --profile dev --manifest-path src-tauri/Cargo.toml`.
 
-### Extensió del navegador
+En macOS també pots fer doble clic a `Obrir_SherLock.command`.
 
-La compilació de l'extensió és opcional i genera paquets locals per a Chrome i Firefox:
+## Extensió del navegador
+
+La compilació és opcional i deixa els paquets a punt per carregar-los en mode desenvolupador:
 
 ```bash
 ./browser-extension/build.sh
 ```
 
-Per instal·lar l'host de missatgeria nativa, segueix [browser-extension/README.md](browser-extension/README.md). Python és necessari només per executar aquest host.
+Després cal registrar l'host de missatgeria nativa amb `./tools/install_native_host.sh`. Els passos detallats, les rutes de registre i els errors habituals són a [browser-extension/README.md](browser-extension/README.md) i [browser-extension/NATIVE_MESSAGING.md](browser-extension/NATIVE_MESSAGING.md). Python només fa falta per executar aquest host.
 
-## Configuració del Servei a la Núvol
+## Núvol
 
-Per utilitzar la funció de sync a la núvol:
+La sincronització és opcional. Si la vols:
 
-1. **Desplega la API a Railway**:
-   - Vés a https://railway.app
-   - Crea un nou projecte
-   - Connecta aquest repositori
-   - Desplega
+1. Desplega l'API de `Password-Manager-Cloud` a Railway.
+2. A l'aplicació, ves a Configuració i indica l'URL del servei.
+3. Crea un compte i puja la caixa.
 
-2. **Configura l'URL del servei**:
-   - Ves a l'apartat "Configuració" a l'aplicació
-   - Introdueix l'URL del teu servei Railway
-   - Crea una nova SherLock núvol (obté un vault_id i token)
+Des d'aleshores pots pujar i baixar la caixa des de la mateixa pantalla de configuració. El fitxer `~/.password_manager/config.json` només el fan servir els mòduls Python antics; l'aplicació Tauri no el llegeix ni l'escriu.
 
-3. **Sincronització**:
-   - Pujar o descarregar la SherLock des del menú "Remot"
-
-La configuració del núvol es gestiona des de l'aplicació. El fitxer
-`~/.password_manager/config.json` només pertany als mòduls Python antics i no
-configura la sincronització de l'app Tauri.
-
-## Estructura del Projecte
+## Estructura
 
 ```
 python-password-manager/
-├── browser-extension/      # Extensió del navegador (Chrome/Firefox)
-│   ├── manifest.chrome.json # Manifest font de Chrome
-│   ├── manifest.firefox.json # Manifest font de Firefox
-│   ├── build/              # Paquets locals generats per build.sh (no versionats)
-│   ├── background.js       # Service worker
-│   ├── popup.html          # UI de l'extensió
-│   ├── popup.js            # Controlador de l'extensió
-│   ├── content.js          # Script de contingut per autofill
-│   ├── content.css         # Estils de contingut
-│   ├── native/             # Host de missatgeria nativa
-│   │   ├── sherlock_native.py
-│   │   └── sherlock_native.sh
-│   └── README.md           # Documentació de l'extensió
-├── tools/                  # Scripts de tests
+├── src-tauri/            # backend Rust, comandes Tauri i servidor local
+├── src-web/              # interfície Vite: main.js, vistes, diàlegs i estils
+├── browser-extension/    # extensió de Chrome i Firefox, i host natiu
+├── tools/                # instal·lació de l'host i scripts de proves
+├── guides/               # guia d'usuari
 └── README.md
 ```
 
-## Protocol de Seguretat
+## Seguretat
 
-- Tot el clau d'encodinament es deriva de la contrasenya mestra
-- Els fills de contrasenya s'esborren immediatament de la memòria
-- Les contrasenyes no s'estalvien en fitxers (només al fitxer blocat)
-- Bloqueig automàtic per a atacs de força bruta
+La contrasenya mestra és l'única manera d'entrar. No hi ha autenticació per imatge ni cap selector de mètode: si no hi ha caixa, l'aplicació et rep amb la pantalla de benvinguda, et demana la contrasenya dues vegades i comprova que compleixi aquests mínims abans de xifrar res:
 
-- L'autenticació per graella d'imatge depèn dels fragments guardats al keyring d'aquest dispositiu; sense ells la caixa no es pot desxifrar ni traslladar a un altre dispositiu.
+- 12 caràcters com a mínim.
+- Una majúscula, una minúscula, un número i un caràcter especial.
+
+El backend torna a validar la contrasenya pel seu compte; la llista de requisits de la interfície només és el primer filtre. Canviar la contrasenya mestra rexifra la caixa existent i conserva entrades, carpetes, paperera, historial i la sessió del núvol.
+
+Altres coses que val la pena saber:
+
+- La clau surt sempre de la contrasenya mestra. No es desa enlloc i la còpia que viu en memòria es neteja quan ja no cal.
+- El servidor del núvol rep la caixa xifrada i metadades del compte. No rep la contrasenya mestra i no pot desxifrar res.
+- L'extensió no llegeix la caixa directament: demana les credencials a l'aplicació a través de l'host natiu.
+- Si oblides la contrasenya mestra, la caixa no es pot recuperar. No hi ha porta del darrere.
+
+Més detalls a [browser-extension/SECURITY.md](browser-extension/SECURITY.md) i a la política de privacitat que es mostra dins de l'aplicació.
 
 ## Enllaços
 
-- [GitHub](https://github.com/julsehn/Password-Manager-Cloud)
-- [Documentació Completa](https://docs.password-manager.cloud)
+- [Codi de l'API al núvol](https://github.com/julsehn/Password-Manager-Cloud)
 
 ## Llicència
 
-MIT License - Lliure d'utilitzar, estudiar, modificar i redistribuir.
+MIT. Pots usar-la, estudiar-la, modificar-la i redistribuir-la.

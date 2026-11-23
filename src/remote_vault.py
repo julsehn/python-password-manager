@@ -198,7 +198,6 @@ class RemoteVaultStore:
             return response
         except Exception as auth_error:
             if create_if_not_exists:
-                # Try to register new user
                 try:
                     response = client.register_user(username, password)
                     self.config["auth_user"] = response["username"]

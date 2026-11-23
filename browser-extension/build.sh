@@ -14,7 +14,6 @@ cd "$SCRIPT_DIR"
 
 echo "Building SherLock Browser Extension…"
 
-# Warn if Firefox has the build/firefox directory loaded as a temporary add-on.
 if [ -d "build/firefox" ]; then
   echo "⚠️  build/firefox exists and will be recreated."
   echo "   If you loaded it as a Temporary Add-on in Firefox, reload it in"

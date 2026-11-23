@@ -43,12 +43,24 @@ pub struct HistoryItem {
     pub created_at: String,
 }
 
+/// Railway session material stored inside the encrypted local vault. When the
+/// vault is synced, this metadata travels only inside its encrypted payload.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CloudSession {
+    pub railway_url: String,
+    pub vault_id: String,
+    pub access_token: String,
+    pub refresh_token: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VaultData {
     pub entries: Vec<Entry>,
     pub folders: Vec<Folder>,
     pub deleted_entries: Vec<TrashedEntry>,
     pub history: Vec<HistoryItem>,
+    #[serde(default)]
+    pub cloud_session: Option<CloudSession>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

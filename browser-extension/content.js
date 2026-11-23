@@ -23,7 +23,6 @@ function setNativeInputValue(element, value) {
   );
   element.dispatchEvent(new Event("blur", { bubbles: true, cancelable: true }));
 
-  // Visual feedback glow
   const prevTransition = element.style.transition;
   const prevBoxShadow = element.style.boxShadow;
   element.style.transition = "box-shadow 0.2s ease";
@@ -150,7 +149,6 @@ function findFormFields(root = document, { includeNewPassword = false } = {}) {
   };
 }
 
-// ─── SherLock field icon layer ───
 function computeIconBox(fieldRect) {
   const margin = Math.max(4, Math.min(fieldRect.height * 0.15, 8));
   const size = Math.max(18, Math.min(fieldRect.height - 2 * margin, 40));
@@ -515,7 +513,6 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     if (target) {
       setNativeInputValue(target, request.password);
 
-      // Fill repeat/confirm password field if exists in the same form
       if (target.form) {
         const otherPasswords = Array.from(
           target.form.querySelectorAll('input[type="password"]'),
@@ -598,7 +595,7 @@ function showSavePrompt({ site, username, password }) {
       },
       (res) => {
         if (res && res.success) {
-          // Use textContent to avoid XSS from server-provided strings (F15)
+          // Use textContent to avoid XSS from server-provided strings.
           const okSpan = document.createElement("span");
           okSpan.style.fontWeight = "600";
           okSpan.style.color = "#4ade80";
@@ -625,7 +622,6 @@ function showSavePrompt({ site, username, password }) {
   }, 15000);
 }
 
-// Listen for form submissions to offer saving new credentials
 document.addEventListener(
   "submit",
   (event) => {

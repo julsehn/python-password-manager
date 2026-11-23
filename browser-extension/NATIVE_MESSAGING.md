@@ -1,179 +1,73 @@
-# Browser Extension Native Messaging Setup
+# Native messaging setup
 
-## Overview
+The extension does not read the vault. It sends requests to `browser-extension/native/sherlock_native.py`, a small Python process that the browser starts over stdio, and that process calls the app's loopback API. Nothing leaves the machine.
 
-The SherLock browser extension uses **native messaging** for secure, direct communication with the desktop app. This provides:
+## Install
 
-✅ **Direct stdio communication** - No network exposure  
-✅ **AES-256-GCM encryption** - Industry-standard security  
-✅ **Argon2id key derivation** - Memory-hard protection for vault passwords
-✅ **Cross-platform** - Works on macOS, Windows, and Linux  
-✅ **Tauri integration** - Communicates with the desktop app when running
-
-## Architecture
-
-```
-┌─────────────┐     ┌──────────────────┐     ┌─────────────┐
-│  Browser    │────▶│  Native Messaging│────▶│  Desktop    │
-│  Extension  │     │  (Python)        │     │  Tauri App  │
-└─────────────┘     └──────────────────┘     └─────────────┘
-       │                       │                       │
-       │   JSON messages       │   JSON messages       │
-       │   (encrypted)        │   (encrypted)         │
-       │                       │                       │
-       │◀─────────────────────┤◀──────────────────────┤
-       │   Responses          │   Responses           │
-       └──────────────────────┴───────────────────────┘
-```
-
-## Native Messaging Host
-
-**Location**: `browser-extension/native/sherlock_native.py`
-
-This Python script:
-
-- Implements the WebExtension Native Messaging protocol
-- Uses length-prefixed messages for efficiency
-- Manages secure in-memory sessions
-- Integrates with the Tauri desktop API
-- Falls back to local vault file if Tauri is not running
-
-## Installation
-
-### 1. Run the Launcher
-
-The `Obrir_SherLock.command` script automatically sets up native messaging:
+`Obrir_SherLock.command` runs the installer on every launch, so a normal macOS start is enough. To do it by hand:
 
 ```bash
-./Obrir_SherLock.command
-```
-
-This will:
-
-- Build the browser extension
-- Register the native messaging host with Firefox and Chrome
-- Launch the application
-
-### 2. Manual Setup (if needed)
-
-If you need to set up native messaging manually:
-
-```bash
-# Make the native host executable
 chmod +x browser-extension/native/sherlock_native.py
-
-# Run the setup script
 ./tools/install_native_host.sh
 ```
 
-This creates registration files at:
+The script copies the host and its wrapper to `~/Library/Application Support/SherLock/NativeMessaging/` and writes the two registration files:
 
-- **Firefox**: `~/.mozilla/native-messaging-hosts/sherlock.json`
-- **Chrome**: `~/.config/google-chrome/NativeMessagingHosts/sherlock.json`
+| Browser | Manifest |
+| --- | --- |
+| Firefox | `~/Library/Application Support/Mozilla/NativeMessagingHosts/sherlock.json` |
+| Chrome | `~/Library/Application Support/Google/Chrome/NativeMessagingHosts/sherlock.json` |
 
-### 3. Load the Extension
+Firefox reads the `Mozilla` directory on macOS, not the one inside `Firefox/`. If you place the manifest in the wrong folder the browser silently ignores it.
 
-From the project root, run `./browser-extension/build.sh` before loading either browser package.
+On Linux the equivalent script is `tools/register_native_host_linux.sh`, which writes to `~/.mozilla/native-messaging-hosts/sherlock.json` and `~/.config/google-chrome/NativeMessagingHosts/sherlock.json`. Snap and Flatpak builds of Firefox use their own sandboxed directories and often cannot start a host from the home directory at all; if the popup stays disconnected there, install the browser from a normal package instead of fighting the sandbox.
 
-#### Chrome:
+Chromium forks (Edge, Brave, Chromium) keep their own native messaging directories. Copy the Chrome manifest there and change `allowed_origins` if you need them.
 
-1. Go to `chrome://extensions/`
-2. Enable **Developer mode**
-3. Click **"Load unpacked"**
-4. Select the `browser-extension/build/chrome` folder
-5. **Accept native messaging permissions** when prompted
+## Build and load the extension
 
-#### Firefox:
+Run `./browser-extension/build.sh` first: it copies the host into `build/chrome` and `build/firefox` together with the rest of the extension.
 
-1. Go to `about:debugging`
-2. Click **"This Firefox"**
-3. Click **"Load Temporary Add-on"**
-4. Select `browser-extension/build/firefox/manifest.json`
-5. **Accept native messaging permissions** when prompted
+Chrome: `chrome://extensions/` → Developer mode → Load unpacked → `browser-extension/build/chrome`.
 
-## How It Works
+Firefox: `about:debugging` → This Firefox → Load Temporary Add-on → `browser-extension/build/firefox/manifest.json`. Temporary add-ons vanish when Firefox restarts, so reload after each build.
 
-### 1. Extension Requests Data
+## Pair once
 
-The extension sends a JSON message to the native host:
+Pairing is what actually authorises a browser; installing the host only lets the browser start it.
+
+1. In the app: **Configuració → Browsers vinculats → Generar codi per vincular un navegador**.
+2. In the extension popup, enter the six-digit code.
+
+The code lasts two minutes and is single-use. The extension generates an ECDSA P-256 key pair, keeps the private key in `browser.storage.local`, and sends only the public key. On each vault request it signs a nonce from the app, so the browser proves it is the same client without storing a reusable secret.
+
+## Protocol
+
+Native messaging uses stdin/stdout with a 4-byte little-endian length prefix followed by UTF-8 JSON. Messages are capped at 1 MB. The host checks the launcher argument that Chrome passes (`chrome-extension://…`), but the real trust boundary is the browser's own manifest check (`allowed_origins` or `allowed_extensions`); the host treats any id sent inside the message body as untrusted.
+
+A request looks like this:
 
 ```json
-{
-  "action": "fetchCredentials",
-  "site": "example.com"
-}
+{ "action": "fetchCredentials", "domain": "example.com" }
 ```
 
-### 2. Native Host Checks Tauri
-
-The native host first checks if the Tauri desktop app is running:
-
-- If running and unlocked → forwards request to Tauri API
-- If not running → uses local session cache
-
-### 3. Tauri Handles Request
-
-If Tauri is running, it handles the request via its HTTPS API:
-
-- `/api/v1/vault/credentials?domain=example.com`
-
-### 4. Response Returns
-
-The response flows back through the same path to the extension.
-
-## Security Features
-
-1. **Native Messaging**: Direct OS stdio bridge, no network exposure
-2. **AES-256-GCM**: Strong encryption for all vault data
-3. **Argon2id**: Memory-hard key derivation raises the cost of offline guessing
-4. **Session Management**: In-memory sessions with secure temp files
-5. **No credentials in transit**: All communication is local
+The host forwards it to `http://127.0.0.1:<port>/api/v1/…` using the port published in `~/.password_manager/extension_port` and the Bearer token obtained during pairing. If the app is not running there is no fallback to the vault file; the request fails.
 
 ## Troubleshooting
 
-### Extension shows "Disconnected"
+**Disconnected popup.** Start the app, then reopen the popup. If it stays disconnected, re-run the installer and restart the browser.
 
-1. **Check the native host is executable**:
+**Host not found.** Check that `sherlock.json` exists in the right directory and that its `path` points to the installed copy under `Application Support/SherLock`, not to the build folder.
 
-   ```bash
-   chmod +x browser-extension/native/sherlock_native.py
-   ```
+**"Permission denied".** Make both `sherlock_native.sh` and `sherlock_native.py` executable, and allow the script in macOS System Settings → Privacy & Security.
 
-2. **Verify native messaging is registered**:
-   - Chrome: `chrome://native-messaging/`
-   - Firefox: `about:native-messaging`
-   - Look for `sherlock` in the list
+**Pairing code rejected.** Codes expire quickly and only work once. Generate a new one instead of reusing an old screenshot.
 
-3. **Re-run the setup script**:
-
-   ```bash
-   ./tools/install_native_host.sh
-   ```
-
-4. **Restart the browser**
-
-### "Permission denied" on macOS
-
-1. Open **System Preferences > Security & Privacy**
-2. Click **"Open Anyway"** for the native host script
-
-### Native host not found
-
-1. Make sure you ran `Obrir_SherLock.command` or the setup script
-2. Check the registration files exist at the paths shown above
-3. Restart the browser
+**Chrome extension ID changed.** `install_native_host.sh` uses the id derived from the `key` in `manifest.chrome.json`. If you rebuild with a different key, pass the new id as the first argument or the manifest will not match.
 
 ## Files
 
-- `browser-extension/native/sherlock_native.py` - Native messaging host
-- `browser-extension/manifest.chrome.json` and `browser-extension/manifest.firefox.json` - Browser-specific source manifests
-- `browser-extension/build/chrome/` and `browser-extension/build/firefox/` - Generated packages for loading in each browser
-- `tools/install_native_host.sh` - Registration script
-- `Obrir_SherLock.command` - Main launcher with auto-setup
-
-## Security Notes
-
-- The native messaging host runs with the same privileges as the browser
-- Keep the host script secure and up-to-date
-- The host only communicates with the local desktop app
-- No credentials are sent over the network
+- `native/sherlock_native.py`: the host itself.
+- `native/sherlock_native.sh`: wrapper registered with the browser.
+- `tools/install_native_host.sh`: copies the host and writes both manifests.
+- `Obrir_SherLock.command`: launcher that runs the installer.

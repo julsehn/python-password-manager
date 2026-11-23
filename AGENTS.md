@@ -46,7 +46,7 @@ The remaining `src/*.py` modules are legacy Python code kept only to support `te
 - `browser-extension/`: Chrome/Firefox extension source
 - `browser-extension/native/`: native messaging host and extension manager logic
 - Important files include:
-  - `browser-extension/manifest.json`
+  - `browser-extension/manifest.chrome.json` and `browser-extension/manifest.firefox.json`
   - `browser-extension/background.js`
   - `browser-extension/content.js`
   - `browser-extension/popup.js`
@@ -61,15 +61,29 @@ The remaining `src/*.py` modules are legacy Python code kept only to support `te
 
 - The usual macOS launcher `Obrir_SherLock.command` starts the Tauri app, whose frontend is `src-web/main.js` with styles in `src-web/secure.css` and `src-web/styles.css`. There is no active Python/PyQt GUI launch path (`main.py` and `src/ui/` were removed).
 - Tauri commands and encrypted-vault workflows live in `src-tauri/src/lib.rs`; in-memory server session state is managed by `src-tauri/src/server.rs`.
-- Validate frontend work with `npm run build`; validate Tauri backend work with `cargo test --manifest-path src-tauri/Cargo.toml`.
+- Validate frontend work with `npm run build`; validate Tauri backend work with `cargo test --release --manifest-path src-tauri/Cargo.toml`.
+- Never navigate the main webview away from the SPA: a relative link or `target="_blank"` can reload the app and lock the vault. Open bundled documents (for example the privacy policy) in an in-app modal, or use a controlled external opener.
 
-### Image-grid authentication invariants
+### Railway session storage
 
-- Store only the public image in `~/.password_manager/grid_auth.json`; generate fragments in Rust and keep them in the OS credential store. Keep the metadata file and parent directory restricted to the current user. Never persist the selected cell sequence; ordered selections are the secret.
-- New fragments must include uppercase, lowercase, digits, and symbols. Setup, unlock, and auth-method migration must derive exactly the same password from the selected cell indices in order.
-- Accept only the current image-grid format. Legacy fragment and coordinate formats are intentionally unsupported because this app has not shipped publicly.
-- The image-auth UI uses an invisible 5x5 hit grid over the image, numbered markers and a visible brush path, with a twelve-cell minimum. Do not show cell fragments or the concatenated password in the UI.
-- When migrating auth methods, re-encrypt the existing vault and preserve its contents; do not initialize an empty vault over an existing one.
+- Store Railway access and refresh tokens only in the encrypted vault's `cloud_session`; never persist them in the OS credential store or frontend local storage.
+- The app does not use the macOS Keychain. Keychain entries left by older builds are not read, written, or deleted; no Railway token is ever written to the Keychain again.
+- A Railway login that cannot save its session must not be reported as a persistent connection. Unlock the vault first, except when logging in specifically to download and unlock a cloud vault.
+- Registration must refuse a Railway account password that equals the local master password. Compare inside Rust (`ServerState::master_password_matches`) and never send or expose the master password to the frontend.
+
+### Local server and browser pairing
+
+- The paired-browser registry lives in `~/.password_manager/paired_clients.json` with `0600` permissions. It is a trust root: whoever can add a public key there can mint a session token once the vault is unlocked.
+- Tests may redirect the registry through `SHERLOCK_PAIRED_CLIENTS_PATH`; production always uses the config directory.
+
+### Master password authentication invariants
+
+- The only accepted authentication method is the master password. The image/pattern authentication flow, its commands, files, and the three-way auth-method picker were removed intentionally; do not reintroduce image login as a convenience option.
+- A missing vault means a new user: show the welcome/setup screen, ask for the master password twice, and place "Restaurar des del núvol" below the form. Do not show an auth-method menu.
+- Enforce the master-password policy in both layers: at least 12 characters plus an uppercase letter, a lowercase letter, a digit, and a special character. The Rust `validate_master_password` is authoritative; the frontend checklist is only the first check.
+- Show the strength meter and the live requirements checklist while the user types. Never store the password in app state, localStorage, logs, or an error message.
+- Creating a vault must write it before reporting success. Changing the master password re-encrypts the existing vault and preserves entries, folders, trash, history, and `cloud_session`; never initialize an empty vault over an existing one.
+- The legacy Python image/grid helpers were removed as well. Any `grid_auth.json`, `image_auth_secret.json`, or legacy `image_auth.json` left by old development builds is not read and is deleted by a local reset.
 
 ### Generator invariants
 
@@ -85,10 +99,12 @@ For the web/Tauri app:
 ```bash
 cd /Users/juls/Documents/GitHub/The-vault-project/python-password-manager
 npm install
-npm run tauri dev
+npm run tauri:dev
 ```
 
 On macOS you can also double-click `Obrir_SherLock.command`.
+
+Normal app runs use the release profile (`npm run tauri:dev`). `[profile.dev]` disables debug info and incremental compilation to keep `src-tauri/target` small; use `cargo test --release` so validation does not recreate the much larger `target/debug` cache.
 
 ## Project conventions
 

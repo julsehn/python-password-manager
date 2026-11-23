@@ -24,11 +24,9 @@ from .auth import JWTClaims, verify_jwt_token, verify_request_signature, generat
 from src.encryption import derive_key, decrypt
 from .models import PasswordEntry
 
-# Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Global vault state
 _vault_entries: List[PasswordEntry] = []
 _vault_version: str = "1"
 _shared_secret: str = ""
@@ -133,11 +131,9 @@ class SecureAPIHandler(BaseHTTPRequestHandler):
         if not signature or not timestamp:
             return False
 
-        # Get request body
         content_length = int(self.headers.get("Content-Length", 0))
         body = self.rfile.read(content_length).decode() if content_length > 0 else ""
 
-        # Verify signature
         return verify_request_signature(signature, timestamp, {"data": body})
 
     def _get_request_body(self) -> dict[str, object]:
@@ -164,12 +160,10 @@ class SecureAPIHandler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         """Handle GET requests."""
-        # Health check - no auth required
         if self.path == "/health":
             self._send_json_response(200, {"status": "healthy"})
             return
 
-        # Handshake endpoint - returns shared secret for HMAC
         if self.path == f"{VAULT_ENDPOINT}/handshake":
             # No auth required for handshake
             password = self._master_password
@@ -179,25 +173,20 @@ class SecureAPIHandler(BaseHTTPRequestHandler):
             )
             return
 
-        # Vault info endpoint
         if self.path == f"{VAULT_ENDPOINT}/vault-info":
-            # Verify client certificate
             if not self._verify_client_certificate():
                 self._send_json_response(401, {"error": "Client certificate required"})
                 return
 
-            # Authenticate with JWT
             payload = self._authenticate_request()
             if not payload:
                 self._send_json_response(401, {"error": "Invalid or expired token"})
                 return
 
-            # Verify request signature
             if not self._verify_request_signature():
                 self._send_json_response(403, {"error": "Invalid request signature"})
                 return
 
-            # Load vault
             entries = _load_vault(self._master_password)
             self._send_json_response(
                 200,
@@ -210,30 +199,24 @@ class SecureAPIHandler(BaseHTTPRequestHandler):
             )
             return
 
-        # Credentials endpoint
         if self.path.startswith(f"{VAULT_ENDPOINT}/credentials"):
-            # Verify client certificate
             if not self._verify_client_certificate():
                 self._send_json_response(401, {"error": "Client certificate required"})
                 return
 
-            # Authenticate with JWT
             payload = self._authenticate_request()
             if not payload:
                 self._send_json_response(401, {"error": "Invalid or expired token"})
                 return
 
-            # Verify request signature
             if not self._verify_request_signature():
                 self._send_json_response(403, {"error": "Invalid request signature"})
                 return
 
-            # Get domain parameter
             domain = ""
             if "?domain=" in self.path:
                 domain = self.path.split("?domain=")[1].split("&")[0]
 
-            # Load and filter credentials
             entries = _load_vault(self._master_password)
             credentials = []
             for entry in entries:
@@ -259,7 +242,6 @@ class SecureAPIHandler(BaseHTTPRequestHandler):
         """Handle POST requests."""
         global _vault_entries
 
-        # Unlock endpoint
         if self.path == f"{VAULT_ENDPOINT}/unlock":
             # No client cert required for unlock
             content_length = int(self.headers.get("Content-Length", 0))
@@ -271,7 +253,6 @@ class SecureAPIHandler(BaseHTTPRequestHandler):
                     raise ValueError("Request body must be a JSON object")
                 master_password = _string_field(data, "master_password")
 
-                # Derive key and decrypt vault
                 key, salt = derive_key(master_password)
 
                 if VAULT_PATH.exists():
@@ -281,7 +262,6 @@ class SecureAPIHandler(BaseHTTPRequestHandler):
                         PasswordEntry.from_dict(e) for e in vault_data.get("entries", [])
                     ]
 
-                # Generate token
                 secret = _get_shared_secret(master_password)
                 token = generate_jwt_token(secret)
 
@@ -299,25 +279,20 @@ class SecureAPIHandler(BaseHTTPRequestHandler):
                 self._send_json_response(401, {"error": "Invalid password"})
             return
 
-        # Save credentials endpoint
         if self.path == f"{VAULT_ENDPOINT}/credentials":
-            # Verify client certificate
             if not self._verify_client_certificate():
                 self._send_json_response(401, {"error": "Client certificate required"})
                 return
 
-            # Authenticate with JWT
             payload = self._authenticate_request()
             if not payload:
                 self._send_json_response(401, {"error": "Invalid or expired token"})
                 return
 
-            # Verify request signature
             if not self._verify_request_signature():
                 self._send_json_response(403, {"error": "Invalid request signature"})
                 return
 
-            # Get request body
             data = self._get_request_body()
             site = _string_field(data, "site")
             username = _string_field(data, "username")
@@ -328,12 +303,10 @@ class SecureAPIHandler(BaseHTTPRequestHandler):
                 self._send_json_response(400, {"error": "Site and password are required"})
                 return
 
-            # Create or update entry
             entry = PasswordEntry(
                 id=site, site=site, username=username, password=password, notes=notes
             )
 
-            # Update or add entry
             found = False
             for i, e in enumerate(_vault_entries):
                 if e.id == entry.id:
@@ -344,40 +317,32 @@ class SecureAPIHandler(BaseHTTPRequestHandler):
             if not found:
                 _vault_entries.append(entry)
 
-            # Save to disk
             _save_vault(self._master_password)
 
             self._send_json_response(200, {"success": True, "message": "Credential saved"})
             return
 
-        # Lock endpoint
         if self.path == f"{VAULT_ENDPOINT}/lock":
-            # Verify client certificate
             if not self._verify_client_certificate():
                 self._send_json_response(401, {"error": "Client certificate required"})
                 return
 
-            # Authenticate with JWT
             payload = self._authenticate_request()
             if not payload:
                 self._send_json_response(401, {"error": "Invalid or expired token"})
                 return
 
-            # Verify request signature
             if not self._verify_request_signature():
                 self._send_json_response(403, {"error": "Invalid request signature"})
                 return
 
-            # Save vault (re-encrypt)
             _save_vault(self._master_password)
 
-            # Clear in-memory state
             _init_vault_entries()
 
             self._send_json_response(200, {"success": True})
             return
 
-        # Generate password endpoint
         if self.path == f"{VAULT_ENDPOINT}/generate-password":
             # No auth required for password generation
             content_length = int(self.headers.get("Content-Length", 0))
@@ -400,7 +365,6 @@ class SecureAPIHandler(BaseHTTPRequestHandler):
                 ):
                     raise ValueError("Password options must be boolean")
 
-                # Generate password
                 chars = ""
                 if use_upper:
                     chars += "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
@@ -427,7 +391,6 @@ class SecureAPIHandler(BaseHTTPRequestHandler):
     def do_PUT(self) -> None:
         """Handle PUT requests (for updates)."""
         if self.path == f"{VAULT_ENDPOINT}":
-            # Same authentication as POST
             self._send_json_response(200, {"status": "updated"})
             return
 
@@ -436,7 +399,6 @@ class SecureAPIHandler(BaseHTTPRequestHandler):
     def do_DELETE(self) -> None:
         """Handle DELETE requests."""
         if self.path == f"{VAULT_ENDPOINT}":
-            # Same authentication as POST
             self._send_json_response(200, {"status": "deleted"})
             return
 
@@ -460,7 +422,6 @@ class SecureVaultServer:
         """Create SSL context with client certificate verification."""
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
 
-        # Load server certificates
         context.load_cert_chain(SERVER_CERT_PATH, SERVER_KEY_PATH)
 
         # Require client certificate verification (mTLS)
@@ -477,21 +438,16 @@ class SecureVaultServer:
         ensure_certificates_exist()
         self._ssl_context = self._create_ssl_context()
 
-        # Create HTTP server first
         self._server = HTTPServer((HOST, PORT), SecureAPIHandler)
 
-        # Set master password for handler class
         SecureAPIHandler._master_password = self._master_password
 
-        # Wrap the socket with SSL
         ssl_socket = self._ssl_context.wrap_socket(self._server.socket, server_side=True)
         self._server.socket = ssl_socket
 
-        # Start server in background thread
         self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
         self._thread.start()
 
-        # Wait briefly for server to initialize
         import time
 
         time.sleep(0.1)
@@ -504,7 +460,6 @@ class SecureVaultServer:
         if self._server:
             self._server.shutdown()
             self._server = None
-            # Clear master password
             SecureAPIHandler._master_password = ""
         logger.info("Secure API server stopped")
 
@@ -512,7 +467,6 @@ class SecureVaultServer:
         """Check if server is running."""
         if self._server is None:
             return False
-        # Check if server socket is open (we wrapped it with SSL)
         return self._server.socket is not None
 
 

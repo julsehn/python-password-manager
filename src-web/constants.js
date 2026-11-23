@@ -7,6 +7,7 @@ import {
   Search,
   Plus,
   ShieldCheck,
+  AlertCircle,
   Settings,
   ExternalLink,
   Copy,
@@ -50,6 +51,10 @@ import {
   RotateCcw,
   Pencil,
   Cloud,
+  UserPlus,
+  DownloadCloud,
+  LogIn,
+  Loader,
 } from "lucide";
 import { escapeHtml } from "./utils.js";
 
@@ -57,6 +62,7 @@ export const icons = {
   Search,
   Plus,
   ShieldCheck,
+  AlertCircle,
   Settings,
   ExternalLink,
   Copy,
@@ -100,6 +106,10 @@ export const icons = {
   RotateCcw,
   Pencil,
   Cloud,
+  UserPlus,
+  DownloadCloud,
+  LogIn,
+  Loader,
 };
 
 export const defaultSettings = {

@@ -11,7 +11,6 @@ PROJECT_DIR="$SCRIPT_DIR"
 HOST_SCRIPT="$PROJECT_DIR/browser-extension/native/sherlock_native.py"
 HOST_NAME="sherlock"
 
-# Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -22,16 +21,13 @@ echo "  SherLock - Linux/macOS Registration"
 echo "========================================"
 echo ""
 
-# Check if host script exists
 if [ ! -f "$HOST_SCRIPT" ]; then
     echo -e "${RED}ERROR: Host script not found: $HOST_SCRIPT${NC}"
     exit 1
 fi
 
-# Make host script executable
 chmod +x "$HOST_SCRIPT"
 
-# Create a shell wrapper for the Python script
 WRAPPER_SCRIPT="$PROJECT_DIR/browser-extension/native/sherlock_native.sh"
 
 echo "Creating shell wrapper..."
@@ -59,15 +55,11 @@ echo "  Registering for Firefox"
 echo "========================================"
 echo ""
 
-# Firefox registration
-# Firefox uses: ~/.mozilla/native-messaging-hosts/
-
 FF_DIR="$HOME/.mozilla/native-messaging-hosts"
 if [ ! -d "$FF_DIR" ]; then
     mkdir -p "$FF_DIR"
 fi
 
-# Create Firefox manifest
 cat > "$FF_DIR/${HOST_NAME}.json" << EOF
 {
   "name": "$HOST_NAME",
@@ -88,15 +80,11 @@ echo "  Registering for Chrome"
 echo "========================================"
 echo ""
 
-# Chrome registration
-# Chrome uses: ~/.config/google-chrome/NativeMessagingHosts/
-
 CHROME_DIR="$HOME/.config/google-chrome/NativeMessagingHosts"
 if [ ! -d "$CHROME_DIR" ]; then
     mkdir -p "$CHROME_DIR"
 fi
 
-# Create Chrome manifest
 cat > "$CHROME_DIR/${HOST_NAME}.json" << EOF
 {
   "name": "$HOST_NAME",
@@ -126,7 +114,7 @@ echo ""
 echo "2. Load the extension in Firefox:"
 echo "   - Open about:debugging"
 echo "   - Click 'This Firefox' -> 'Load Temporary Add-on...'"
-echo "   - Select: $PROJECT_DIR/browser-extension/manifest.json"
+echo "   - Select: $PROJECT_DIR/browser-extension/manifest.chrome.json"
 echo ""
 echo "3. Test the connection from the extension popup"
 echo ""

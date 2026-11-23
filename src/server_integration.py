@@ -41,11 +41,9 @@ class SecureServerManager:
             return True
 
         try:
-            # Create and start server
             self._server = SecureVaultServer(master_password)
             self._server.start()
 
-            # Wait for server to be ready
             import time
 
             max_attempts = 30

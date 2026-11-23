@@ -13,7 +13,7 @@ cleanup_project_vite() {
 
 cleanup_project_app() {
     local app_pids
-    app_pids="$(pgrep -f "$PROJECT_DIR/src-tauri/target/debug/sherlock" 2>/dev/null || true)"
+    app_pids="$(pgrep -f "$PROJECT_DIR/src-tauri/target/(debug|release)/sherlock" 2>/dev/null || true)"
     if [[ -n "$app_pids" ]]; then
         kill $app_pids 2>/dev/null || true
     fi
@@ -30,14 +30,6 @@ if [[ -f "$PM_DIR/vault.json" ]]; then
         # Esborra tots els fitxers de dades (equivalent a reset_vault del backend)
         rm -rf "$PM_DIR"
         echo "Dades locals de SherLock eliminades."
-
-        # Esborra les claus del Keychain (patró d'imatge + sessió Railway)
-        security delete-generic-password \
-            -s "com.juls.sherlock" -a "image-grid-cell-values" 2>/dev/null && \
-            echo "Clau del patró d'imatge eliminada del Keychain." || true
-        security delete-generic-password \
-            -s "com.juls.sherlock" -a "official-cloud-refresh" 2>/dev/null && \
-            echo "Sessió de Railway eliminada del Keychain." || true
     else
         echo "L'instància de SherLock local es conservarà."
     fi

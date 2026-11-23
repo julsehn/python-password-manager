@@ -39,7 +39,6 @@ class RateLimiter:
         """
         with self.lock:
             now = time.time()
-            # Remove old requests outside the period
             self.requests = [t for t in self.requests if now - t < self.per_period]
 
             if len(self.requests) < self.max_requests:
@@ -53,7 +52,6 @@ class RateLimiter:
         @wraps(func)
         def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
             while not self.acquire():
-                # Wait for next available slot
                 oldest = self.requests[0]
                 wait_time = self.per_period - (time.time() - oldest)
                 time.sleep(min(wait_time, 0.1))  # Check frequently, not in long sleep
@@ -145,7 +143,6 @@ class RailwayVaultClient:
         headers = dict(headers or {})
         headers.setdefault("Accept", "application/json")
 
-        # Add auth token for protected endpoints
         if method in ("GET", "PUT", "DELETE"):
             headers["Authorization"] = f"Bearer {self.token}"
 
@@ -178,7 +175,6 @@ class RailwayVaultClient:
                     key: value for key, value in response_body.items() if isinstance(key, str)
                 }
 
-                # Validate response has expected fields
                 if (
                     "vault_id" not in response_data
                     or "blob" not in response_data

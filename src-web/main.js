@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { api } from "./api.js";
 import {
+  cloudUsernameStatus,
   escapeHtml,
   sanitizedFragment,
   replaceMarkup,
@@ -25,8 +26,12 @@ import {
   icons,
 } from "./constants.js";
 import {
+  MASTER_PASSWORD_MIN_LENGTH,
   generateValue as generateCredentialValue,
+  passwordMeetsRequirements,
+  passwordRequirements,
   passwordStrength,
+  passwordStrengthMarkup,
 } from "./generator.js";
 import "./styles.css";
 import "./secure.css";
@@ -34,6 +39,9 @@ import "./secure.css";
 let autoLockTimer;
 
 let paletteHideTimer;
+let cloudUsernameCheckSequence = 0;
+let cloudUsernameCheckTimer = null;
+let cloudUsernameChecked = { username: "", railwayUrl: "" };
 
 const savedSettings = (() => {
   try {
@@ -48,21 +56,35 @@ const savedSettings = (() => {
 
 const savedCloudConfig = (() => {
   try {
-    return JSON.parse(localStorage.getItem("sherlock-cloud") || "{}");
+    const saved = JSON.parse(localStorage.getItem("sherlock-cloud") || "{}");
+    const safe = {
+      provider: saved.provider || "",
+      railwayUrl: saved.railwayUrl || "",
+      vaultId: saved.vaultId || "",
+      authUser: saved.authUser || "",
+      cloudVersion:
+        typeof saved.cloudVersion === "number" ? saved.cloudVersion : null,
+      lastSyncAt:
+        typeof saved.lastSyncAt === "number" ? saved.lastSyncAt : null,
+    };
+    if (saved.token || saved.refreshToken || saved.refresh_token) {
+      localStorage.setItem("sherlock-cloud", JSON.stringify(safe));
+    }
+    return safe;
   } catch {
     return {};
   }
 })();
 
 let lastLockedState = null;
+let lastView = null;
+let appDialogResolver = null;
 let browserPairingPollingTimer = null;
 let browserPairingExpirationTimer = null;
 
 const state = {
   locked: true,
   vaultExists: null,
-  showWelcome: false,
-  welcomeStep: 0,
   showFirstEntryGuide: false,
   firstEntryGuideStep: 1,
   loading: false,
@@ -92,13 +114,16 @@ const state = {
   browserPairingCode: "",
   cloudConfig: { railwayUrl: "", vaultId: "", token: "", ...savedCloudConfig },
   showCloudLogin: false,
+  showPrivacyPolicy: false,
   cloudLoading: false,
   cloudError: "",
+  cloudSyncStatus: { phase: "idle", text: "", at: null },
   cloudTab: "login",
   showDownloadPassword: false,
   downloadPassword: "",
   cloudActionContext: "settings",
   cloudShowAdvanced: false,
+  cloudMoreOpen: false,
   cloudUsernameChecking: false,
   cloudUsernameAvailable: null,
   cloudFormUsername: "",
@@ -121,36 +146,105 @@ const state = {
     removeAccents: false,
     onlyUnaccented: false,
   },
-  showAuthMethodSelection: false,
-  authMethodSelected: "password",
-  showGridSetup: false,
-  gridSetupError: "",
-  imageAuthImage: "",
-  imageGridConfigured: false,
-  imageGridPattern: [],
-  imageGridBrushPath: [],
-  imageUnlockBrushPath: [],
-  changingAuthMethod: false,
-  showGridUnlock: false,
-  gridUnlockError: "",
+  appDialog: null,
   showChangeAuthModal: false,
-  changeAuthSelected: "password",
   changeAuthBusy: false,
   changeAuthError: "",
 };
 
 const views = createViews(state);
 
-let imageAuthRenderSource = "";
-let imageAuthRenderBitmap = null;
-
 function showToast(message) {
   state.toast = message;
-  render();
+  const appContainer = document.querySelector("#app");
+  if (!appContainer) return;
+  const existing = appContainer.querySelector(".toast");
+  existing?.remove();
+  if (message) {
+    const el = document.createElement("div");
+    el.className = "toast show";
+    el.innerHTML = escapeHtml(message);
+    appContainer.appendChild(el);
+  }
   setTimeout(() => {
+    const t = document.querySelector(".toast");
+    if (t) t.remove();
     state.toast = "";
-    render();
   }, 2400);
+}
+
+function askDialog(options) {
+  if (state.appDialog || appDialogResolver) {
+    return Promise.resolve({ confirmed: false, password: "" });
+  }
+  state.appDialog = options;
+  render();
+  return new Promise((resolve) => {
+    appDialogResolver = resolve;
+    requestAnimationFrame(() => focusAppDialog());
+  });
+}
+
+function closeAppDialog(choice) {
+  const password = state.appDialog?.passwordValue || "";
+  const resolver = appDialogResolver;
+  state.appDialog = null;
+  appDialogResolver = null;
+  render();
+  if (resolver)
+    resolver({
+      confirmed: choice === true || choice === "third",
+      password,
+      choice:
+        choice === true ? "confirm" : choice === false ? "cancel" : choice,
+    });
+}
+
+function updateAppDialogConfirmButton() {
+  if (!state.appDialog) return;
+  const d = state.appDialog;
+  const requireText = d.requireText || "";
+  const passwordLabel = d.passwordLabel || "";
+  const requireValue = d.requireTextValue || "";
+  const passwordValue = d.passwordValue || "";
+  const disabled =
+    (requireText && requireValue !== requireText) ||
+    (passwordLabel && passwordValue.length === 0);
+  const btn = document.querySelector("#app-dialog-confirm");
+  if (btn) btn.disabled = disabled;
+}
+
+function focusAppDialog() {
+  if (!state.appDialog) return;
+  const d = state.appDialog;
+  const cancelBtn = document.querySelector("#app-dialog-cancel");
+  const firstInput = document.querySelector(
+    "#app-dialog-require-text, #app-dialog-password",
+  );
+  if (d.danger) {
+    cancelBtn?.focus();
+  } else if (firstInput) {
+    firstInput.focus();
+  } else {
+    cancelBtn?.focus();
+  }
+}
+
+function captureScroll() {
+  const positions = {};
+  for (const sel of [".settings-content", ".generator-content"]) {
+    const el = document.querySelector(sel);
+    if (el) positions[sel] = el.scrollTop;
+  }
+  return positions;
+}
+
+function restoreScroll(positions, prevView, prevLocked) {
+  if (state.view !== prevView || state.locked !== prevLocked) return;
+  for (const [sel, top] of Object.entries(positions)) {
+    const el = document.querySelector(sel);
+    if (el) el.scrollTop = Number(top);
+  }
 }
 
 function resetAutoLock() {
@@ -187,24 +281,8 @@ async function lockVault() {
   state.trash = [];
   state.query = "";
   state.showChangeAuthModal = false;
-  state.showGridSetup = false;
-  state.gridUnlockError = "";
-  state.imageGridConfigured = false;
-  state.imageGridPattern = [];
-  state.imageUnlockBrushPath = [];
-  state.imageAuthImage = "";
-  state.showGridUnlock = false;
-
-  try {
-    const authData = await api.getImageGridAuth();
-    if (authData?.type === "image_grid" && authData.version === 5) {
-      state.imageAuthImage = authData.image_data || "";
-      state.imageGridConfigured = true;
-      state.showGridUnlock = true;
-    }
-  } catch {
-    state.showGridUnlock = false;
-  }
+  state.showPrivacyPolicy = false;
+  state.changeAuthError = "";
   state.view = "vault";
   render();
 }
@@ -215,21 +293,9 @@ async function initializeApp() {
   try {
     const info = await api.getVaultInfo();
     state.vaultExists = Boolean(info.exists);
-
     if (!state.vaultExists) {
-      state.showWelcome = false;
-      state.showAuthMethodSelection = true;
-    } else {
-      const hasGridAuth = await checkGridAuth();
-      if (hasGridAuth) {
-        state.imageGridPattern = [];
-        const imageGrid = await api.getImageGridAuth();
-        state.imageAuthImage = imageGrid.image_data;
-        state.imageGridConfigured = true;
-        state.showGridUnlock = true;
-      }
+      state.error = "";
     }
-
     render();
   } catch {
     state.vaultExists = null;
@@ -240,7 +306,7 @@ function rustCloudConfig(config) {
   return {
     railway_url: config?.railwayUrl || "",
     vault_id: config?.vaultId || "",
-    token: config?.token || "",
+    token: "",
     cloud_version:
       typeof config?.cloudVersion === "number" ? config.cloudVersion : null,
   };
@@ -249,8 +315,35 @@ function rustCloudConfig(config) {
 function updateLocalCloudVersion(version) {
   if (typeof version === "number") {
     state.cloudConfig.cloudVersion = version;
-    localStorage.setItem("sherlock-cloud", JSON.stringify(state.cloudConfig));
+    persistCloudMetadata();
   }
+}
+
+function persistCloudMetadata() {
+  const {
+    provider = "",
+    railwayUrl = "",
+    vaultId = "",
+    authUser = "",
+    cloudVersion = null,
+    lastSyncAt = null,
+  } = state.cloudConfig;
+  localStorage.setItem(
+    "sherlock-cloud",
+    JSON.stringify({
+      provider,
+      railwayUrl,
+      vaultId,
+      authUser,
+      cloudVersion,
+      lastSyncAt,
+    }),
+  );
+}
+
+function updateLocalCloudLastSyncAt(at) {
+  state.cloudConfig.lastSyncAt = at;
+  persistCloudMetadata();
 }
 
 async function refreshCloudVersionFromBackend() {
@@ -259,45 +352,144 @@ async function refreshCloudVersionFromBackend() {
     if (typeof version === "number") {
       updateLocalCloudVersion(version);
     }
-  } catch {}
+  } catch (error) {
+    console.warn("No s'ha pogut actualitzar la versió del núvol:", error);
+  }
 }
 
-async function checkUsernameAvailability() {
-  if (state.cloudTab !== "register") return;
-  const username = document.querySelector("#auth-username")?.value.trim() || "";
-  state.cloudFormUsername = username;
-  if (username.length < 3) return;
+function updateCloudUsernameStatus() {
+  const input = document.querySelector("#auth-username");
+  if (!input) return;
+  const view = cloudUsernameStatus({
+    tab: state.cloudTab,
+    checking: state.cloudUsernameChecking,
+    available: state.cloudUsernameAvailable,
+    error: state.cloudUsernameCheckError,
+  });
+  const status = document.querySelector("#auth-username-status");
+  const hint = document.querySelector("#auth-username-hint");
+  input
+    .closest(".username-field")
+    ?.classList.toggle("has-status", Boolean(view.label));
+  input.classList.toggle("is-available", view.tone === "available");
+  input.classList.toggle(
+    "is-taken",
+    view.tone === "taken" || view.tone === "error",
+  );
+  if (view.tone === "taken") {
+    input.setAttribute("aria-invalid", "true");
+  } else {
+    input.removeAttribute("aria-invalid");
+  }
+  if (status) {
+    status.textContent = view.label;
+    status.className = `username-status is-${view.tone}`;
+  }
+  if (hint) {
+    hint.textContent = view.hint;
+    hint.className = `username-hint is-${view.tone}`;
+    hint.hidden = !view.hint;
+  }
+}
 
+function resetCloudUsernameCheck() {
+  if (cloudUsernameCheckTimer) {
+    clearTimeout(cloudUsernameCheckTimer);
+    cloudUsernameCheckTimer = null;
+  }
+  cloudUsernameCheckSequence++;
+  cloudUsernameChecked = { username: "", railwayUrl: "" };
+  state.cloudUsernameChecking = false;
+  state.cloudUsernameAvailable = null;
+  state.cloudUsernameCheckError = "";
+  updateCloudUsernameStatus();
+}
+
+function scheduleCloudUsernameCheck() {
+  if (cloudUsernameCheckTimer) clearTimeout(cloudUsernameCheckTimer);
+  cloudUsernameCheckTimer = setTimeout(() => {
+    cloudUsernameCheckTimer = null;
+    void checkUsernameAvailability();
+  }, 450);
+}
+
+function setCloudError(message) {
+  state.cloudError = message ? String(message) : "";
+  const banner = document.querySelector("#cloud-error-banner");
+  const text = document.querySelector("#cloud-error-text");
+  if (banner && text) {
+    banner.hidden = !state.cloudError;
+    text.textContent = state.cloudError;
+    return;
+  }
+  if (state.cloudError) render();
+}
+
+async function checkUsernameAvailability({ force = false } = {}) {
+  if (state.cloudTab !== "register") return null;
+  if (cloudUsernameCheckTimer) {
+    clearTimeout(cloudUsernameCheckTimer);
+    cloudUsernameCheckTimer = null;
+  }
+
+  const input = document.querySelector("#auth-username");
+  const username = input?.value.trim() || "";
+  state.cloudFormUsername = username;
   const customUrl =
     document.querySelector("#cloud-railway-url")?.value.trim() || "";
 
+  if (username.length < 3) {
+    resetCloudUsernameCheck();
+    return null;
+  }
+
+  // Reuse the last answer for the same username and server. This keeps a
+  // blur right after the debounced check from firing a duplicate request.
+  if (
+    !force &&
+    state.cloudUsernameAvailable !== null &&
+    cloudUsernameChecked.username === username &&
+    cloudUsernameChecked.railwayUrl === customUrl
+  ) {
+    updateCloudUsernameStatus();
+    return state.cloudUsernameAvailable;
+  }
+
+  const checkSequence = ++cloudUsernameCheckSequence;
+  cloudUsernameChecked = { username: "", railwayUrl: "" };
   state.cloudUsernameChecking = true;
   state.cloudUsernameAvailable = null;
   state.cloudUsernameCheckError = "";
-  state.cloudError = "";
-  render();
+  updateCloudUsernameStatus();
 
   try {
     const available = await invoke("check_railway_username", {
       username,
       railwayUrl: customUrl || null,
     });
+    if (checkSequence !== cloudUsernameCheckSequence) return null;
     state.cloudUsernameAvailable = available === true;
-    if (!available) {
-      state.cloudError = `El nom d'usuari "${username}" ja existeix. Tria'n un altre.`;
-    }
+    cloudUsernameChecked = { username, railwayUrl: customUrl };
+    return state.cloudUsernameAvailable;
   } catch (error) {
+    if (checkSequence !== cloudUsernameCheckSequence) return null;
     state.cloudUsernameAvailable = null;
-    state.cloudUsernameCheckError = String(error || "No s'ha pogut comprovar el nom d'usuari.");
+    cloudUsernameChecked = { username: "", railwayUrl: "" };
+    state.cloudUsernameCheckError = String(
+      error || "No s'ha pogut comprovar el nom d'usuari.",
+    );
+    return null;
   } finally {
-    state.cloudUsernameChecking = false;
-    render();
+    if (checkSequence === cloudUsernameCheckSequence) {
+      state.cloudUsernameChecking = false;
+      updateCloudUsernameStatus();
+    }
   }
 }
 
 async function cloudAuthSubmit(event) {
   event.preventDefault();
-  state.cloudError = "";
+  setCloudError("");
 
   const username = document.querySelector("#auth-username")?.value.trim() || "";
   const password = document.querySelector("#auth-password")?.value || "";
@@ -307,23 +499,35 @@ async function cloudAuthSubmit(event) {
     document.querySelector("#cloud-vault-id")?.value.trim() || "";
 
   if (!username) {
-    state.cloudError = "Introdueix el teu nom d'usuari de Railway.";
-    render();
+    setCloudError("Introdueix el teu nom d'usuari de Railway.");
     return;
   }
   if (!password) {
-    state.cloudError = "Introdueix la contrasenya de Railway.";
-    render();
+    setCloudError("Introdueix la contrasenya de Railway.");
     return;
   }
 
   const isRegister = state.cloudTab === "register";
 
   if (isRegister) {
-    // Block submit if username check shows it's taken
+    if (username.length < 3) {
+      setCloudError("El nom d'usuari ha de tenir almenys 3 caràcters.");
+      return;
+    }
+
+    // The server is authoritative, but never submit while the field still
+    // shows an unavailable name. Await a fresh check when the debounced one
+    // has not finished (or has never run).
+    const usernameCheckIsCurrent =
+      state.cloudUsernameAvailable === true &&
+      cloudUsernameChecked.username === username &&
+      cloudUsernameChecked.railwayUrl === customUrl;
+    if (!usernameCheckIsCurrent) {
+      await checkUsernameAvailability({ force: true });
+    }
     if (state.cloudUsernameAvailable === false) {
-      state.cloudError = "Aquest nom d'usuari ja existeix. Tria'n un altre.";
-      render();
+      setCloudError("Aquest nom d'usuari ja existeix. Tria'n un altre.");
+      document.querySelector("#auth-username")?.focus();
       return;
     }
 
@@ -333,20 +537,19 @@ async function cloudAuthSubmit(event) {
       document.querySelector("#privacy-accepted")?.checked || false;
 
     if (password !== confirmPassword) {
-      state.cloudError = "Les contrasenyes no coincideixen.";
-      render();
+      setCloudError("Les contrasenyes no coincideixen.");
       return;
     }
-    if (password.length < 8) {
-      state.cloudError =
-        "La contrasenya de Railway ha de tenir almenys 8 caràcters.";
-      render();
+    if (password.length < 12) {
+      setCloudError(
+        "La contrasenya de Railway ha de tenir almenys 12 caràcters.",
+      );
       return;
     }
     if (!privacyAccepted) {
-      state.cloudError =
-        "Has d'acceptar la Política de Privacitat per registrar-te.";
-      render();
+      setCloudError(
+        "Has d'acceptar la Política de Privacitat per registrar-te.",
+      );
       return;
     }
 
@@ -365,13 +568,11 @@ async function cloudAuthSubmit(event) {
         provider: customUrl ? "custom" : "official",
         railwayUrl: customUrl,
         vaultId: customVaultId || authData.vault_id || "",
-        token: authData.access_token,
         authUser: authData.username,
       };
 
       state.cloudConfig = updatedConfig;
-      localStorage.setItem("sherlock-cloud", JSON.stringify(updatedConfig));
-      await invoke("set_railway_sync_config", rustCloudConfig(updatedConfig));
+      persistCloudMetadata();
 
       if (!state.locked) {
         try {
@@ -391,7 +592,7 @@ async function cloudAuthSubmit(event) {
 
       state.showCloudLogin = false;
     } catch (error) {
-      state.cloudError = String(error);
+      setCloudError(error);
     } finally {
       state.cloudLoading = false;
       render();
@@ -399,7 +600,6 @@ async function cloudAuthSubmit(event) {
     return;
   }
 
-  // Handle Login
   const isDownload = state.cloudActionContext === "download";
   const isSync = state.cloudActionContext === "sync";
   const masterPassword = state.locked
@@ -407,9 +607,9 @@ async function cloudAuthSubmit(event) {
     : null;
 
   if (isDownload && state.locked && !masterPassword) {
-    state.cloudError =
-      "Introdueix la contrasenya mestra de la SherLock per desxifrar-la.";
-    render();
+    setCloudError(
+      "Introdueix la contrasenya mestra de la SherLock per desxifrar-la.",
+    );
     return;
   }
 
@@ -421,6 +621,7 @@ async function cloudAuthSubmit(event) {
       username,
       password,
       railwayUrl: customUrl || null,
+      forDownload: isDownload,
     });
 
     const updatedConfig = {
@@ -428,13 +629,11 @@ async function cloudAuthSubmit(event) {
       provider: customUrl ? "custom" : "official",
       railwayUrl: customUrl,
       vaultId: customVaultId || authData.vault_id || "",
-      token: authData.access_token,
       authUser: authData.username,
     };
 
     state.cloudConfig = updatedConfig;
-    localStorage.setItem("sherlock-cloud", JSON.stringify(updatedConfig));
-    await invoke("set_railway_sync_config", rustCloudConfig(updatedConfig));
+    persistCloudMetadata();
 
     if (isDownload) {
       const serialized = await invoke("sync_download_vault", {
@@ -464,27 +663,18 @@ async function cloudAuthSubmit(event) {
       state.showCloudLogin = false;
       showToast("SherLock descarregat de Railway i oberta correctament!");
     } else {
+      state.showCloudLogin = false;
       if (isSync && !state.locked) {
-        try {
-          const result = await invoke("sync_upload_vault", {
-            config: rustCloudConfig(updatedConfig),
-          });
-          if (result && typeof result.version === "number") {
-            updateLocalCloudVersion(result.version);
-          }
-          showToast(result.message || "Canvis sincronitzats amb Railway!");
-        } catch (error) {
-          showToast(
-            `Sessió iniciada, però no s'ha pogut sincronitzar: ${error}`,
-          );
-        }
+        // Let the single sync decision path decide between upload, download
+        // and conflict. Uploading straight after login could overwrite a
+        // vault created on another device.
+        await handleCloudSyncNow();
       } else {
         showToast(`Sessió iniciada a Railway com a ${authData.username}.`);
       }
-      state.showCloudLogin = false;
     }
   } catch (error) {
-    state.cloudError = String(error);
+    setCloudError(error);
   } finally {
     state.cloudLoading = false;
     render();
@@ -492,7 +682,7 @@ async function cloudAuthSubmit(event) {
 }
 
 async function handleCloudSyncNow() {
-  if (!state.cloudConfig.token) {
+  if (!state.cloudConfig.authUser || !state.cloudConfig.vaultId) {
     state.showCloudLogin = true;
     state.cloudActionContext = "sync";
     render();
@@ -504,59 +694,159 @@ async function handleCloudSyncNow() {
     return;
   }
 
+  state.cloudSyncStatus = {
+    phase: "syncing",
+    text: "Sincronitzant…",
+    at: null,
+  };
   state.cloudLoading = true;
   render();
 
+  let succeeded = false;
   try {
-    const res = await invoke("sync_upload_vault", {
+    const res = await invoke("sync_vault_auto", {
       config: rustCloudConfig(state.cloudConfig),
     });
     if (res && typeof res.version === "number") {
       updateLocalCloudVersion(res.version);
     }
-    showToast(res.message || "SherLock pujat correctament a Railway!");
+    switch (res?.outcome) {
+      case "up_to_date":
+        state.cloudSyncStatus = {
+          phase: "done",
+          text: "Tot al dia.",
+          at: null,
+        };
+        break;
+      case "uploaded":
+        state.cloudSyncStatus = {
+          phase: "done",
+          text: "Canvis desats al núvol.",
+          at: null,
+        };
+        break;
+      case "downloaded": {
+        const downloaded = await invoke("get_vault_entries");
+        applyDownloadedVault(downloaded);
+        state.cloudSyncStatus = {
+          phase: "done",
+          text: "S'han baixat els canvis d'un altre dispositiu.",
+          at: null,
+        };
+        break;
+      }
+      case "conflict": {
+        state.cloudSyncStatus = { phase: "idle", text: "", at: null };
+        render();
+        const choice = await askDialog({
+          title: "Hi ha canvis en dos llocs",
+          message:
+            "Has canviat la SherLock en aquest dispositiu i el núvol en té una altra còpia (potser d'un altre dispositiu). Només en pots conservar una.",
+          confirmLabel: "Conservar la d'aquest dispositiu",
+          confirmHelp: "Substituirà la còpia del núvol. No es pot desfer.",
+          thirdLabel: "Conservar la del núvol",
+          thirdHelp:
+            "Substituirà la d'aquest dispositiu. En guardem una còpia de seguretat.",
+          danger: false,
+        });
+        if (choice.choice === "confirm" || choice.choice === "third") {
+          state.cloudSyncStatus = {
+            phase: "syncing",
+            text: "Sincronitzant…",
+            at: null,
+          };
+          render();
+          const resolved = await invoke("sync_resolve_conflict", {
+            config: rustCloudConfig(state.cloudConfig),
+            syncConfigArg: rustCloudConfig(state.cloudConfig),
+            keep: choice.choice === "confirm" ? "local" : "cloud",
+          });
+          if (resolved?.outcome === "downloaded") {
+            const downloaded = await invoke("get_vault_entries");
+            applyDownloadedVault(downloaded);
+          }
+          if (resolved?.outcome === "conflict") {
+            throw new Error(
+              "Els canvis han tornat a entrar en conflicte. Torna-ho a provar.",
+            );
+          }
+          if (
+            !["downloaded", "uploaded", "up_to_date"].includes(
+              resolved?.outcome,
+            )
+          ) {
+            throw new Error(
+              resolved?.error || "No s'ha pogut resoldre el conflicte.",
+            );
+          }
+          if (typeof resolved.version === "number") {
+            updateLocalCloudVersion(resolved.version);
+          }
+          state.cloudSyncStatus = {
+            phase: "done",
+            text:
+              resolved.outcome === "downloaded"
+                ? "S'han baixat els canvis d'un altre dispositiu."
+                : resolved.outcome === "up_to_date"
+                  ? "Tot al dia."
+                  : "Canvis desats al núvol.",
+            at: null,
+          };
+        }
+        break;
+      }
+      default:
+        throw new Error(
+          res?.error || res?.message || "No s'ha pogut sincronitzar.",
+        );
+    }
+    succeeded = true;
   } catch (err) {
-    showToast(`Error de sincronització: ${err}`);
+    const rawMessage = String(err || "").replace(/^Error: /, "");
+    const message = /[àèéíòóúç·]/i.test(rawMessage)
+      ? rawMessage.split(/[\n(]/)[0]
+      : "No s'ha pogut sincronitzar. Torna-ho a provar.";
+    state.cloudSyncStatus = {
+      phase: "error",
+      text: message || "No s'ha pogut sincronitzar. Torna-ho a provar.",
+      at: null,
+    };
   } finally {
     state.cloudLoading = false;
+    if (succeeded) {
+      const at = Date.now();
+      updateLocalCloudLastSyncAt(at);
+      state.cloudSyncStatus.at = at;
+    }
     render();
   }
 }
 
-async function handleCloudDownloadNow() {
-  if (!state.cloudConfig.token) {
-    state.showCloudLogin = true;
-    state.cloudActionContext = "download";
-    render();
-    return;
-  }
-
-  if (state.locked) {
-    state.showDownloadPassword = true;
-    state.downloadPassword = "";
-    state.cloudError = "";
-    render();
-    return;
-  }
-
-  if (!confirmDownload()) {
-    return;
-  }
-
-  await downloadVaultFromCloud(null);
-}
-
-function confirmDownload() {
-  return confirm(
-    "Això sincronitzarà les dades locals amb la còpia de Railway. Vols continuar?",
-  );
+/**
+ * Aplica al estat en memòria una caixa descarregada del núbol.
+ * Reutilitzat per `downloadVaultFromCloud` i per `sync_vault_auto` (outcome
+ * "downloaded"). No toca el fitxer local: això ja ho fa la comanda Rust.
+ */
+function applyDownloadedVault(vault) {
+  state.entries = (vault.entries || []).map(mapVaultEntry);
+  state.folders = vault.folders || [];
+  state.trash = (vault.deleted_entries || vault.trash || []).map((entry) => ({
+    ...entry,
+    folderId: entry.folder_id || null,
+    createdAt: entry.created_at,
+    updatedAt: entry.updated_at,
+    deletedAt: entry.deleted_at,
+  }));
+  state.history = (vault.history || []).map((item) => ({
+    ...item,
+    type: item.kind,
+    createdAt: item.created_at,
+  }));
+  state.vaultExists = true;
+  state.locked = false;
 }
 
 async function downloadVaultFromCloud(masterPassword) {
-  if (!confirmDownload()) {
-    return;
-  }
-
   state.cloudLoading = true;
   render();
 
@@ -566,23 +856,7 @@ async function downloadVaultFromCloud(masterPassword) {
       config: rustCloudConfig(state.cloudConfig),
     });
     await refreshCloudVersionFromBackend();
-    const vault = JSON.parse(serialized);
-    state.entries = (vault.entries || []).map(mapVaultEntry);
-    state.folders = vault.folders || [];
-    state.trash = (vault.deleted_entries || []).map((entry) => ({
-      ...entry,
-      folderId: entry.folder_id || null,
-      createdAt: entry.created_at,
-      updatedAt: entry.updated_at,
-      deletedAt: entry.deleted_at,
-    }));
-    state.history = (vault.history || []).map((item) => ({
-      ...item,
-      type: item.kind,
-      createdAt: item.created_at,
-    }));
-    state.vaultExists = true;
-    state.locked = false;
+    applyDownloadedVault(JSON.parse(serialized));
     showToast("SherLock descarregat i sincronitzada de Railway!");
   } catch (err) {
     showToast(`Error en descarregar de Railway: ${err}`);
@@ -593,13 +867,13 @@ async function downloadVaultFromCloud(masterPassword) {
 }
 
 async function handleCloudLogout() {
-  if (
-    !confirm(
-      "Vols tancar la sessió a Railway? Les teves dades locals es mantindran intactes.",
-    )
-  ) {
-    return;
-  }
+  const result = await askDialog({
+    title: "Tancar la sessió a Railway?",
+    message: "Les dades d'aquest dispositiu es mantenen intactes.",
+    confirmLabel: "Tancar sessió",
+    danger: true,
+  });
+  if (!result.confirmed) return;
   const config = rustCloudConfig(state.cloudConfig);
   try {
     await invoke("revoke_official_cloud_session", {
@@ -608,7 +882,9 @@ async function handleCloudLogout() {
       token: config.token || null,
     });
   } catch (error) {
-    showToast(`No s'ha pogut revocar la sessió al servidor, però es tancarà localment: ${error}`);
+    showToast(
+      `No s'ha pogut revocar la sessió al servidor, però es tancarà localment: ${error}`,
+    );
   }
   // Neteja l'estat local igual (els errors del servidor no bloqueixen el logout local)
   state.cloudConfig = {
@@ -620,43 +896,44 @@ async function handleCloudLogout() {
   localStorage.removeItem("sherlock-cloud");
   try {
     await invoke("set_railway_sync_config", {
-      railway_url: "",
-      vault_id: "",
+      railwayUrl: "",
+      vaultId: "",
       token: "",
     });
-  } catch {}
+  } catch (error) {
+    console.error("No s'ha pogut netejar la configuració de Railway:", error);
+    showToast(
+      "Sessió tancada, però la configuració local no s'ha netejat del tot.",
+    );
+    render();
+    return;
+  }
   showToast("Sessió tancada a Railway.");
   render();
 }
 
 async function handleDeleteCloudAccount() {
-  if (!state.cloudConfig.token || !state.cloudConfig.vaultId) {
+  if (!state.cloudConfig.authUser || !state.cloudConfig.vaultId) {
     showToast("No hi ha cap sessió de cloud activa.");
     return;
   }
 
-  const username = state.cloudConfig.authUser || state.cloudConfig.vaultId;
-  const confirmText = `ELIMINAR els meus dades del nuvol (${username})`;
-  const typed = prompt(
-    `Aquesta acció eliminarà el vault xifrat al nuvol i revocarà la sessió de Railway.\n\nAquest procés no es pot desfer.\n\nPer confirmar, escriviu: ${confirmText}`,
-    "",
-  );
-  if (typed !== confirmText) {
-    return;
-  }
-
-  const masterPassword = prompt(
-    "Introdueix la contrasenya mestra del vault local (necessària per eliminar el vault al nuvol):",
-    "",
-  );
-  if (!masterPassword) {
-    return;
-  }
+  const result = await askDialog({
+    title: "Eliminar compte al núvol?",
+    message:
+      "Això eliminarà la teva SherLock xifrada del núvol i tancarà la sessió. No es pot desfer. Les dades d'aquest dispositiu no s'esborren.",
+    confirmLabel: "Eliminar compte",
+    danger: true,
+    requireText: "ELIMINAR",
+    passwordLabel: "Contrasenya mestra",
+  });
+  if (!result.confirmed) return;
+  const masterPassword = result.password;
 
   const config = rustCloudConfig(state.cloudConfig);
   try {
     await invoke("delete_cloud_account", {
-      master_password: masterPassword,
+      masterPassword: masterPassword,
       config,
     });
   } catch (error) {
@@ -664,7 +941,6 @@ async function handleDeleteCloudAccount() {
     return;
   }
 
-  // Neteja l'estat local de cloud
   state.cloudConfig = {
     railwayUrl: "",
     vaultId: "",
@@ -674,11 +950,18 @@ async function handleDeleteCloudAccount() {
   localStorage.removeItem("sherlock-cloud");
   try {
     await invoke("set_railway_sync_config", {
-      railway_url: "",
-      vault_id: "",
+      railwayUrl: "",
+      vaultId: "",
       token: "",
     });
-  } catch {}
+  } catch (error) {
+    console.error("No s'ha pogut netejar la configuració de Railway:", error);
+    showToast(
+      "Compte eliminat, però la configuració local no s'ha netejat del tot.",
+    );
+    render();
+    return;
+  }
   showToast("Compte i dades al nuvol eliminats.");
   render();
 }
@@ -704,24 +987,13 @@ async function confirmResetLocalVault() {
     state.history = [];
     state.locked = true;
     state.vaultExists = false;
-    state.showWelcome = true;
-    state.welcomeStep = 0;
+    state.error = "";
     state.firstEntryGuideStep = 1;
     state.view = "vault";
-    // Esborra el patró d'imatge i tot l'estat d'autenticació per imatge
-    state.imageAuthImage = "";
-    state.imageGridConfigured = false;
-    state.imageGridPattern = [];
-    state.imageGridBrushPath = [];
-    state.imageUnlockBrushPath = [];
-    state.showGridUnlock = false;
-    state.showGridSetup = false;
-    state.gridSetupError = "";
-    state.gridUnlockError = "";
-    state.showAuthMethodSelection = true;
-    state.authMethodSelected = "password";
-    imageAuthRenderSource = "";
-    imageAuthRenderBitmap = null;
+    state.showChangeAuthModal = false;
+    state.changeAuthError = "";
+    state.showCloudLogin = false;
+    state.showPrivacyPolicy = false;
     showToast("Dades locals eliminades.");
   } catch (error) {
     showToast(`No s'han pogut eliminar les dades: ${error}`);
@@ -732,14 +1004,21 @@ async function confirmResetLocalVault() {
 function render() {
   const appContainer = document.querySelector("#app");
   if (!appContainer) return;
+
+  const prevView = state.view;
+  const prevLocked = state.locked;
+  const scrollPositions = captureScroll();
+
   document.documentElement.dataset.locked = String(state.locked);
 
-  // Detect lock/unlock transitions to apply entry animation
   let needsTransition = false;
   if (lastLockedState !== null && lastLockedState !== state.locked) {
     needsTransition = true;
   }
   lastLockedState = state.locked;
+
+  const viewChanged = lastView !== null && lastView !== state.view;
+  lastView = state.view;
 
   const viewMarkup = state.locked
     ? views.lockScreen()
@@ -750,7 +1029,6 @@ function render() {
         : views.vaultScreen();
   replaceMarkup(appContainer, viewMarkup);
 
-  // Apply lock/unlock transition animation
   if (needsTransition) {
     const shell = appContainer.querySelector(
       ".lock-shell, .shell, .generator-shell, .settings-shell",
@@ -764,20 +1042,34 @@ function render() {
     }
   }
 
+  // View-fade-in animation: only on view change, never on every render
+  const shell = appContainer.querySelector(
+    ".lock-shell, .shell, .generator-shell, .settings-shell",
+  );
+  if (shell) {
+    if (viewChanged) shell.classList.add("view-fade-in");
+    else shell.classList.remove("view-fade-in");
+  }
+
   if (!state.locked && state.showCommandPalette) {
     appendMarkup(appContainer, views.commandPalette());
   }
   if (!state.locked && state.toast) {
-    appendMarkup(
-      appContainer,
-      `<div class="toast show">${escapeHtml(state.toast)}</div>`,
-    );
+    const existing = appContainer.querySelector(".toast");
+    if (!existing) {
+      appendMarkup(
+        appContainer,
+        `<div class="toast show">${escapeHtml(state.toast)}</div>`,
+      );
+    }
   }
 
   createIcons({ icons });
   enhanceRenderedUi();
   applySettings();
   bindEvents();
+
+  restoreScroll(scrollPositions, prevView, prevLocked);
 }
 
 function applySettings() {
@@ -862,22 +1154,9 @@ function enhanceRenderedUi() {
     state.generatorType === "password" &&
     !document.querySelector(".password-strength")
   ) {
-    const strength = passwordStrength(state.generatedValue || generateValue());
+    const strengthPassword = state.generatedValue || generateValue();
     generatedCard.after(
-      sanitizedFragment(
-        `
-      <div class="password-strength">
-        <div class="strength-label">
-          <span>Força de la contrasenya</span>
-          <strong class="strength-${strength.level}">${strength.label}</strong>
-        </div>
-        <div class="strength-track">
-          <span class="strength-fill strength-${strength.level} strength-width-${strength.percent}"></span>
-        </div>
-        <small>${strength.hint}</small>
-      </div>
-      `,
-      ),
+      sanitizedFragment(passwordStrengthMarkup(strengthPassword)),
     );
   }
 }
@@ -940,7 +1219,6 @@ function stopBrowserPairingTimers() {
     clearTimeout(browserPairingExpirationTimer);
     browserPairingExpirationTimer = null;
   }
-  // Clear countdown timer via interval reference
   if (typeof window !== "undefined") {
     if (window.__browserPairingCountdownTimer) {
       clearInterval(window.__browserPairingCountdownTimer);
@@ -970,7 +1248,6 @@ function startBrowserPairingMonitoring() {
 
   browserPairingPollingTimer = setInterval(poll, 2000);
 
-  // Update countdown timer every second
   window.__browserPairingCountdownTimer = setInterval(() => {
     if (Date.now() >= state.browserPairingExpiresAt) {
       clearInterval(window.__browserPairingCountdownTimer);
@@ -1128,6 +1405,68 @@ function updateEntryStrength(password) {
   meter.querySelector("small").textContent = strength.hint;
 }
 
+function setUnlockError(message) {
+  state.error = message || "";
+  const errorElement = document.querySelector("#unlock-error");
+  if (!errorElement) return;
+  errorElement.textContent = state.error;
+  errorElement.hidden = !state.error;
+}
+
+function renderPasswordFeedback(feedback, password, confirm) {
+  if (!feedback) return;
+  const meter = feedback.querySelector("[data-password-strength]");
+  if (meter) {
+    meter.hidden = !password;
+    if (password) {
+      const strength = passwordStrength(password);
+      const label = meter.querySelector(".strength-label strong");
+      if (label) {
+        label.className = `strength-${strength.level}`;
+        label.textContent = strength.label;
+      }
+      const fill = meter.querySelector(".strength-fill");
+      if (fill) {
+        fill.className = `strength-fill strength-${strength.level} strength-width-${strength.percent}`;
+      }
+      const hint = meter.querySelector("small");
+      if (hint) hint.textContent = strength.hint;
+    }
+  }
+
+  const requirements = passwordRequirements(password);
+  requirements.forEach((requirement) => {
+    const item = feedback.querySelector(
+      `[data-requirement="${requirement.id}"]`,
+    );
+    item?.classList.toggle("is-met", requirement.met);
+  });
+
+  const match =
+    feedback.querySelector("[data-password-match]") ||
+    document.querySelector("[data-password-match]");
+  if (!match) return;
+  match.hidden = !confirm;
+  if (!confirm) return;
+  const matches = password === confirm;
+  match.dataset.state = matches ? "ok" : "error";
+  match.textContent = matches
+    ? "Les contrasenyes coincideixen."
+    : "Les contrasenyes no coincideixen.";
+}
+
+function updatePasswordFeedback(
+  feedbackSelector,
+  passwordSelector,
+  confirmSelector,
+) {
+  renderPasswordFeedback(
+    document.querySelector(feedbackSelector),
+    document.querySelector(passwordSelector)?.value || "",
+    document.querySelector(confirmSelector)?.value || "",
+  );
+}
+
 async function unlock(event) {
   event.preventDefault();
   if (!isTauriRuntime()) {
@@ -1136,13 +1475,52 @@ async function unlock(event) {
     render();
     return;
   }
+
   const input = document.querySelector("#master-password");
+  if (!input) return;
   let masterPassword = input.value;
-  state.error = "";
+  const isNewUser = state.vaultExists === false;
+
+  if (!masterPassword) {
+    setUnlockError("Introdueix la contrasenya mestra.");
+    input.focus();
+    return;
+  }
+
+  if (isNewUser) {
+    if (!passwordMeetsRequirements(masterPassword)) {
+      setUnlockError(
+        `La contrasenya mestra ha de tenir com a mínim ${MASTER_PASSWORD_MIN_LENGTH} caràcters i incloure majúscules, minúscules, números i un caràcter especial.`,
+      );
+      updatePasswordFeedback(
+        "#master-password-feedback",
+        "#master-password",
+        "#master-password-confirm",
+      );
+      input.focus();
+      return;
+    }
+    const confirmation =
+      document.querySelector("#master-password-confirm")?.value || "";
+    if (masterPassword !== confirmation) {
+      setUnlockError("Les contrasenyes no coincideixen.");
+      updatePasswordFeedback(
+        "#master-password-feedback",
+        "#master-password",
+        "#master-password-confirm",
+      );
+      input.focus();
+      return;
+    }
+  }
+
+  setUnlockError("");
   state.loading = true;
   render();
   try {
-    const result = await invoke("unlock_vault", { masterPassword });
+    const result = isNewUser
+      ? await invoke("init_empty_vault", { password: masterPassword })
+      : await invoke("unlock_vault", { masterPassword });
     masterPassword = "";
     if (input) input.value = "";
     document.querySelector("#master-password")?.setAttribute("value", "");
@@ -1151,9 +1529,10 @@ async function unlock(event) {
     state.trash = result.trash || [];
     state.folders = result.folders || [];
     state.activeFolderId = "";
+    state.vaultExists = true;
     state.locked = false;
     resetAutoLock();
-    const isNewVault = Boolean(result.isNew ?? result.is_new);
+    const isNewVault = isNewUser || Boolean(result.isNew ?? result.is_new);
     if (isNewVault) {
       state.firstEntryGuideStep = 1;
       const defaultFolders = [
@@ -1178,15 +1557,6 @@ async function unlock(event) {
     state.loading = false;
     render();
     document.querySelector("#master-password")?.setAttribute("value", "");
-  }
-}
-
-async function checkGridAuth() {
-  try {
-    const result = await invoke("get_auth_info");
-    return result.exists;
-  } catch {
-    return false;
   }
 }
 
@@ -1263,14 +1633,15 @@ async function persistImportedVault(entries, history, trash, folders) {
   }
 }
 
-function exportVault() {
-  if (
-    !confirm(
-      "L'export conté les contrasenyes en text pla. Desa'l només en un lloc segur. Vols continuar?",
-    )
-  ) {
-    return;
-  }
+async function exportVault() {
+  const result = await askDialog({
+    title: "Exportar la SherLock",
+    message:
+      "L'export conté les contrasenyes en text pla. Desa'l només en un lloc segur.",
+    confirmLabel: "Exportar",
+    danger: true,
+  });
+  if (!result.confirmed) return;
   const payload = JSON.stringify(
     {
       version: 1,
@@ -1293,16 +1664,20 @@ function exportVault() {
 }
 
 async function importVault(event) {
+  const result = await askDialog({
+    title: "Importar a la SherLock",
+    message:
+      "La importació substituirà les dades actuals. Es crearà una còpia xifrada de la caixa abans de desar.",
+    confirmLabel: "Importar",
+    danger: true,
+  });
+  if (!result.confirmed) {
+    event.target.value = "";
+    return;
+  }
   const file = event.target.files?.[0];
   if (!file) return;
   try {
-    if (
-      !confirm(
-        "La importació substituirà les dades actuals. Es crearà una còpia xifrada de la caixa abans de desar. Vols continuar?",
-      )
-    ) {
-      return;
-    }
     if (file.size > 5 * 1024 * 1024)
       throw new Error("El fitxer és massa gran (màxim 5 MB).");
     const text = await file.text();
@@ -1449,7 +1824,7 @@ async function saveEntry(event) {
   const password = String(form.get("password") || "");
   const url = String(form.get("url") || "").trim();
   const notes = String(form.get("notes") || "").trim();
-  const folderId = String(form.get("folderId") || "");
+  const folderId = String(form.get("folder") || "");
 
   const draft = { site: name, folderId, username, password, url, notes };
 
@@ -1519,7 +1894,7 @@ async function saveEntry(event) {
 
   state.entries.push(entry);
   try {
-    await saveVault(); // Save encrypted vault after creation
+    await saveVault();
     state.showEntryForm = false;
     state.editingEntryId = null;
     state.showFirstEntryGuide = false;
@@ -1657,627 +2032,77 @@ function useGeneratedPassword() {
 
 function bindEvents() {
   document.querySelector("#unlock-form")?.addEventListener("submit", unlock);
-  document.querySelector("#next-welcome")?.addEventListener("click", () => {
-    const lastWelcomeStep = 2;
-    if (state.welcomeStep < lastWelcomeStep) {
-      state.welcomeStep += 1;
-      render();
-      return;
-    }
-    state.showWelcome = false;
-    render();
-    document.querySelector("#master-password")?.focus();
-  });
-
-  document
-    .querySelector("#auth-method-password")
-    ?.addEventListener("click", () => {
-      state.authMethodSelected = "password";
-      render();
-    });
-  document
-    .querySelector("#auth-method-image")
-    ?.addEventListener("click", () => {
-      state.authMethodSelected = "image";
-      render();
-    });
-  document
-    .querySelector("#auth-method-cloud-download")
-    ?.addEventListener("click", () => {
-      state.showCloudLogin = true;
-      state.cloudTab = "login";
-      state.cloudLoading = false;
-      state.cloudError = "";
-      render();
-    });
-  document
-    .querySelector("#continue-auth-selection")
-    ?.addEventListener("click", async () => {
-      if (state.authMethodSelected === "password") {
-        state.showAuthMethodSelection = false;
-        render();
-      } else if (state.authMethodSelected === "image") {
-        state.showGridSetup = true;
-        state.changingAuthMethod = false;
-        state.imageGridPattern = [];
-        state.imageGridBrushPath = [];
-        state.gridSetupError = "";
-        state.imageAuthImage = "";
-        imageAuthRenderSource = "";
-        render();
-      }
-    });
-  document
-    .querySelector("#image-upload-area")
-    ?.addEventListener("click", () => {
-      document.querySelector("#image-auth-upload")?.click();
-    });
-
-  document
-    .querySelector("#image-auth-upload")
-    ?.addEventListener("change", (event) => {
-      const file = event.target.files[0];
-      if (file) {
-        const reader = new FileReader();
-        reader.onload = (e) => {
-          state.imageAuthImage = e.target.result;
-          state.imageGridPattern = [];
-          state.imageGridBrushPath = [];
-          imageAuthRenderSource = "";
-          document.querySelector("#image-upload-area").hidden = true;
-          document.querySelector("#image-auth-canvas-area").hidden = false;
-          renderImageOnCanvas();
-        };
-        reader.readAsDataURL(file);
-      }
-    });
-
-  if (state.showGridSetup && state.imageAuthImage) {
-    const uploadArea = document.querySelector("#image-upload-area");
-    const canvasArea = document.querySelector("#image-auth-canvas-area");
-    if (uploadArea) uploadArea.hidden = true;
-    if (canvasArea) canvasArea.hidden = false;
-    renderImageOnCanvas();
-    updateImageAuthOrder(
-      "image-auth-count",
-      "image-auth-order",
-      state.imageGridPattern,
+  const masterPasswordInput = document.querySelector("#master-password");
+  const masterPasswordConfirm = document.querySelector(
+    "#master-password-confirm",
+  );
+  const refreshMasterPasswordFeedback = () => {
+    setUnlockError("");
+    updatePasswordFeedback(
+      "#master-password-feedback",
+      "#master-password",
+      "#master-password-confirm",
     );
-  }
+  };
+  masterPasswordInput?.addEventListener("input", refreshMasterPasswordFeedback);
+  masterPasswordConfirm?.addEventListener(
+    "input",
+    refreshMasterPasswordFeedback,
+  );
 
-  const imageSetupCanvas = document.querySelector("#image-auth-canvas");
-  imageSetupCanvas?.addEventListener("pointerdown", (event) => {
-    state.imageGridPointerActive = true;
-    if (state.imageGridBrushPath.length) state.imageGridBrushPath.push(null);
-    imageSetupCanvas.setPointerCapture(event.pointerId);
-    selectImageGridCell(
-      event,
-      state.imageGridPattern,
-      "image-auth-count",
-      "image-auth-order",
-      state.imageGridBrushPath,
-    );
-  });
-  imageSetupCanvas?.addEventListener("pointermove", (event) => {
-    if (state.imageGridPointerActive) {
-      selectImageGridCell(
-        event,
-        state.imageGridPattern,
-        "image-auth-count",
-        "image-auth-order",
-        state.imageGridBrushPath,
-      );
-    }
-  });
-  imageSetupCanvas?.addEventListener("pointerup", () => {
-    state.imageGridPointerActive = false;
-  });
-  imageSetupCanvas?.addEventListener("pointercancel", () => {
-    state.imageGridPointerActive = false;
-  });
-
-  document
-    .querySelector("#undo-image-auth-point")
-    ?.addEventListener("click", () => {
-      state.imageGridPattern.pop();
-      redrawImageAuthGridCanvas(
-        "image-auth-canvas",
-        state.imageGridPattern,
-        "image-auth-count",
-        "image-auth-order",
-        state.imageGridBrushPath,
-      );
-    });
-
-  document
-    .querySelector("#clear-image-auth-points")
-    ?.addEventListener("click", () => {
-      state.imageGridPattern = [];
-      state.imageGridBrushPath = [];
-      redrawImageAuthGridCanvas(
-        "image-auth-canvas",
-        state.imageGridPattern,
-        "image-auth-count",
-        "image-auth-order",
-        state.imageGridBrushPath,
-      );
-    });
-
-  document
-    .querySelector("#save-image-auth-setup")
-    ?.addEventListener("click", async () => {
-      if (!state.imageAuthImage) {
-        state.gridSetupError = "Puja una imatge abans de desar la graella.";
-        render();
-        return;
-      }
-      if (state.imageGridPattern.length < 12) {
-        state.gridSetupError = "Has de seleccionar almenys 12 punts.";
-        render();
-        return;
-      }
-      try {
-        if (state.changingAuthMethod) {
-          const result = await invoke("change_vault_to_image_grid", {
-            selectedCells: state.imageGridPattern,
-            imageData: state.imageAuthImage,
-          });
-          state.entries = (result.entries || []).map(mapVaultEntry);
-          state.history = result.history || [];
-          state.trash = (result.trash || []).map((entry) => ({
-            ...entry,
-            folderId: entry.folder_id || entry.folderId || null,
-            createdAt: entry.created_at || entry.createdAt,
-            updatedAt: entry.updated_at || entry.updatedAt || null,
-          }));
-          state.folders = result.folders || [];
-        } else {
-          await invoke("set_image_grid_auth", {
-            imageData: state.imageAuthImage,
-            selectedCells: state.imageGridPattern,
-          });
-          await invoke("init_empty_grid_vault", {
-            selectedCells: state.imageGridPattern,
-          });
-        }
-        state.imageGridConfigured = true;
-        state.locked = false;
-        state.changingAuthMethod = false;
-        state.showGridSetup = false;
-        state.showAuthMethodSelection = false;
-        showToast("Autenticació amb imatge configurada correctament.");
-        render();
-      } catch (error) {
-        state.gridSetupError = String(error);
-        render();
-      }
-    });
-
-  document
-    .querySelector("#cancel-image-auth-setup")
-    ?.addEventListener("click", () => {
-      const returningToChangeAuth = state.changingAuthMethod;
-      state.showGridSetup = false;
-      state.gridSetupError = "";
-      state.imageGridPattern = [];
-      state.imageAuthImage = "";
-      state.imageGridConfigured = false;
-      state.showChangeAuthModal = returningToChangeAuth;
-      state.changingAuthMethod = false;
-      imageAuthRenderSource = "";
-      if (!returningToChangeAuth) {
-      }
-      render();
-    });
-
-  document
-    .querySelector("#cancel-image-auth-setup-bottom")
-    ?.addEventListener("click", () => {
-      state.showGridSetup = false;
-      state.gridSetupError = "";
-      state.imageGridPattern = [];
-      state.imageAuthImage = "";
-      state.showChangeAuthModal = state.changingAuthMethod;
-      state.changingAuthMethod = false;
-      imageAuthRenderSource = "";
-      render();
-    });
-
-  document
-    .querySelector("#cancel-image-auth-unlock")
-    ?.addEventListener("click", () => {
-      state.showGridUnlock = false;
-      state.gridUnlockError = "";
-      state.imageGridPattern = [];
-      state.imageUnlockBrushPath = [];
-      render();
-    });
-
-  document
-    .querySelector("#cancel-image-auth-unlock-bottom")
-    ?.addEventListener("click", () => {
-      state.showGridUnlock = false;
-      state.gridUnlockError = "";
-      state.imageGridPattern = [];
-      state.imageUnlockBrushPath = [];
-      render();
-    });
-
-  const unlockCanvas = document.querySelector("#image-auth-unlock-canvas");
-  if (unlockCanvas) {
-    const persistedImage = state.imageAuthImage;
-    if (persistedImage) {
-      const img = new Image();
-      img.onload = () => {
-        drawImageAuthBackground(unlockCanvas, img);
-        drawImageAuthGrid(
-          unlockCanvas,
-          state.imageGridPattern,
-          state.imageUnlockBrushPath,
-        );
-      };
-      img.src = persistedImage;
-    }
-  }
-
-  const imageUnlockCanvas = document.querySelector("#image-auth-unlock-canvas");
-  imageUnlockCanvas?.addEventListener("pointerdown", (event) => {
-    if (!state.imageGridConfigured) return;
-    state.imageGridPointerActive = true;
-    if (state.imageUnlockBrushPath.length) {
-      state.imageUnlockBrushPath.push(null);
-    }
-    imageUnlockCanvas.setPointerCapture(event.pointerId);
-    selectImageGridCell(
-      event,
-      state.imageGridPattern,
-      "image-auth-unlock-count",
-      "image-auth-unlock-order",
-      state.imageUnlockBrushPath,
-    );
-  });
-  imageUnlockCanvas?.addEventListener("pointermove", (event) => {
-    if (state.imageGridConfigured && state.imageGridPointerActive) {
-      selectImageGridCell(
-        event,
-        state.imageGridPattern,
-        "image-auth-unlock-count",
-        "image-auth-unlock-order",
-        state.imageUnlockBrushPath,
-      );
-    }
-  });
-  imageUnlockCanvas?.addEventListener("pointerup", () => {
-    state.imageGridPointerActive = false;
-  });
-  imageUnlockCanvas?.addEventListener("pointercancel", () => {
-    state.imageGridPointerActive = false;
-  });
-
-  document
-    .querySelector("#undo-image-auth-unlock-point")
-    ?.addEventListener("click", () => {
-      state.imageGridPattern.pop();
-      redrawImageAuthGridCanvas(
-        "image-auth-unlock-canvas",
-        state.imageGridPattern,
-        "image-auth-unlock-count",
-        "image-auth-unlock-order",
-        state.imageUnlockBrushPath,
-      );
-    });
-
-  document
-    .querySelector("#clear-image-auth-unlock-points")
-    ?.addEventListener("click", () => {
-      state.imageGridPattern = [];
-      state.imageUnlockBrushPath = [];
-      redrawImageAuthGridCanvas(
-        "image-auth-unlock-canvas",
-        state.imageGridPattern,
-        "image-auth-unlock-count",
-        "image-auth-unlock-order",
-        state.imageUnlockBrushPath,
-      );
-    });
-
-  document
-    .querySelector("#verify-image-auth-unlock")
-    ?.addEventListener("click", async () => {
-      const selectedCells = state.imageGridPattern;
-      if (selectedCells.length < 12) {
-        state.gridUnlockError = "Selecciona els 12 punts en el mateix ordre.";
-        render();
-        return;
-      }
-      state.loading = true;
-      render();
-      try {
-        const result = await invoke("unlock_vault_grid", {
-          pattern: selectedCells.slice(),
-        });
-        state.entries = (result.entries || []).map(mapVaultEntry);
-        state.history = result.history || [];
-        state.trash = result.trash || [];
-        state.folders = result.folders || [];
-        state.activeFolderId = "";
-        state.locked = false;
-        state.showGridUnlock = false;
-        state.imageGridPattern = [];
-        resetAutoLock();
-      } catch (error) {
-        state.gridUnlockError = String(error);
-        state.imageGridPattern = [];
-      } finally {
-        state.loading = false;
-        render();
-      }
-    });
-
-  function drawImageAuthBackground(canvas, image) {
-    const bitmapScale = Math.min(
-      1,
-      1400 / Math.max(image.naturalWidth, image.naturalHeight),
-    );
-    const bitmapWidth = Math.max(
-      1,
-      Math.round(image.naturalWidth * bitmapScale),
-    );
-    const bitmapHeight = Math.max(
-      1,
-      Math.round(image.naturalHeight * bitmapScale),
-    );
-    if (canvas.width !== bitmapWidth || canvas.height !== bitmapHeight) {
-      canvas.width = bitmapWidth;
-      canvas.height = bitmapHeight;
-    }
-    const ctx = canvas.getContext("2d");
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
-  }
-
-  function withImageAuthBackground(canvas, drawOverlay) {
-    const source = state.imageAuthImage;
-    if (!source) return;
-    const draw = (image) => {
-      drawImageAuthBackground(canvas, image);
-      drawOverlay(canvas.getContext("2d"));
-    };
-    if (source === imageAuthRenderSource && imageAuthRenderBitmap) {
-      draw(imageAuthRenderBitmap);
-      return;
-    }
-    imageAuthRenderSource = source;
-    imageAuthRenderBitmap = null;
-    const image = new Image();
-    image.onload = () => {
-      if (imageAuthRenderSource !== source) return;
-      imageAuthRenderBitmap = image;
-      draw(image);
-    };
-    image.src = source;
-  }
-
-  function drawImageAuthGrid(
-    canvas,
-    selectedCells,
-    brushPath = [],
-    animatedCell = -1,
-    markerScale = 1,
-  ) {
-    withImageAuthBackground(canvas, (ctx) => {
-      const cellWidth = canvas.width / 5;
-      const cellHeight = canvas.height / 5;
-      const displayScale = canvasDisplayScale(canvas);
-      const selectedOrder = new Map(
-        selectedCells.map((cell, index) => [cell, index + 1]),
-      );
-      ctx.textAlign = "center";
-      ctx.textBaseline = "middle";
-      drawImageAuthBrushPath(ctx, canvas, brushPath, displayScale);
-      for (const [cell, order] of selectedOrder) {
-        const column = cell % 5;
-        const row = Math.floor(cell / 5);
-        const x = column * cellWidth;
-        const y = row * cellHeight;
-        const centerX = x + cellWidth / 2;
-        const centerY = y + cellHeight / 2;
-        const pointScale = cell === animatedCell ? markerScale : 1;
-        const radius = 19 * displayScale * pointScale;
-        ctx.beginPath();
-        ctx.arc(centerX, centerY, radius + 3 * displayScale, 0, 2 * Math.PI);
-        ctx.fillStyle = "rgba(255, 255, 255, 0.96)";
-        ctx.fill();
-        ctx.beginPath();
-        ctx.arc(centerX, centerY, radius, 0, 2 * Math.PI);
-        ctx.fillStyle = "#078b68";
-        ctx.fill();
-        ctx.fillStyle = "#ffffff";
-        ctx.font = `700 ${15 * displayScale * pointScale}px 'DM Sans', sans-serif`;
-        ctx.fillText(String(order), centerX, centerY);
-      }
-    });
-  }
-
-  function canvasDisplayScale(canvas) {
-    const displayedWidth = canvas.getBoundingClientRect().width;
-    return displayedWidth > 0 ? canvas.width / displayedWidth : 1;
-  }
-
-  function drawImageAuthBrushPath(ctx, canvas, brushPath, displayScale) {
-    let previousPoint = null;
-    ctx.save();
-    ctx.lineCap = "round";
-    ctx.lineJoin = "round";
-    for (const point of brushPath) {
-      if (!point) {
-        previousPoint = null;
-        continue;
-      }
-      const x = (point.x * canvas.width) / 100;
-      const y = (point.y * canvas.height) / 100;
-      if (previousPoint) {
-        const previousX = (previousPoint.x * canvas.width) / 100;
-        const previousY = (previousPoint.y * canvas.height) / 100;
-        ctx.beginPath();
-        ctx.moveTo(previousX, previousY);
-        ctx.lineTo(x, y);
-        ctx.strokeStyle = "rgba(255, 255, 255, 0.95)";
-        ctx.lineWidth = 8 * displayScale;
-        ctx.stroke();
-        ctx.strokeStyle = "#10b981";
-        ctx.lineWidth = 5 * displayScale;
-        ctx.stroke();
-      }
-      ctx.beginPath();
-      ctx.arc(x, y, 7 * displayScale, 0, 2 * Math.PI);
-      ctx.fillStyle = "#10b981";
-      ctx.fill();
-      ctx.strokeStyle = "#ffffff";
-      ctx.lineWidth = 2 * displayScale;
-      ctx.stroke();
-      previousPoint = point;
-    }
-    ctx.restore();
-  }
-
-  function updateImageAuthOrder(countId, orderId, selectedCells) {
-    document.getElementById(countId).textContent = selectedCells.length;
-    document.getElementById(orderId).textContent = !selectedCells.length
-      ? "cap"
-      : selectedCells.map((_, index) => String(index + 1)).join(" → ");
-  }
-
-  function selectImageGridCell(
-    event,
-    selectedCells,
-    countId,
-    orderId,
-    brushPath = [],
-  ) {
-    const rect = event.currentTarget.getBoundingClientRect();
-    const x = (event.clientX - rect.left) / rect.width;
-    const y = (event.clientY - rect.top) / rect.height;
-    if (x < 0 || x >= 1 || y < 0 || y >= 1) return;
-    const cell = Math.floor(y * 5) * 5 + Math.floor(x * 5);
-    const point = { x: x * 100, y: y * 100 };
-    const previousPoint = brushPath.at(-1);
-    if (
-      !previousPoint ||
-      Math.hypot(point.x - previousPoint.x, point.y - previousPoint.y) >= 0.25
-    ) {
-      brushPath.push(point);
-    }
-    const isNewCell = !selectedCells.includes(cell);
-    if (isNewCell) selectedCells.push(cell);
-    if (
-      countId === "image-auth-count" &&
-      selectedCells.length >= 12 &&
-      state.gridSetupError.startsWith("Has de seleccionar almenys 12")
-    ) {
-      state.gridSetupError = "";
-      document.getElementById("image-auth-setup-error")?.remove();
-    }
-    drawImageAuthGrid(event.currentTarget, selectedCells, brushPath);
-    if (isNewCell) {
-      animateImageAuthCell(event.currentTarget, selectedCells, brushPath, cell);
-    }
-    updateImageAuthOrder(countId, orderId, selectedCells);
-  }
-
-  function animateImageAuthCell(canvas, selectedCells, brushPath, cell) {
-    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
-    const duration = 260;
-    const startedAt = performance.now();
-    const animate = (now) => {
-      if (!canvas.isConnected) return;
-      const progress = Math.min((now - startedAt) / duration, 1);
-      const offset = progress - 1;
-      const eased = 1 + 2.2 * offset ** 3 + 1.2 * offset ** 2;
-      const scale = 0.72 + eased * 0.28;
-      drawImageAuthGrid(canvas, selectedCells, brushPath, cell, scale);
-      if (progress < 1) requestAnimationFrame(animate);
-      else drawImageAuthGrid(canvas, selectedCells, brushPath);
-    };
-    requestAnimationFrame(animate);
-  }
-
-  function redrawImageAuthGridCanvas(
-    canvasId,
-    selectedCells,
-    countId,
-    orderId,
-    brushPath = [],
-  ) {
-    const canvas = document.getElementById(canvasId);
-    if (!canvas) return;
-    drawImageAuthGrid(canvas, selectedCells, brushPath);
-    updateImageAuthOrder(countId, orderId, selectedCells);
-  }
-
-  function renderImageOnCanvas() {
-    const canvas = document.getElementById("image-auth-canvas");
-    if (canvas) {
-      drawImageAuthGrid(
-        canvas,
-        state.imageGridPattern,
-        state.imageGridBrushPath,
-      );
-    }
-  }
   document
     .querySelector("#change-auth-method")
     ?.addEventListener("click", () => {
       state.showChangeAuthModal = true;
-      render();
-    });
-  document
-    .querySelector("#change-auth-password")
-    ?.addEventListener("click", () => {
-      state.changeAuthSelected = "password";
       state.changeAuthError = "";
       render();
     });
-  document
-    .querySelector("#change-auth-image")
-    ?.addEventListener("click", () => {
-      state.changeAuthSelected = "image";
-      state.changeAuthError = "";
-      render();
-    });
+
+  const changePasswordInput = document.querySelector(
+    "#change-auth-new-password",
+  );
+  const changePasswordConfirm = document.querySelector(
+    "#change-auth-confirm-password",
+  );
+  const refreshChangePasswordFeedback = () => {
+    state.changeAuthError = "";
+    const errorElement = document.querySelector("#change-auth-error");
+    if (errorElement) errorElement.hidden = true;
+    updatePasswordFeedback(
+      "#change-auth-password-feedback",
+      "#change-auth-new-password",
+      "#change-auth-confirm-password",
+    );
+  };
+  changePasswordInput?.addEventListener("input", refreshChangePasswordFeedback);
+  changePasswordConfirm?.addEventListener(
+    "input",
+    refreshChangePasswordFeedback,
+  );
+
   document
     .querySelector("#save-auth-method")
     ?.addEventListener("click", async () => {
-      if (state.changeAuthSelected === "image") {
-        state.showGridSetup = true;
-        state.imageGridPattern = [];
-        state.imageGridBrushPath = [];
-        state.gridSetupError = "";
-        state.imageAuthImage = "";
-        state.changingAuthMethod = true;
-        imageAuthRenderSource = "";
-        state.showChangeAuthModal = false;
-        render();
+      const newPassword = changePasswordInput?.value || "";
+      const confirmPassword = changePasswordConfirm?.value || "";
+      const errorElement = document.querySelector("#change-auth-error");
+      const showError = (message) => {
+        state.changeAuthError = message;
+        if (!errorElement) return;
+        errorElement.textContent = message;
+        errorElement.hidden = false;
+      };
+
+      if (!passwordMeetsRequirements(newPassword)) {
+        showError(
+          `La contrasenya mestra ha de tenir com a mínim ${MASTER_PASSWORD_MIN_LENGTH} caràcters i incloure majúscules, minúscules, números i un caràcter especial.`,
+        );
+        refreshChangePasswordFeedback();
         return;
       }
-
-      const newPassword =
-        document.querySelector("#change-auth-new-password")?.value || "";
-      const confirmPassword =
-        document.querySelector("#change-auth-confirm-password")?.value || "";
-      const errorMessage =
-        newPassword.length < 12
-          ? "La contrasenya nova ha de tenir com a mínim 12 caràcters."
-          : newPassword !== confirmPassword
-            ? "Les contrasenyes no coincideixen."
-            : "";
-      if (errorMessage) {
-        state.changeAuthError = errorMessage;
-        const errorElement = document.querySelector("#change-auth-error");
-        if (errorElement) {
-          errorElement.textContent = errorMessage;
-          errorElement.hidden = false;
-        }
+      if (newPassword !== confirmPassword) {
+        showError("Les contrasenyes no coincideixen.");
+        refreshChangePasswordFeedback();
         return;
       }
 
@@ -2288,26 +2113,18 @@ function bindEvents() {
         saveButton.textContent = "Canviant...";
       }
       try {
-        await invoke("change_vault_to_password", {
-          newPassword,
-        });
+        await invoke("change_master_password", { newPassword });
         state.showChangeAuthModal = false;
         state.changeAuthError = "";
-        state.changeAuthSelected = "password";
-        showToast("Mètode d'autenticació canviat a contrasenya.");
+        showToast("Contrasenya mestra canviada.");
         render();
       } catch (error) {
-        state.changeAuthError = String(error);
-        const errorElement = document.querySelector("#change-auth-error");
-        if (errorElement) {
-          errorElement.textContent = state.changeAuthError;
-          errorElement.hidden = false;
-        }
+        showError(String(error));
       } finally {
         state.changeAuthBusy = false;
         if (saveButton?.isConnected) {
           saveButton.disabled = false;
-          saveButton.textContent = "Desa el mètode";
+          saveButton.textContent = "Canvia la contrasenya";
         }
       }
     });
@@ -2346,13 +2163,20 @@ function bindEvents() {
   });
   document.querySelector("#reveal-password")?.addEventListener("click", () => {
     const input = document.querySelector("#master-password");
+    if (!input) return;
     input.type = input.type === "password" ? "text" : "password";
   });
+  document
+    .querySelector("#reveal-password-confirm")
+    ?.addEventListener("click", () => {
+      const input = document.querySelector("#master-password-confirm");
+      if (!input) return;
+      input.type = input.type === "password" ? "text" : "password";
+    });
   document.querySelectorAll("#open-cloud-login").forEach((button) =>
     button.addEventListener("click", () => {
       state.cloudError = "";
-      state.cloudUsernameAvailable = null;
-      state.cloudUsernameChecking = false;
+      resetCloudUsernameCheck();
       state.cloudActionContext =
         button.dataset.context || (state.locked ? "download" : "settings");
       state.showCloudLogin = true;
@@ -2362,12 +2186,28 @@ function bindEvents() {
   document.querySelectorAll("#cancel-cloud-login").forEach((button) =>
     button.addEventListener("click", () => {
       state.showCloudLogin = false;
+      state.showPrivacyPolicy = false;
       state.cloudError = "";
-      state.cloudUsernameAvailable = null;
-      state.cloudUsernameChecking = false;
+      resetCloudUsernameCheck();
       render();
     }),
   );
+  document.querySelectorAll("#open-privacy-policy").forEach((button) =>
+    button.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      state.showPrivacyPolicy = true;
+      render();
+    }),
+  );
+  document
+    .querySelectorAll("#close-privacy-policy, #close-privacy-policy-bottom")
+    .forEach((button) =>
+      button.addEventListener("click", () => {
+        state.showPrivacyPolicy = false;
+        render();
+      }),
+    );
   document
     .querySelector("#cloud-login-form")
     ?.addEventListener("submit", cloudAuthSubmit);
@@ -2415,8 +2255,7 @@ function bindEvents() {
   document.querySelector("#tab-cloud-login")?.addEventListener("click", () => {
     state.cloudTab = "login";
     state.cloudError = "";
-    state.cloudUsernameAvailable = null;
-    state.cloudUsernameChecking = false;
+    resetCloudUsernameCheck();
     render();
   });
   document
@@ -2424,8 +2263,7 @@ function bindEvents() {
     ?.addEventListener("click", () => {
       state.cloudTab = "register";
       state.cloudError = "";
-      state.cloudUsernameAvailable = null;
-      state.cloudUsernameChecking = false;
+      resetCloudUsernameCheck();
       render();
     });
   document
@@ -2433,7 +2271,17 @@ function bindEvents() {
     ?.addEventListener("click", () => {
       state.cloudShowAdvanced = !state.cloudShowAdvanced;
       render();
+      if (state.cloudShowAdvanced) void checkUsernameAvailability();
     });
+  document
+    .querySelector("#cloud-railway-url")
+    ?.addEventListener("input", () => {
+      resetCloudUsernameCheck();
+      setCloudError("");
+    });
+  document.querySelector("#cloud-railway-url")?.addEventListener("blur", () => {
+    void checkUsernameAvailability();
+  });
   document
     .querySelector("#reveal-cloud-password")
     ?.addEventListener("click", () => {
@@ -2441,22 +2289,28 @@ function bindEvents() {
       if (input) input.type = input.type === "password" ? "text" : "password";
     });
 
-  // Check username availability on blur (register tab only)
-  document.querySelector("#auth-username")?.addEventListener("input", (event) => {
-    state.cloudFormUsername = event.currentTarget.value;
-    state.cloudUsernameAvailable = null;
-    state.cloudUsernameCheckError = "";
-  });
   document
     .querySelector("#auth-username")
-    ?.addEventListener("blur", checkUsernameAvailability);
+    ?.addEventListener("input", (event) => {
+      const value = event.currentTarget.value;
+      state.cloudFormUsername = value;
+      resetCloudUsernameCheck();
+      setCloudError("");
+      if (state.cloudTab === "register" && value.trim().length >= 3) {
+        scheduleCloudUsernameCheck();
+      }
+    });
+  document.querySelector("#auth-username")?.addEventListener("blur", () => {
+    if (cloudUsernameCheckTimer) {
+      clearTimeout(cloudUsernameCheckTimer);
+      cloudUsernameCheckTimer = null;
+    }
+    void checkUsernameAvailability();
+  });
 
   document
     .querySelector("#btn-cloud-sync-now")
     ?.addEventListener("click", handleCloudSyncNow);
-  document
-    .querySelector("#btn-cloud-download-now")
-    ?.addEventListener("click", handleCloudDownloadNow);
   document
     .querySelector("#btn-cloud-logout")
     ?.addEventListener("click", handleCloudLogout);
@@ -2465,17 +2319,21 @@ function bindEvents() {
     .querySelector("#btn-cloud-delete-account")
     ?.addEventListener("click", handleDeleteCloudAccount);
   document
-    .querySelector("#btn-cloud-sync-modal")
-    ?.addEventListener("click", handleCloudSyncNow);
+    .querySelectorAll('[data-cloud-action="sync"]')
+    .forEach((button) => button.addEventListener("click", handleCloudSyncNow));
   document
-    .querySelector("#btn-cloud-download-modal")
-    ?.addEventListener("click", handleCloudDownloadNow);
+    .querySelectorAll('[data-cloud-action="logout"]')
+    .forEach((button) => button.addEventListener("click", handleCloudLogout));
   document
-    .querySelector("#btn-cloud-logout-modal")
-    ?.addEventListener("click", handleCloudLogout);
-  document
-    .querySelector("#btn-cloud-delete-account-modal")
-    ?.addEventListener("click", handleDeleteCloudAccount);
+    .querySelectorAll('[data-cloud-action="delete-account"]')
+    .forEach((button) =>
+      button.addEventListener("click", handleDeleteCloudAccount),
+    );
+  document.querySelectorAll(".cloud-more").forEach((details) =>
+    details.addEventListener("toggle", () => {
+      state.cloudMoreOpen = details.open;
+    }),
+  );
   document
     .querySelector("#reset-vault")
     ?.addEventListener("click", resetLocalVault);
@@ -2702,8 +2560,6 @@ function bindEvents() {
     .querySelector("#import-file")
     ?.addEventListener("change", importVault);
 
-  // Generador de credencials
-
   const generatedOutput = document.querySelector(".generated-card output");
   generatedOutput?.addEventListener("dragstart", (event) => {
     const value = generatedOutput.textContent?.trim();
@@ -2906,6 +2762,36 @@ function bindEvents() {
   document.querySelector("#lock-vault")?.addEventListener("click", async () => {
     await lockVault();
   });
+
+  document
+    .querySelectorAll("#app-dialog-cancel, #app-dialog-cancel-bottom")
+    .forEach((button) =>
+      button.addEventListener("click", () => closeAppDialog(false)),
+    );
+  document
+    .querySelector("#app-dialog-confirm")
+    ?.addEventListener("click", () => closeAppDialog(true));
+  document
+    .querySelector("#app-dialog-third")
+    ?.addEventListener("click", () => closeAppDialog("third"));
+  document
+    .querySelector("#app-dialog-backdrop")
+    ?.addEventListener("click", (event) => {
+      if (event.target.id === "app-dialog-backdrop") closeAppDialog(false);
+    });
+  document
+    .querySelector("#app-dialog-require-text")
+    ?.addEventListener("input", (event) => {
+      if (state.appDialog)
+        state.appDialog.requireTextValue = event.target.value;
+      updateAppDialogConfirmButton();
+    });
+  document
+    .querySelector("#app-dialog-password")
+    ?.addEventListener("input", (event) => {
+      if (state.appDialog) state.appDialog.passwordValue = event.target.value;
+      updateAppDialogConfirmButton();
+    });
 }
 
 try {
@@ -2916,13 +2802,24 @@ try {
         applySettings();
       }
     });
-} catch {}
+} catch {
+  // Older webviews may not expose matchMedia change events.
+}
 
 ["pointerdown", "keydown", "touchstart"].forEach((eventName) =>
   window.addEventListener(eventName, resetAutoLock, { passive: true }),
 );
 
 window.addEventListener("keydown", (event) => {
+  if (state.showPrivacyPolicy) {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      state.showPrivacyPolicy = false;
+      render();
+    }
+    return;
+  }
+
   const isPaletteShortcut =
     (event.metaKey || event.ctrlKey) && event.shiftKey && event.code === "KeyP";
   if (isPaletteShortcut && !isTauriRuntime()) {
@@ -2930,6 +2827,20 @@ window.addEventListener("keydown", (event) => {
     state.showCommandPalette ? closeCommandPalette() : openCommandPalette();
     return;
   }
+  if (state.appDialog) {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      closeAppDialog(false);
+      return;
+    }
+    if (event.key === "Enter") {
+      event.preventDefault();
+      const btn = document.querySelector("#app-dialog-confirm");
+      if (btn && !btn.disabled) closeAppDialog(true);
+      return;
+    }
+  }
+
   if (!state.showCommandPalette) return;
 
   if (event.key === "Escape") {
@@ -2967,7 +2878,9 @@ async function reloadVaultEntries() {
       }
       render();
     }
-  } catch (err) {}
+  } catch (error) {
+    showToast(`No s'ha pogut recarregar la caixa forta: ${error}`);
+  }
 }
 
 listen("vault-updated", async () => {

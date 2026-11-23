@@ -108,7 +108,6 @@ def probe(host_script: Path, argv_origin: str, setup_registry: bool) -> bool:
 
         ok = True
         try:
-            # ── Probe 1: ping ─────
             print("\n[probe] action=ping")
             send_msg(proc, {"action": "ping", "extension_id": "sherlock_manager"})
             r = recv_msg(proc)
@@ -121,7 +120,6 @@ def probe(host_script: Path, argv_origin: str, setup_registry: bool) -> bool:
             else:
                 print(f"       ⚠️  unexpected: {r}")
 
-            # ── Probe 2: getVaultInfo ──────────
             print("\n[probe] action=getVaultInfo")
             send_msg(proc, {"action": "getVaultInfo", "extension_id": "sherlock_manager"})
             r = recv_msg(proc)
@@ -134,7 +132,6 @@ def probe(host_script: Path, argv_origin: str, setup_registry: bool) -> bool:
             else:
                 print(f"       ℹ️  {r.get('error','no error field')}")
 
-            # ── Probe 3: fetchCredentials ──────
             print("\n[probe] action=fetchCredentials")
             send_msg(
                 proc,
@@ -143,7 +140,6 @@ def probe(host_script: Path, argv_origin: str, setup_registry: bool) -> bool:
             r = recv_msg(proc)
             print(f"       response: {r}")
 
-            # ── Probe 4: forged extension_id (F3 / bypass check) ─────────
             print("\n[probe] F3 check – forged extension_id, no hash")
             send_msg(proc, {"action": "ping", "extension_id": "evil_forged_id"})
             r = recv_msg(proc)
@@ -233,14 +229,11 @@ def main() -> None:
     # F1 static check (no network needed)
     check_extension_id_mismatch()
 
-    # F7 guidance
     check_f7_handshake()
 
-    # ── Scenario A: No registry file (confirms F2) ────────────────────────
     print("\n── Scenario A: Host started with NO registry file (F2) ──────────")
     result_a = probe(host, argv_origin="", setup_registry=False)
 
-    # ── Scenario B: Approved registry, forged id (confirms F3) ───────────
     print("\n── Scenario B: Approved registry present, forged ID (F3) ────────")
     result_b = probe(host, argv_origin="", setup_registry=True)
 

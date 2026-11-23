@@ -161,11 +161,11 @@ echo.
 
 if exist "node_modules\.bin\tauri.cmd" (
     echo Starting with Tauri desktop app...
-    call node_modules\.bin\tauri.cmd dev
+    call node_modules\.bin\tauri.cmd dev --release
     set "EXIT_CODE=%ERRORLEVEL%"
 ) else if exist "src-tauri\tauri.exe" (
     echo Starting with Tauri desktop app...
-    call src-tauri\tauri.exe dev
+    call src-tauri\tauri.exe dev --release
     set "EXIT_CODE=%ERRORLEVEL%"
 ) else (
     echo Rust/Cargo not available.

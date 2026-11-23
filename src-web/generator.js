@@ -132,17 +132,110 @@ export function passphraseEntropyBits(
   poolSize = EFF_WORDLIST.length,
   { withNumber = false } = {},
 ) {
-  const bits = wordCount * Math.log2(poolSize);
+  // Words are sampled without replacement, so each draw has one fewer option.
+  let bits = 0;
+  for (let index = 0; index < wordCount && index < poolSize; index += 1) {
+    bits += Math.log2(poolSize - index);
+  }
   return withNumber ? bits + Math.log2(10) : bits;
 }
 
+export function sampleWordsWithoutReplacement(
+  pool,
+  count,
+  randomIndex = secureRandomIndex,
+) {
+  const available = [...pool];
+  const picked = [];
+  const total = Math.min(count, available.length);
+  for (let index = 0; index < total; index += 1) {
+    const pick = randomIndex(available.length);
+    picked.push(available.splice(pick, 1)[0]);
+  }
+  return picked;
+}
+
+export const MASTER_PASSWORD_MIN_LENGTH = 12;
+
+const MASTER_PASSWORD_REQUIREMENTS = [
+  {
+    id: "length",
+    label: `Un mínim de ${MASTER_PASSWORD_MIN_LENGTH} caràcters`,
+    test: (password) => [...password].length >= MASTER_PASSWORD_MIN_LENGTH,
+  },
+  {
+    id: "uppercase",
+    label: "Una majúscula (A-Z)",
+    test: (password) => /[A-Z]/.test(password),
+  },
+  {
+    id: "lowercase",
+    label: "Una minúscula (a-z)",
+    test: (password) => /[a-z]/.test(password),
+  },
+  {
+    id: "number",
+    label: "Un número (0-9)",
+    test: (password) => /\d/.test(password),
+  },
+  {
+    id: "symbol",
+    label: "Un caràcter especial (!@#$%…)",
+    test: (password) => /[^A-Za-z0-9\s]/.test(password),
+  },
+];
+
+export function passwordRequirements(password) {
+  const value = String(password ?? "");
+  return MASTER_PASSWORD_REQUIREMENTS.map(({ id, label, test }) => ({
+    id,
+    label,
+    met: test(value),
+  }));
+}
+
+export function passwordMeetsRequirements(password) {
+  return passwordRequirements(password).every((requirement) => requirement.met);
+}
+
+export function passwordRequirementsMarkup(password = "") {
+  return `
+    <p class="requirements-title">La contrasenya mestra ha de complir:</p>
+    <ul class="password-requirements" data-password-requirements aria-label="Requisits de la contrasenya mestra">
+      ${passwordRequirements(password)
+        .map(
+          (requirement) =>
+            `<li data-requirement="${requirement.id}" class="${requirement.met ? "is-met" : ""}">${requirement.label}</li>`,
+        )
+        .join("")}
+    </ul>
+  `;
+}
+
+export function passwordStrengthMarkup(password = "") {
+  const strength = passwordStrength(password);
+  return `
+    <div class="password-strength" data-password-strength ${password ? "" : "hidden"}>
+      <div class="strength-label">
+        <span>Força de la contrasenya</span>
+        <strong class="strength-${strength.level}">${strength.label}</strong>
+      </div>
+      <div class="strength-track">
+        <span class="strength-fill strength-${strength.level} strength-width-${strength.percent}"></span>
+      </div>
+      <small>${strength.hint}</small>
+    </div>
+  `;
+}
+
 export function passwordStrength(password) {
+  const length = [...password].length;
   let score = 0;
-  if (password.length >= 12) score++;
-  if (password.length >= 20) score++;
+  if (length >= MASTER_PASSWORD_MIN_LENGTH) score++;
+  if (length >= 20) score++;
   if (/[A-Z]/.test(password) && /[a-z]/.test(password)) score++;
   if (/\d/.test(password)) score++;
-  if (/[^A-Za-z0-9]/.test(password)) score++;
+  if (/[^A-Za-z0-9\s]/.test(password)) score++;
   const levels = [
     {
       level: "weak",
@@ -218,10 +311,7 @@ export function generateValue(type, options, language = "Català") {
   if (type === "passphrase") {
     const wordCount = Math.min(12, Math.max(5, Number(options.words) || 6));
     options.words = wordCount;
-    const words = [];
-    for (let index = 0; index < wordCount; index += 1) {
-      words.push(EFF_WORDLIST[secureRandomIndex(EFF_WORDLIST.length)]);
-    }
+    const words = sampleWordsWithoutReplacement(EFF_WORDLIST, wordCount);
     const value = words.join(options.separator);
     return options.includeNumber ? `${value}${secureRandomIndex(10)}` : value;
   }
@@ -295,7 +385,7 @@ export function passphraseOptions(options, language = "Català") {
       <input data-option="onlyUnaccented" type="checkbox" ${options.onlyUnaccented ? "checked" : ""} />
       Només paraules sense accents
     </label>
-    <small class="helper">Les paraules s'escollen de la llista EFF (anglès) i poden repetir-se.</small>
+    <small class="helper">Les paraules s'escullen de la llista EFF (anglès) sense repetir-se.</small>
   `;
 }
 

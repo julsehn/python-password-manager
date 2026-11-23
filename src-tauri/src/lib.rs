@@ -1,6 +1,5 @@
 #![deny(warnings)]
 
-mod image_grid;
 #[allow(dead_code)]
 mod railway;
 #[allow(dead_code)]
@@ -9,7 +8,7 @@ mod security;
 pub mod server;
 pub mod vault;
 
-use railway::{SyncConfig, SyncResponse};
+use railway::{decide_sync_action, SyncAction, SyncAutoResponse, SyncConfig, SyncResponse};
 use serde::{Deserialize, Serialize};
 use server::ServerState;
 use std::io::Write;
@@ -17,11 +16,18 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use tauri::{Emitter, Manager};
 use vault::visible_trash;
-pub use vault::{Entry, Folder, HistoryItem, TrashedEntry, VaultData, VaultInfo, VaultState};
-use zeroize::Zeroizing;
 
-const CLOUD_SESSION_SERVICE: &str = "com.juls.sherlock";
-const CLOUD_SESSION_ACCOUNT: &str = "official-cloud-refresh";
+// Tests in this module and in `railway` mutate process-wide environment
+// variables (`VAULT_PATH`, `CLOUD_VERSION_PATH`, ...). They must share one
+// lock or Cargo's parallel test runner can observe another test's value.
+#[cfg(test)]
+pub(crate) static TEST_ENV_LOCK: Mutex<()> = Mutex::new(());
+
+use sha2::{Digest, Sha256};
+pub use vault::{
+    CloudSession, Entry, Folder, HistoryItem, TrashedEntry, VaultData, VaultInfo, VaultState,
+};
+use zeroize::Zeroizing;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Credentials {
@@ -42,6 +48,36 @@ pub(crate) fn vault_path() -> PathBuf {
         .filter(|path| !path.is_empty())
         .map(PathBuf::from)
         .unwrap_or_else(|| config_dir().join("vault.json"))
+}
+
+pub(crate) const MIN_MASTER_PASSWORD_LENGTH: usize = 12;
+
+/// The frontend shows the same checklist, but the backend is authoritative:
+/// never encrypt a vault with a master password that does not meet it.
+pub(crate) fn validate_master_password(password: &str) -> Result<(), String> {
+    let invalid = || -> Result<(), String> {
+        Err(format!(
+            "La contrasenya mestra ha de tenir com a mínim {} caràcters i incloure majúscules, minúscules, números i un caràcter especial.",
+            MIN_MASTER_PASSWORD_LENGTH
+        ))
+    };
+    if password.chars().count() < MIN_MASTER_PASSWORD_LENGTH {
+        return invalid();
+    }
+    if !password
+        .chars()
+        .any(|character| character.is_ascii_uppercase())
+        || !password
+            .chars()
+            .any(|character| character.is_ascii_lowercase())
+        || !password.chars().any(|character| character.is_ascii_digit())
+        || !password
+            .chars()
+            .any(|character| !character.is_ascii_alphanumeric() && !character.is_whitespace())
+    {
+        return invalid();
+    }
+    Ok(())
 }
 
 pub(crate) fn atomic_write(path: &Path, contents: &[u8]) -> Result<(), String> {
@@ -105,31 +141,100 @@ pub(crate) fn delete_cloud_version() {
     let _ = std::fs::remove_file(path);
 }
 
+pub(crate) fn cloud_hash_path() -> PathBuf {
+    std::env::var_os("CLOUD_HASH_PATH")
+        .filter(|path| !path.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| config_dir().join("cloud_hash"))
+}
+
+pub(crate) fn store_cloud_hash(hash: &str) -> Result<(), String> {
+    atomic_write(&cloud_hash_path(), hash.as_bytes())
+}
+
+pub(crate) fn load_cloud_hash() -> Option<String> {
+    let path = cloud_hash_path();
+    if path.exists() {
+        std::fs::read_to_string(path).ok()
+    } else {
+        None
+    }
+}
+
+pub(crate) fn delete_cloud_hash() {
+    let path = cloud_hash_path();
+    let _ = std::fs::remove_file(path);
+}
+
+pub(crate) fn current_vault_hash() -> Option<String> {
+    let vault_path = vault_path();
+    if !vault_path.exists() {
+        return None;
+    }
+    let content = std::fs::read(&vault_path).ok()?;
+    Some(sha256_hex(&content))
+}
+
+/// Store the hash of the local file as it exists now. Downloads re-encrypt the
+/// vault when they save the cloud session, so hashing the downloaded blob
+/// would make the next auto-sync think the local copy changed.
+fn store_current_vault_hash() {
+    if let Some(hash) = current_vault_hash() {
+        let _ = store_cloud_hash(&hash);
+    }
+}
+
+fn sha256_hex(content: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(content);
+    let result = hasher.finalize();
+    format!("{:x}", result)
+}
+
 fn attach_sync_metadata(
     config: &mut SyncConfig,
     stored_config: &Mutex<SyncConfig>,
+    server_state: &ServerState,
 ) -> Result<(), String> {
+    let vault_session = server_state
+        .unlocked_data
+        .lock()
+        .map_err(|_| "Failed to access unlocked vault".to_string())?
+        .as_ref()
+        .and_then(|vault| vault.cloud_session.clone());
+
+    if let Some(session) = vault_session {
+        let matches = (config.vault_id.is_empty() || config.vault_id == session.vault_id)
+            && (config.railway_url.is_empty()
+                || normalized_cloud_url(&config.railway_url) == session.railway_url);
+        if matches {
+            config.railway_url.clone_from(&session.railway_url);
+            config.vault_id.clone_from(&session.vault_id);
+            config.token.clone_from(&session.access_token);
+            config.refresh_token.clone_from(&session.refresh_token);
+        }
+    }
+
     if config.refresh_token.is_empty() {
         let stored = stored_config
             .lock()
             .map_err(|_| "Failed to access Railway configuration".to_string())?;
-        if stored.token == config.token
-            && stored.vault_id == config.vault_id
-            && (config.railway_url.is_empty() || stored.railway_url == config.railway_url)
+        if stored.vault_id == config.vault_id
+            && normalized_cloud_url(&stored.railway_url)
+                == normalized_cloud_url(&config.railway_url)
+            && !stored.refresh_token.is_empty()
         {
+            config.token.clone_from(&stored.token);
             config.refresh_token.clone_from(&stored.refresh_token);
         }
     }
-    if config.refresh_token.is_empty() {
-        if let Some(secret) =
-            security::load_os_secret(CLOUD_SESSION_SERVICE, CLOUD_SESSION_ACCOUNT)?
-        {
-            let session: StoredCloudSession = serde_json::from_str(&secret)
-                .map_err(|error| format!("Stored cloud session is invalid: {}", error))?;
-            let configured_url = normalized_cloud_url(&config.railway_url);
-            if session.railway_url == configured_url && session.vault_id == config.vault_id {
-                config.refresh_token = session.refresh_token;
-            }
+
+    if !config.refresh_token.is_empty() {
+        if let Ok(mut stored) = stored_config.lock() {
+            stored.railway_url.clone_from(&config.railway_url);
+            stored.vault_id.clone_from(&config.vault_id);
+            stored.token.clone_from(&config.token);
+            stored.refresh_token.clone_from(&config.refresh_token);
         }
     }
     if config.cloud_version.is_none() {
@@ -145,6 +250,70 @@ fn attach_sync_metadata(
     Ok(())
 }
 
+fn persist_cloud_session(session: &CloudSession, server_state: &ServerState) -> Result<(), String> {
+    let (master_password, data) = {
+        let unlocked = server_state
+            .unlocked_data
+            .lock()
+            .map_err(|_| "Failed to access unlocked vault".to_string())?;
+        let vault = unlocked
+            .as_ref()
+            .ok_or_else(|| "Vault must be unlocked to save cloud credentials".to_string())?;
+        (
+            vault.master_password.clone(),
+            VaultData {
+                entries: vault.entries.clone(),
+                folders: vault.folders.clone(),
+                deleted_entries: vault.trash.clone(),
+                history: vault.history.clone(),
+                cloud_session: Some(session.clone()),
+            },
+        )
+    };
+    server::save_vault_data(&master_password, &data)?;
+    server_state.set_unlocked_with_cloud_session(
+        master_password.to_string(),
+        data.entries,
+        data.folders,
+        data.deleted_entries,
+        data.history,
+        data.cloud_session,
+    );
+    Ok(())
+}
+
+fn remove_vault_cloud_session(server_state: &ServerState) -> Result<(), String> {
+    let (master_password, mut data) = {
+        let unlocked = server_state
+            .unlocked_data
+            .lock()
+            .map_err(|_| "Failed to access unlocked vault".to_string())?;
+        let vault = unlocked
+            .as_ref()
+            .ok_or_else(|| "Vault must be unlocked to remove cloud credentials".to_string())?;
+        (
+            vault.master_password.clone(),
+            VaultData {
+                entries: vault.entries.clone(),
+                folders: vault.folders.clone(),
+                deleted_entries: vault.trash.clone(),
+                history: vault.history.clone(),
+                cloud_session: None,
+            },
+        )
+    };
+    data.cloud_session = None;
+    server::save_vault_data(&master_password, &data)?;
+    server_state.set_unlocked(
+        master_password.to_string(),
+        data.entries,
+        data.folders,
+        data.deleted_entries,
+        data.history,
+    );
+    Ok(())
+}
+
 fn normalized_cloud_url(url: &str) -> String {
     let url = url.trim().trim_end_matches('/');
     if url.is_empty() {
@@ -154,32 +323,19 @@ fn normalized_cloud_url(url: &str) -> String {
     }
 }
 
-fn store_cloud_session(
-    railway_url: &str,
-    vault_id: &str,
-    username: &str,
-    refresh_token: String,
-) -> Result<(), String> {
-    if refresh_token.is_empty() {
-        return Err("The cloud service did not return a refresh token".to_string());
-    }
-    let session = StoredCloudSession {
-        railway_url: normalized_cloud_url(railway_url),
-        vault_id: vault_id.to_string(),
-        username: username.to_string(),
-        refresh_token,
-    };
-    let serialized = serde_json::to_string(&session)
-        .map_err(|error| format!("Failed to encode cloud session: {}", error))?;
-    security::store_os_secret(CLOUD_SESSION_SERVICE, CLOUD_SESSION_ACCOUNT, &serialized)
+#[derive(Debug, Serialize)]
+struct CloudAuthSummary {
+    username: String,
+    vault_id: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-struct StoredCloudSession {
-    railway_url: String,
-    vault_id: String,
-    username: String,
-    refresh_token: String,
+fn cloud_session_from_config(config: &SyncConfig) -> CloudSession {
+    CloudSession {
+        railway_url: normalized_cloud_url(&config.railway_url),
+        vault_id: config.vault_id.clone(),
+        access_token: config.token.clone(),
+        refresh_token: config.refresh_token.clone(),
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -200,6 +356,18 @@ pub(crate) fn parse_vault_file(content: &str) -> Result<VaultFile, String> {
             "Unsupported vault version '{}' (expected '{}').",
             vault_file.version, VAULT_FORMAT_VERSION
         ));
+    }
+    let salt = security::decode_base64(&vault_file.salt, "salt")?;
+    if salt.len() != 16 {
+        return Err("Vault salt has an invalid length".to_string());
+    }
+    let nonce = security::decode_base64(&vault_file.nonce, "nonce")?;
+    if nonce.len() != 12 {
+        return Err("Vault nonce has an invalid length".to_string());
+    }
+    let ciphertext = security::decode_base64(&vault_file.ciphertext, "ciphertext")?;
+    if ciphertext.len() < 17 {
+        return Err("Vault ciphertext is too short".to_string());
     }
     Ok(vault_file)
 }
@@ -238,6 +406,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             init_empty_vault,
             unlock_vault,
+            change_master_password,
             save_vault,
             reset_vault,
             lock_vault,
@@ -247,6 +416,8 @@ pub fn run() {
             update_entry,
             sync_upload_vault,
             sync_download_vault,
+            sync_vault_auto,
+            sync_resolve_conflict,
             auth_official_cloud,
             register_official_cloud,
             check_railway_username,
@@ -254,16 +425,9 @@ pub fn run() {
             delete_cloud_account,
             set_railway_sync_config,
             get_cloud_version,
-            image_grid::get_auth_info,
             generate_pairing_code,
             list_paired_clients,
             revoke_paired_client,
-            image_grid::get_image_grid_auth,
-            image_grid::set_image_grid_auth,
-            image_grid::init_empty_grid_vault,
-            image_grid::change_vault_to_image_grid,
-            image_grid::change_vault_to_password,
-            image_grid::unlock_vault_grid,
         ])
         .manage(Mutex::new(SyncConfig {
             cloud_version: load_cloud_version(),
@@ -278,15 +442,24 @@ pub fn run() {
 async fn init_empty_vault(
     password: String,
     server_state: tauri::State<'_, Arc<ServerState>>,
-) -> Result<(), String> {
+) -> Result<VaultState, String> {
     println!("Creating new vault...");
+    validate_master_password(&password)?;
     let password = Zeroizing::new(password);
+
+    if vault_path().exists() {
+        return Err(
+            "Ja existeix una caixa forta en aquest dispositiu; no se n'ha creat una de nova."
+                .to_string(),
+        );
+    }
 
     let vault_data = VaultData {
         entries: vec![],
         folders: vec![],
         deleted_entries: vec![],
         history: vec![],
+        cloud_session: None,
     };
 
     let data =
@@ -323,14 +496,28 @@ async fn init_empty_vault(
 
     server_state.set_unlocked(password.to_string(), vec![], vec![], vec![], vec![]);
 
-    Ok(())
+    Ok(VaultState {
+        is_new: true,
+        entries: vec![],
+        folders: vec![],
+        trash: vec![],
+        history: vec![],
+    })
 }
 
-pub(crate) async fn init_empty_vault_from_grid(
-    password: String,
-    server_state: tauri::State<'_, Arc<ServerState>>,
-) -> Result<(), String> {
-    init_empty_vault(password, server_state).await
+fn remove_legacy_image_auth_files() -> Result<(), String> {
+    for file_name in [
+        "grid_auth.json",
+        "image_auth_secret.json",
+        "image_auth.json",
+    ] {
+        let path = config_dir().join(file_name);
+        if path.exists() {
+            std::fs::remove_file(&path)
+                .map_err(|error| format!("Failed to remove local auth data: {}", error))?;
+        }
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -340,8 +527,10 @@ fn reset_vault(server_state: tauri::State<'_, Arc<ServerState>>) -> Result<(), S
         std::fs::remove_file(&vault_path)
             .map_err(|error| format!("Failed to remove local vault: {}", error))?;
     }
-    image_grid::remove_image_auth()?;
+    remove_legacy_image_auth_files()?;
+    server::remove_paired_clients()?;
     delete_cloud_version();
+    delete_cloud_hash();
 
     server_state.lock();
 
@@ -359,15 +548,10 @@ fn unlock_vault(
     let vault_path = vault_path();
 
     if !std::path::Path::new(&vault_path).exists() {
-        println!("Vault file not found, creating new empty vault state");
-        server_state.set_unlocked(master_password.to_string(), vec![], vec![], vec![], vec![]);
-        return Ok(VaultState {
-            is_new: true,
-            entries: vec![],
-            folders: vec![],
-            trash: vec![],
-            history: vec![],
-        });
+        return Err(
+            "No hi ha cap caixa forta local; crea'n una de nova des de la pantalla de benvinguda."
+                .to_string(),
+        );
     }
 
     let content = std::fs::read_to_string(&vault_path)
@@ -394,12 +578,13 @@ fn unlock_vault(
     let vault_data: VaultData = serde_json::from_str(&data)
         .map_err(|e| format!("Failed to parse decrypted vault data: {}", e))?;
 
-    server_state.set_unlocked(
+    server_state.set_unlocked_with_cloud_session(
         master_password.to_string(),
         vault_data.entries.clone(),
         vault_data.folders.clone(),
         vault_data.deleted_entries.clone(),
         vault_data.history.clone(),
+        vault_data.cloud_session.clone(),
     );
 
     let now = chrono::Utc::now().timestamp();
@@ -413,11 +598,69 @@ fn unlock_vault(
     })
 }
 
-pub(crate) fn unlock_vault_from_grid(
-    master_password: String,
+/// Re-encrypt the existing vault with a new master password, preserving all
+/// entries, folders, trash, history, and the cloud session.
+#[tauri::command]
+fn change_master_password(
+    new_password: String,
     server_state: tauri::State<'_, Arc<ServerState>>,
-) -> Result<VaultState, String> {
-    unlock_vault(master_password, server_state)
+) -> Result<(), String> {
+    validate_master_password(&new_password)?;
+    let new_password = Zeroizing::new(new_password);
+    let current_password = {
+        let unlocked = server_state
+            .unlocked_data
+            .lock()
+            .map_err(|_| "No s'ha pogut accedir a la caixa forta desbloquejada".to_string())?;
+        unlocked
+            .as_ref()
+            .ok_or_else(|| "La caixa forta està bloquejada".to_string())?
+            .master_password
+            .clone()
+    };
+
+    let vault_path = vault_path();
+    let old_content = std::fs::read_to_string(&vault_path)
+        .map_err(|error| format!("No s'ha pogut llegir la caixa forta xifrada: {}", error))?;
+    let old_vault = parse_vault_file(&old_content)?;
+    let old_salt = security::decode_base64(&old_vault.salt, "salt")?;
+    let old_key = security::derive_key_from_password(&current_password, &old_salt)?;
+    let old_nonce = security::decode_base64(&old_vault.nonce, "nonce")?;
+    let old_ciphertext = security::decode_base64(&old_vault.ciphertext, "ciphertext")?;
+    let plaintext = security::decrypt_aes_gcm(&old_key, &old_nonce, &old_ciphertext)
+        .map_err(|error| format!("No s'ha pogut desxifrar la caixa forta existent: {}", error))?;
+    let vault_data: VaultData = serde_json::from_slice(&plaintext).map_err(|error| {
+        format!(
+            "No s'ha pogut interpretar la caixa forta existent: {}",
+            error
+        )
+    })?;
+
+    let new_salt = security::generate_salt()
+        .map_err(|error| format!("No s'ha pogut generar el salt: {}", error))?;
+    let new_key = security::derive_key_from_password(&new_password, &new_salt)?;
+    let new_nonce = security::generate_nonce()
+        .map_err(|error| format!("No s'ha pogut generar el nonce: {}", error))?;
+    let new_plaintext = serde_json::to_vec(&vault_data)
+        .map_err(|error| format!("No s'ha pogut serialitzar la caixa forta: {}", error))?;
+    let new_ciphertext = security::encrypt_aes_gcm(&new_key, &new_nonce, &new_plaintext)?;
+    let payload = serde_json::json!({
+        "salt": base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &new_salt),
+        "nonce": base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &new_nonce),
+        "ciphertext": base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &new_ciphertext),
+        "version": "1"
+    });
+    atomic_write(&vault_path, payload.to_string().as_bytes())?;
+
+    server_state.set_unlocked_with_cloud_session(
+        new_password.to_string(),
+        vault_data.entries,
+        vault_data.folders,
+        vault_data.deleted_entries,
+        vault_data.history,
+        vault_data.cloud_session,
+    );
+    Ok(())
 }
 
 #[tauri::command]
@@ -433,16 +676,15 @@ async fn save_vault(
     server_state: tauri::State<'_, Arc<ServerState>>,
 ) -> Result<Option<String>, String> {
     println!("Saving vault...");
-    let master_password = {
+    let (master_password, cloud_session) = {
         let unlocked = server_state
             .unlocked_data
             .lock()
             .map_err(|_| "Failed to access unlocked vault".to_string())?;
-        unlocked
+        let vault = unlocked
             .as_ref()
-            .ok_or_else(|| "Vault is locked".to_string())?
-            .master_password
-            .clone()
+            .ok_or_else(|| "Vault is locked".to_string())?;
+        (vault.master_password.clone(), vault.cloud_session.clone())
     };
 
     let vault_data = VaultData {
@@ -450,6 +692,7 @@ async fn save_vault(
         folders,
         deleted_entries: trash,
         history,
+        cloud_session,
     };
 
     if master_password.is_empty() {
@@ -486,31 +729,41 @@ async fn save_vault(
     }
     atomic_write(&vault_path, payload.to_string().as_bytes())?;
 
-    server_state.set_unlocked(
+    server_state.set_unlocked_with_cloud_session(
         master_password.to_string(),
         vault_data.entries.clone(),
         vault_data.folders.clone(),
         vault_data.deleted_entries.clone(),
         vault_data.history.clone(),
+        vault_data.cloud_session.clone(),
     );
 
     println!("Vault saved successfully");
 
     if sync_to_railway {
-        let config = sync_state
+        let mut config = sync_state
             .lock()
             .map_err(|_| "Failed to access Railway configuration".to_string())?
             .clone();
+        attach_sync_metadata(&mut config, &sync_state, &server_state)?;
 
-        if !config.railway_url.is_empty() && !config.vault_id.is_empty() && !config.token.is_empty()
+        if !config.railway_url.is_empty()
+            && !config.vault_id.is_empty()
+            && !config.refresh_token.is_empty()
         {
             println!("Syncing vault to Railway...");
-            railway::upload_vault(&config).await.map_err(|e| {
-                format!(
-                    "Railway sync failed: {}. Vault saved locally but not synced.",
-                    e
-                )
-            })?;
+            let (_response, version, hash) =
+                do_upload_vault(&config, &server_state).await.map_err(|e| {
+                    format!(
+                        "Railway sync failed: {}. Vault saved locally but not synced.",
+                        e
+                    )
+                })?;
+            let _ = store_cloud_version(version);
+            let _ = store_cloud_hash(&hash);
+            if let Ok(mut sync_config) = sync_state.lock() {
+                sync_config.cloud_version = Some(version);
+            }
             println!("Vault synced to Railway successfully");
             return Ok(Some("Synced to Railway".to_string()));
         }
@@ -591,12 +844,6 @@ fn get_vault_entries(
     }
 }
 
-// generate_password command removed (dead code). Use server.rs /api/v1/generate-password instead.
-
-// generate_passphrase command removed (dead code).
-
-// generate_username command removed (dead code).
-
 #[tauri::command]
 fn update_entry(
     entry_id: String,
@@ -621,6 +868,7 @@ fn update_entry(
             folders: vault.folders.clone(),
             deleted_entries: vault.trash.clone(),
             history: vault.history.clone(),
+            cloud_session: vault.cloud_session.clone(),
         };
         let entry = vault_data
             .entries
@@ -639,24 +887,25 @@ fn update_entry(
     };
 
     server::save_vault_data(&master_password, &vault_data)?;
-    server_state.set_unlocked(
+    server_state.set_unlocked_with_cloud_session(
         master_password.to_string(),
         vault_data.entries.clone(),
         vault_data.folders.clone(),
         vault_data.deleted_entries.clone(),
         vault_data.history.clone(),
+        vault_data.cloud_session.clone(),
     );
 
     Ok(updated_entry)
 }
 
 #[tauri::command]
-async fn sync_upload_vault(
-    mut config: SyncConfig,
-    sync_state: tauri::State<'_, Mutex<SyncConfig>>,
-    server_state: tauri::State<'_, Arc<ServerState>>,
-) -> Result<SyncResponse, String> {
-    attach_sync_metadata(&mut config, &sync_state)?;
+/// Lògica interna de pujada (sense gestió de sync_state), reutilitzada per
+/// `sync_upload_vault` i `sync_vault_auto`.
+async fn do_upload_vault(
+    config: &SyncConfig,
+    server_state: &Arc<ServerState>,
+) -> Result<(SyncResponse, i64, String), String> {
     let master_password = {
         let unlocked = server_state
             .unlocked_data
@@ -697,19 +946,105 @@ async fn sync_upload_vault(
 
     let _data: String = String::from_utf8_lossy(&decrypted).into();
 
-    match railway::upload_vault(&config).await? {
-        railway::UploadResult::Ok(response, version) => {
-            let _ = store_cloud_version(version);
-            if let Ok(mut sync_config) = sync_state.lock() {
-                sync_config.cloud_version = Some(version);
-            }
-            Ok(response)
-        }
+    let hash = sha256_hex(content.as_bytes());
+
+    // Never overwrite a cloud vault whose version this device has not seen.
+    // The server also refuses unconditional updates, but checking here keeps
+    // the error actionable and avoids an unnecessary request.
+    let upload_config = config.clone();
+    if upload_config.cloud_version.is_none()
+        && railway::remote_vault_version(&upload_config)
+            .await?
+            .is_some()
+    {
+        return Err(
+            "La caixa al núvol ja existeix en aquest compte. Descarrega-la abans de pujar-hi res."
+                .to_string(),
+        );
+    }
+
+    match railway::upload_vault(&upload_config).await? {
+        railway::UploadResult::Ok(response, version) => Ok((response, version, hash)),
         railway::UploadResult::Conflict => Err(
             "La caixa al núvol és més nova que la local. Descarregueu-la abans de tornar a pujar."
                 .to_string(),
         ),
     }
+}
+
+#[tauri::command]
+async fn sync_upload_vault(
+    mut config: SyncConfig,
+    sync_state: tauri::State<'_, Mutex<SyncConfig>>,
+    server_state: tauri::State<'_, Arc<ServerState>>,
+) -> Result<SyncResponse, String> {
+    attach_sync_metadata(&mut config, &sync_state, &server_state)?;
+    let (response, version, hash) = do_upload_vault(&config, &server_state).await?;
+    let _ = store_cloud_version(version);
+    let _ = store_cloud_hash(&hash);
+    if let Ok(mut sync_config) = sync_state.lock() {
+        sync_config.cloud_version = Some(version);
+    }
+    Ok(response)
+}
+
+#[tauri::command]
+/// Lògica interna de baixada (sense gestió de sync_state), reutilitzada per
+/// `sync_download_vault`, `sync_vault_auto` i `sync_resolve_conflict`.
+async fn do_download_vault(
+    master_password: &Zeroizing<String>,
+    config: &SyncConfig,
+    server_state: &Arc<ServerState>,
+) -> Result<(String, i64, String), String> {
+    let (blob, remote_version) =
+        railway::download_vault(master_password.to_string(), config).await?;
+
+    let vault_file = parse_vault_file(&blob)?;
+
+    let salt_bytes = security::decode_base64(&vault_file.salt, "salt")?;
+    let key = security::derive_key_from_password(master_password, &salt_bytes)
+        .map_err(|e| format!("Failed to derive key: {}", e))?;
+
+    let nonce_bytes = security::decode_base64(&vault_file.nonce, "nonce")?;
+    let ciphertext_bytes = security::decode_base64(&vault_file.ciphertext, "ciphertext")?;
+
+    let decrypted =
+        security::decrypt_aes_gcm(&key, &nonce_bytes, &ciphertext_bytes).map_err(|e| {
+            format!(
+                "Failed to decrypt downloaded vault: {}. Please verify your master password.",
+                e
+            )
+        })?;
+
+    let data: String = String::from_utf8_lossy(&decrypted).into();
+    let vault_data: VaultData = serde_json::from_str(&data)
+        .map_err(|e| format!("Failed to parse decrypted vault: {}", e))?;
+
+    // Safely update the local vault file only now.
+    let vault_path = vault_path();
+
+    if vault_path.exists() {
+        let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S_%f");
+        let backup_path = vault_path.with_extension(format!("{}.bak", timestamp));
+        std::fs::copy(&vault_path, &backup_path)
+            .map_err(|e| format!("Failed to back up local vault before sync: {}", e))?;
+    }
+
+    atomic_write(&vault_path, blob.as_bytes())?;
+
+    server_state.set_unlocked_with_cloud_session(
+        master_password.to_string(),
+        vault_data.entries.clone(),
+        vault_data.folders.clone(),
+        vault_data.deleted_entries.clone(),
+        vault_data.history.clone(),
+        vault_data.cloud_session.clone(),
+    );
+
+    let json = serde_json::to_string(&vault_data)
+        .map_err(|e| format!("Failed to serialize vault: {}", e))?;
+    let hash = sha256_hex(blob.as_bytes());
+    Ok((json, remote_version, hash))
 }
 
 #[tauri::command]
@@ -719,7 +1054,7 @@ async fn sync_download_vault(
     sync_state: tauri::State<'_, Mutex<SyncConfig>>,
     server_state: tauri::State<'_, Arc<ServerState>>,
 ) -> Result<String, String> {
-    attach_sync_metadata(&mut config, &sync_state)?;
+    attach_sync_metadata(&mut config, &sync_state, &server_state)?;
     let master_password = match master_password.filter(|password| !password.is_empty()) {
         Some(password) => Zeroizing::new(password),
         None => {
@@ -734,71 +1069,162 @@ async fn sync_download_vault(
                 .clone()
         }
     };
-    let (blob, remote_version) =
-        railway::download_vault(master_password.to_string(), &config).await?;
+    let (json, remote_version, _hash) =
+        do_download_vault(&master_password, &config, &server_state).await?;
+    persist_cloud_session(&cloud_session_from_config(&config), &server_state)?;
 
-    // 1. Verify downloaded vault structure
-    let vault_file = parse_vault_file(&blob)?;
-
-    // 2. Derive key with Argon2id and decrypt to verify integrity and master password
-    let salt_bytes = security::decode_base64(&vault_file.salt, "salt")?;
-    let key = security::derive_key_from_password(&master_password, &salt_bytes)
-        .map_err(|e| format!("Failed to derive key: {}", e))?;
-
-    let nonce_bytes = security::decode_base64(&vault_file.nonce, "nonce")?;
-    let ciphertext_bytes = security::decode_base64(&vault_file.ciphertext, "ciphertext")?;
-
-    let decrypted =
-        security::decrypt_aes_gcm(&key, &nonce_bytes, &ciphertext_bytes).map_err(|e| {
-            format!(
-                "Failed to decrypt downloaded vault: {}. Please verify your master password.",
-                e
-            )
-        })?;
-
-    // 3. Verify that decrypted content is valid VaultData
-    let data: String = String::from_utf8_lossy(&decrypted).into();
-    let vault_data: VaultData = serde_json::from_str(&data)
-        .map_err(|e| format!("Failed to parse decrypted vault: {}", e))?;
-
-    // 4. Decryption and validation succeeded!
-    // Safely update the local vault file only now.
-    let vault_path = vault_path();
-
-    if vault_path.exists() {
-        let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S_%f");
-        let backup_path = vault_path.with_extension(format!("{}.bak", timestamp));
-        std::fs::copy(&vault_path, &backup_path)
-            .map_err(|e| format!("Failed to back up local vault before sync: {}", e))?;
-    }
-
-    atomic_write(&vault_path, blob.as_bytes())?;
-
-    // 7. Update active in-memory session for autofill server
-    server_state.set_unlocked(
-        master_password.to_string(),
-        vault_data.entries.clone(),
-        vault_data.folders.clone(),
-        vault_data.deleted_entries.clone(),
-        vault_data.history.clone(),
-    );
-
-    // Emmagatzema la versió del núvol per a futures pujades amb expected_version.
     let _ = store_cloud_version(remote_version);
+    store_current_vault_hash();
     if let Ok(mut sync_config) = sync_state.lock() {
         sync_config.cloud_version = Some(remote_version);
     }
 
-    serde_json::to_string(&vault_data).map_err(|e| format!("Failed to serialize vault: {}", e))
+    Ok(json)
 }
 
 #[tauri::command]
-#[allow(dead_code)]
-async fn register_vault(
-    master_password: String,
-    config: SyncConfig,
-) -> Result<SyncResponse, String> {
-    railway::register_vault(master_password, &config).await
+async fn sync_vault_auto(
+    mut config: SyncConfig,
+    sync_state: tauri::State<'_, Mutex<SyncConfig>>,
+    server_state: tauri::State<'_, Arc<ServerState>>,
+) -> Result<SyncAutoResponse, String> {
+    attach_sync_metadata(&mut config, &sync_state, &server_state)?;
+
+    let master_password = {
+        let unlocked = server_state
+            .unlocked_data
+            .lock()
+            .map_err(|_| "Failed to access unlocked vault".to_string())?;
+        unlocked
+            .as_ref()
+            .ok_or_else(|| "Vault is locked".to_string())?
+            .master_password
+            .clone()
+    };
+
+    let known_version = {
+        let sc = sync_state
+            .lock()
+            .map_err(|_| "Failed to access sync config".to_string())?;
+        sc.cloud_version.or_else(load_cloud_version)
+    };
+
+    let local_changed = match load_cloud_hash() {
+        None => true,
+        Some(saved) => current_vault_hash() != Some(saved),
+    };
+
+    let remote_version = railway::remote_vault_version(&config).await?;
+    let action = decide_sync_action(local_changed, known_version, remote_version);
+
+    let now = chrono::Utc::now().timestamp() as u64;
+    let mk = |outcome: &str, message: &str, version: Option<i64>| SyncAutoResponse {
+        outcome: outcome.to_string(),
+        message: message.to_string(),
+        timestamp: now,
+        error: None,
+        version,
+    };
+
+    match action {
+        SyncAction::UpToDate => Ok(mk("up_to_date", "La caixa ja està al día amb el núbol.", known_version)),
+        SyncAction::Upload => {
+            let (sync_response, version, hash) = do_upload_vault(&config, &server_state).await?;
+            let _ = store_cloud_version(version);
+            let _ = store_cloud_hash(&hash);
+            if let Ok(mut sc) = sync_state.lock() {
+                sc.cloud_version = Some(version);
+            }
+            Ok(mk("uploaded", &sync_response.message, Some(version)))
+        }
+        SyncAction::Download => {
+            let mp = Zeroizing::new(master_password);
+            let (_json, remote_version, hash) =
+                do_download_vault(&mp, &config, &server_state).await?;
+            persist_cloud_session(&cloud_session_from_config(&config), &server_state)?;
+                    let _ = store_cloud_version(remote_version);
+            let _ = store_cloud_hash(&hash);
+            if let Ok(mut sc) = sync_state.lock() {
+                sc.cloud_version = Some(remote_version);
+            }
+            Ok(mk("downloaded", "Caixa descarregada del núbol.", Some(remote_version)))
+        }
+        SyncAction::Conflict => Ok(mk("conflict", "Conflicte: la caixa local i al núbol tenen canvis no reconciliats. No s'ha sobreescrit res.", None)),
+    }
+}
+
+#[tauri::command]
+async fn sync_resolve_conflict(
+    _config: SyncConfig,
+    keep: String,
+    mut sync_config_arg: SyncConfig,
+    sync_state: tauri::State<'_, Mutex<SyncConfig>>,
+    server_state: tauri::State<'_, Arc<ServerState>>,
+) -> Result<SyncAutoResponse, String> {
+    attach_sync_metadata(&mut sync_config_arg, &sync_state, &server_state)?;
+
+    let now = chrono::Utc::now().timestamp() as u64;
+    let mk = |outcome: &str, message: &str, version: Option<i64>| SyncAutoResponse {
+        outcome: outcome.to_string(),
+        message: message.to_string(),
+        timestamp: now,
+        error: None,
+        version,
+    };
+
+    match keep.as_str() {
+        "cloud" => {
+            let master_password = {
+                let unlocked = server_state
+                    .unlocked_data
+                    .lock()
+                    .map_err(|_| "Failed to access unlocked vault".to_string())?;
+                unlocked
+                    .as_ref()
+                    .ok_or_else(|| "Vault is locked".to_string())?
+                    .master_password
+                    .clone()
+            };
+            let mp = Zeroizing::new(master_password);
+            let (_json, remote_version, hash) =
+                do_download_vault(&mp, &sync_config_arg, &server_state).await?;
+            persist_cloud_session(&cloud_session_from_config(&sync_config_arg), &server_state)?;
+            let _ = store_cloud_version(remote_version);
+            let _ = store_cloud_hash(&hash);
+            if let Ok(mut sc) = sync_state.lock() {
+                sc.cloud_version = Some(remote_version);
+            }
+            Ok(mk(
+                "downloaded",
+                "Caixa del núbol restaurada.",
+                Some(remote_version),
+            ))
+        }
+        "local" => {
+            let remote_version = railway::remote_vault_version(&sync_config_arg)
+                .await?
+                .ok_or_else(|| "El núbol no té caixa on pujar".to_string())?;
+            let mut config_for_upload = sync_config_arg.clone();
+            config_for_upload.cloud_version = Some(remote_version);
+            match do_upload_vault(&config_for_upload, &server_state).await {
+                Ok((sync_response, version, hash)) => {
+                    let _ = store_cloud_version(version);
+                    let _ = store_cloud_hash(&hash);
+                    if let Ok(mut sc) = sync_state.lock() {
+                        sc.cloud_version = Some(version);
+                    }
+                    Ok(mk("uploaded", &sync_response.message, Some(version)))
+                }
+                Err(err) if err.contains("més nova que la local") => Ok(mk(
+                    "conflict",
+                    "Conflicte: el núbol ha canviat mentrestant. Torneu a provar.",
+                    None,
+                )),
+                Err(err) => Err(err),
+            }
+        }
+        _ => Err(format!("Valor de resolució no vàlid: {keep}")),
+    }
 }
 
 #[tauri::command]
@@ -806,23 +1232,39 @@ async fn auth_official_cloud(
     username: String,
     password: String,
     railway_url: Option<String>,
+    for_download: bool,
     state: tauri::State<'_, Mutex<SyncConfig>>,
-) -> Result<railway::AuthResponseData, String> {
+    server_state: tauri::State<'_, Arc<ServerState>>,
+) -> Result<CloudAuthSummary, String> {
+    if !server_state.is_unlocked() && !for_download {
+        return Err("Desbloqueja la caixa forta per desar la sessió de Railway.".to_string());
+    }
+
     let mut auth = railway::auth_user(&username, &password, railway_url.as_deref()).await?;
     let refresh_token = std::mem::take(&mut auth.refresh_token);
     let url = normalized_cloud_url(railway_url.as_deref().unwrap_or_default());
-    store_cloud_session(&url, &auth.vault_id, &auth.username, refresh_token.clone())?;
+    if refresh_token.is_empty() {
+        return Err("El servei del núvol no ha retornat un token de sessió.".to_string());
+    }
+    let runtime_config = SyncConfig {
+        railway_url: url.clone(),
+        vault_id: auth.vault_id.clone(),
+        token: auth.access_token.clone(),
+        refresh_token: refresh_token.clone(),
+        cloud_version: load_cloud_version(),
+    };
+    let session = cloud_session_from_config(&runtime_config);
+    if server_state.is_unlocked() {
+        persist_cloud_session(&session, &server_state)?;
+    }
     let mut config = state
         .lock()
         .map_err(|_| "Failed to access Railway configuration".to_string())?;
-    *config = SyncConfig {
-        railway_url: url,
-        vault_id: auth.vault_id.clone(),
-        token: auth.access_token.clone(),
-        refresh_token,
-        cloud_version: load_cloud_version(),
-    };
-    Ok(auth)
+    *config = runtime_config;
+    Ok(CloudAuthSummary {
+        username: auth.username,
+        vault_id: auth.vault_id,
+    })
 }
 
 #[tauri::command]
@@ -831,22 +1273,42 @@ async fn register_official_cloud(
     password: String,
     railway_url: Option<String>,
     state: tauri::State<'_, Mutex<SyncConfig>>,
-) -> Result<railway::AuthResponseData, String> {
+    server_state: tauri::State<'_, Arc<ServerState>>,
+) -> Result<CloudAuthSummary, String> {
+    if !server_state.is_unlocked() {
+        return Err("Desbloqueja la caixa forta per desar la sessió de Railway.".to_string());
+    }
+
+    if server_state.master_password_matches(&password) {
+        return Err(
+            "La contrasenya de Railway no pot ser la mateixa que la contrasenya mestra de la caixa forta. Tria'n una de diferent."
+                .to_string(),
+        );
+    }
+
     let mut auth = railway::register_user(&username, &password, railway_url.as_deref()).await?;
     let refresh_token = std::mem::take(&mut auth.refresh_token);
     let url = normalized_cloud_url(railway_url.as_deref().unwrap_or_default());
-    store_cloud_session(&url, &auth.vault_id, &auth.username, refresh_token.clone())?;
+    if refresh_token.is_empty() {
+        return Err("El servei del núvol no ha retornat un token de sessió.".to_string());
+    }
+    let runtime_config = SyncConfig {
+        railway_url: url.clone(),
+        vault_id: auth.vault_id.clone(),
+        token: auth.access_token.clone(),
+        refresh_token: refresh_token.clone(),
+        cloud_version: load_cloud_version(),
+    };
+    let session = cloud_session_from_config(&runtime_config);
+    persist_cloud_session(&session, &server_state)?;
     let mut config = state
         .lock()
         .map_err(|_| "Failed to access Railway configuration".to_string())?;
-    *config = SyncConfig {
-        railway_url: url,
-        vault_id: auth.vault_id.clone(),
-        token: auth.access_token.clone(),
-        refresh_token,
-        cloud_version: load_cloud_version(),
-    };
-    Ok(auth)
+    *config = runtime_config;
+    Ok(CloudAuthSummary {
+        username: auth.username,
+        vault_id: auth.vault_id,
+    })
 }
 
 #[tauri::command]
@@ -857,12 +1319,30 @@ async fn check_railway_username(
     railway::check_username_availability(&username, railway_url.as_deref()).await
 }
 
+fn clear_local_cloud_state(
+    state: &Mutex<SyncConfig>,
+    server_state: &ServerState,
+) -> Result<(), String> {
+    remove_vault_cloud_session(server_state)?;
+    delete_cloud_version();
+    delete_cloud_hash();
+    if let Ok(mut config) = state.lock() {
+        config.token.clear();
+        config.refresh_token.clear();
+        config.vault_id.clear();
+        config.railway_url.clear();
+        config.cloud_version = None;
+    }
+    Ok(())
+}
+
 #[tauri::command]
 async fn revoke_official_cloud_session(
     railway_url: String,
     vault_id: String,
     token: Option<String>,
     state: tauri::State<'_, Mutex<SyncConfig>>,
+    server_state: tauri::State<'_, Arc<ServerState>>,
 ) -> Result<(), String> {
     let mut config = state
         .lock()
@@ -874,72 +1354,37 @@ async fn revoke_official_cloud_session(
         config.token = token;
     }
 
-    // Sempre intenta recuperar el refresh_token abans de decidir si cal revocar.
-    // Primer de l'estat intern, després de l'emmagatzematge segurut del SO.
-    if config.refresh_token.is_empty() {
-        let stored = state
-            .lock()
-            .map_err(|_| "Failed to access Railway configuration".to_string())?;
-        if stored.token == config.token
-            && stored.vault_id == config.vault_id
-            && (config.railway_url.is_empty() || stored.railway_url == config.railway_url)
-            && !stored.refresh_token.is_empty()
-        {
-            config.refresh_token.clone_from(&stored.refresh_token);
-        }
-        drop(stored);
-    }
-    if config.refresh_token.is_empty() {
-        if let Ok(Some(secret)) =
-            security::load_os_secret(CLOUD_SESSION_SERVICE, CLOUD_SESSION_ACCOUNT)
-        {
-            if let Ok(session) = serde_json::from_str::<StoredCloudSession>(&secret) {
-                let configured_url = normalized_cloud_url(&config.railway_url);
-                if session.railway_url == configured_url && session.vault_id == config.vault_id {
-                    config.refresh_token = session.refresh_token;
-                }
-            }
-        }
-    }
+    attach_sync_metadata(&mut config, &state, &server_state)?;
 
-    // Si encara no hi ha refresh_token, no hi havia sessió al servidor.
-    if config.refresh_token.is_empty() {
-        delete_cloud_version();
-        if let Ok(mut config) = state.lock() {
-            config.token.clear();
-            config.refresh_token.clear();
-            config.cloud_version = None;
-        }
-        return Ok(());
-    }
-
-    let result = railway::revoke_refresh_token(&config).await;
-    if result.is_ok() {
-        let _ = security::delete_os_secret(CLOUD_SESSION_SERVICE, CLOUD_SESSION_ACCOUNT);
-    }
-    delete_cloud_version();
-    if let Ok(mut config) = state.lock() {
-        config.token.clear();
-        config.refresh_token.clear();
-        config.cloud_version = None;
-    }
+    let result = if config.refresh_token.is_empty() {
+        Ok(())
+    } else {
+        railway::revoke_refresh_token(&config).await
+    };
+    clear_local_cloud_state(&state, &server_state)?;
     result
 }
 
-/// Elimina el vault al nuvol i revoca la sessió de l'usuari autenticat.
-/// (L'eliminació completa del compte d'usuari requereix l'endpoint DELETE /v1/auth/me
-/// al servidor Railway, que encara no està implementat al client.)
+/// Elimina el vault al nuvol, el compte d'usuari i neteja l'estat local.
 #[tauri::command]
 async fn delete_cloud_account(
     master_password: String,
     config: SyncConfig,
+    state: tauri::State<'_, Mutex<SyncConfig>>,
+    server_state: tauri::State<'_, Arc<ServerState>>,
 ) -> Result<(), String> {
-    // 1. Eliminar el vault xifrat al nuvol
-    railway::delete_vault(master_password.clone(), &config).await?;
+    let mut config = config;
+    attach_sync_metadata(&mut config, &state, &server_state)?;
+
+    // 1. Eliminar el vault xifrat al nuvol (404 és acceptable: potser mai no s'ha pujat)
+    let _ = railway::delete_vault(master_password.clone(), &config).await;
     // 2. Eliminar el compte d'usuari al servidor (tots els seus vaults + perfil)
-    let _ = railway::delete_user_account(&config).await;
-    // 3. Revocar la sessió (refresh token) si n'hi ha una
+    railway::delete_user_account(&config).await?;
+    // 3. Revocar la sessió (refresh token) si n'hi ha una (best-effort)
     let _ = railway::revoke_refresh_token(&config).await;
+
+    // 4. Netejar l'estat local de cloud (mateixa lògica que revoke_official_cloud_session)
+    clear_local_cloud_state(&state, &server_state)?;
     Ok(())
 }
 
@@ -1018,12 +1463,6 @@ fn get_railway_sync_config(
         .map_err(|_| "Failed to access Railway configuration".to_string())
 }
 
-// change_master_password command removed (dead code).
-
-// Image-grid authentication commands live in image_grid.rs.
-
-// export_vault/import_vault path-based commands removed (dead code).
-
 #[cfg(test)]
 mod persistence_tests {
     use super::atomic_write;
@@ -1043,6 +1482,7 @@ mod persistence_tests {
 #[cfg(test)]
 mod sync_download_tests {
     use super::*;
+    use crate::TEST_ENV_LOCK as SYNC_ENV_LOCK;
 
     #[test]
     fn invalid_downloaded_blob_fails_validation() {
@@ -1066,8 +1506,6 @@ mod sync_download_tests {
             "Decryption must fail when password does not match"
         );
     }
-
-    static SYNC_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     #[test]
     fn cloud_version_stores_and_loads_correctly() {
@@ -1102,10 +1540,137 @@ mod sync_download_tests {
             cloud_version: None,
         };
         let stored = Mutex::new(SyncConfig::default());
+        let server_state = ServerState::new();
 
-        attach_sync_metadata(&mut config, &stored).unwrap();
+        attach_sync_metadata(&mut config, &stored, &server_state).unwrap();
         assert_eq!(config.cloud_version, Some(15));
 
         std::env::remove_var("CLOUD_VERSION_PATH");
+    }
+
+    #[test]
+    fn persist_cloud_session_encrypts_tokens_in_the_vault() {
+        let _guard = SYNC_ENV_LOCK.lock().unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("vault.json");
+        std::env::set_var("VAULT_PATH", &path);
+
+        let server_state = ServerState::new();
+        server_state.set_unlocked(
+            "master-password".to_string(),
+            vec![],
+            vec![],
+            vec![],
+            vec![],
+        );
+        let session = CloudSession {
+            railway_url: "https://example.test".to_string(),
+            vault_id: "vault-1".to_string(),
+            access_token: "access-secret".to_string(),
+            refresh_token: "refresh-secret".to_string(),
+        };
+
+        persist_cloud_session(&session, &server_state).unwrap();
+
+        let encrypted_file = std::fs::read_to_string(&path).unwrap();
+        assert!(!encrypted_file.contains("access-secret"));
+        assert!(!encrypted_file.contains("refresh-secret"));
+
+        let vault_file = parse_vault_file(&encrypted_file).unwrap();
+        let salt = security::decode_base64(&vault_file.salt, "salt").unwrap();
+        let key = security::derive_key_from_password("master-password", &salt).unwrap();
+        let nonce = security::decode_base64(&vault_file.nonce, "nonce").unwrap();
+        let ciphertext = security::decode_base64(&vault_file.ciphertext, "ciphertext").unwrap();
+        let plaintext = security::decrypt_aes_gcm(&key, &nonce, &ciphertext).unwrap();
+        let data: VaultData = serde_json::from_slice(&plaintext).unwrap();
+        let stored_session = data.cloud_session.unwrap();
+
+        assert_eq!(stored_session.access_token, "access-secret");
+        assert_eq!(stored_session.refresh_token, "refresh-secret");
+
+        let mut config = SyncConfig {
+            railway_url: "https://example.test".to_string(),
+            vault_id: "vault-1".to_string(),
+            ..SyncConfig::default()
+        };
+        attach_sync_metadata(
+            &mut config,
+            &Mutex::new(SyncConfig::default()),
+            &server_state,
+        )
+        .unwrap();
+        assert_eq!(config.token, "access-secret");
+        assert_eq!(config.refresh_token, "refresh-secret");
+        std::env::remove_var("VAULT_PATH");
+    }
+
+    #[test]
+    fn cloud_hash_stores_and_loads_correctly() {
+        let _guard = SYNC_ENV_LOCK.lock().unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("cloud_hash");
+        std::env::set_var("CLOUD_HASH_PATH", &path);
+
+        assert_eq!(load_cloud_hash(), None);
+        store_cloud_hash("deadbeef").unwrap();
+        assert_eq!(load_cloud_hash(), Some("deadbeef".to_string()));
+
+        delete_cloud_hash();
+        assert_eq!(load_cloud_hash(), None);
+
+        std::env::remove_var("CLOUD_HASH_PATH");
+    }
+
+    #[test]
+    fn sha256_hex_is_deterministic_and_sensitive() {
+        let a = sha256_hex(b"hello world");
+        let b = sha256_hex(b"hello world");
+        let c = sha256_hex(b"hello world!");
+        assert_eq!(a, b);
+        assert_ne!(a, c);
+        assert_eq!(a.len(), 64); // SHA-256 = 64 hex caràcters
+    }
+
+    #[test]
+    fn current_vault_hash_reflects_file_content() {
+        let _guard = SYNC_ENV_LOCK.lock().unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let vault_path = directory.path().join("vault.json");
+        std::env::set_var("VAULT_PATH", &vault_path);
+
+        std::fs::write(&vault_path, b"content-a").unwrap();
+        let h1 = current_vault_hash().unwrap();
+        assert!(!h1.is_empty());
+
+        std::fs::write(&vault_path, b"content-a").unwrap();
+        assert_eq!(current_vault_hash(), Some(h1.clone()));
+
+        std::fs::write(&vault_path, b"content-b").unwrap();
+        assert_ne!(current_vault_hash(), Some(h1));
+
+        std::fs::remove_file(&vault_path).unwrap();
+        assert_eq!(current_vault_hash(), None);
+
+        std::env::remove_var("VAULT_PATH");
+    }
+}
+
+#[cfg(test)]
+mod master_password_tests {
+    use super::validate_master_password;
+
+    #[test]
+    fn accepts_a_password_with_length_and_every_character_class() {
+        assert!(validate_master_password("Abcdefghij1!x").is_ok());
+    }
+
+    #[test]
+    fn rejects_short_or_incomplete_passwords() {
+        assert!(validate_master_password("Abcdefgh1!x").is_err());
+        assert!(validate_master_password("abcdefghij1!x").is_err());
+        assert!(validate_master_password("ABCDEFGHIJ1!X").is_err());
+        assert!(validate_master_password("Abcdefghijk!x").is_err());
+        assert!(validate_master_password("Abcdefghij12x").is_err());
+        assert!(validate_master_password("Abcdefghij1 ").is_err());
     }
 }

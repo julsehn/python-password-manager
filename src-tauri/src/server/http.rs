@@ -3,17 +3,30 @@ use std::net::SocketAddr;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
-/// Verifica que un header Origin prové d'un loopback.
+/// Verifica que un header Origin prové exactament d'un loopback.
+///
+/// Comparar prefixos acceptaria `http://localhost.evil.com`; aquí es parseja
+/// l'autoritat i es compara el host sencer.
 pub(super) fn is_loopback_origin(origin: &str) -> bool {
-    origin.starts_with("http://127.0.0.1") || origin.starts_with("http://localhost")
+    let Some(rest) = origin.strip_prefix("http://") else {
+        return false;
+    };
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    if authority.is_empty() {
+        return false;
+    }
+    let host = if let Some(stripped) = authority.strip_prefix('[') {
+        stripped.split(']').next().unwrap_or("")
+    } else {
+        authority.split(':').next().unwrap_or("")
+    };
+    matches!(host, "127.0.0.1" | "localhost" | "::1")
 }
 
 /// Verifica que el Content-Type és adequats per a peticions POST/PUT/PATCH amb cos.
 pub(super) fn has_json_content_type(content_type: &str) -> bool {
     content_type.to_lowercase().contains("application/json")
 }
-
-// ── Vault persistence helpers ────────
 
 fn load_or_generate_secret() -> String {
     let secret_path = config_dir().join("extension_secret.key");
@@ -91,8 +104,6 @@ pub fn save_vault_data(master_password: &str, vault_data: &VaultData) -> Result<
         last_error
     ))
 }
-
-// ── HTTP Server Implementation ───────
 
 pub async fn start_server(state: Arc<ServerState>, port: u16) -> Result<(), String> {
     let requested_addr = format!("127.0.0.1:{}", port);
@@ -330,7 +341,6 @@ pub async fn route_request(
     body: &str,
     state: &Arc<ServerState>,
 ) -> (u16, String) {
-    // ── 1. Minimal health check (unauthenticated, never leaks entry count) ──
     if (path == "/health" || path == "/api/v1/health") && method == "GET" {
         let res = serde_json::json!({
             "status": "healthy",
@@ -340,7 +350,6 @@ pub async fn route_request(
         return (200, res.to_string());
     }
 
-    // ── 2. Vault status info ───────
     if path == "/api/v1/vault-info" && method == "GET" {
         if !check_request_auth(headers, state) {
             return (
@@ -359,7 +368,6 @@ pub async fn route_request(
         return (200, res.to_string());
     }
 
-    // ── 3. Device pairing (Phase 3)
     if path == "/api/v1/pair" && method == "POST" {
         let parsed: serde_json::Value = match serde_json::from_str(body) {
             Ok(v) => v,
@@ -448,7 +456,7 @@ pub async fn route_request(
         state
             .authorized_clients
             .lock()
-            .unwrap()
+            .unwrap_or_else(|e| e.into_inner())
             .insert(client_id.clone());
 
         let res = serde_json::json!({
@@ -459,7 +467,6 @@ pub async fn route_request(
         return (200, res.to_string());
     }
 
-    // ── 4. Challenge generation (Phase 3) ───────
     if path == "/api/v1/challenge" && method == "GET" {
         let client_id = query
             .split('&')
@@ -496,7 +503,7 @@ pub async fn route_request(
         state
             .pending_challenges
             .lock()
-            .unwrap()
+            .unwrap_or_else(|e| e.into_inner())
             .insert(client_id, (nonce.clone(), expires_at));
 
         let res = serde_json::json!({
@@ -506,7 +513,6 @@ pub async fn route_request(
         return (200, res.to_string());
     }
 
-    // ── 5. Challenge response verification (Phase 3) ───────────────────────
     if path == "/api/v1/challenge-response" && method == "POST" {
         let parsed: serde_json::Value = match serde_json::from_str(body) {
             Ok(v) => v,
@@ -587,7 +593,7 @@ pub async fn route_request(
         state
             .authorized_clients
             .lock()
-            .unwrap()
+            .unwrap_or_else(|e| e.into_inner())
             .insert(client_id.to_string());
 
         client.last_used = Some(Utc::now().to_rfc3339());
@@ -602,10 +608,7 @@ pub async fn route_request(
         return (200, res.to_string());
     }
 
-    // Old endpoints /api/v1/handshake and /api/v1/auth removed.
-    // Use Bearer token auth via /api/v1/pair (extension pairing).
-
-    // F9 fix: Extension cannot unlock the vault; unlock must happen in desktop app.
+    // The extension cannot unlock the vault; unlock happens in the desktop app.
     if path == "/api/v1/unlock" && method == "POST" {
         return (
             403,
@@ -630,8 +633,14 @@ pub async fn route_request(
     }
 
     if path == "/api/v1/generate-password" && method == "POST" {
+        if !check_request_auth(headers, state) {
+            return (
+                401,
+                r#"{"success":false,"error":"Authentication required"}"#.to_string(),
+            );
+        }
         let parsed: serde_json::Value = serde_json::from_str(body).unwrap_or_default();
-        let length = parsed["length"].as_u64().unwrap_or(16) as u32;
+        let length = parsed["length"].as_u64().unwrap_or(16).clamp(8, 128) as u32;
         let uppercase = parsed["uppercase"].as_bool().unwrap_or(true);
         let lowercase = parsed["lowercase"].as_bool().unwrap_or(true);
         let numbers = parsed["numbers"].as_bool().unwrap_or(true);
@@ -645,7 +654,6 @@ pub async fn route_request(
         return (200, res.to_string());
     }
 
-    // ── 8. Authenticated credential access ──────
     let is_authenticated = check_request_auth(headers, state);
     if !is_authenticated {
         return (
@@ -712,7 +720,6 @@ pub async fn route_request(
             })
             .unwrap_or_default();
 
-        // Safe credential release policy (Target design 5):
         // Empty domain returns nothing!
         if domain_param.trim().is_empty() {
             let res = serde_json::json!({
@@ -748,7 +755,7 @@ pub async fn route_request(
     }
 
     if path == "/api/v1/credentials" && method == "POST" {
-        // Serialized writes: actually acquire semaphore (F13 fix)
+        // Serialized writes: actually acquire the semaphore.
         let _permit = match state.write_semaphore.acquire().await {
             Ok(p) => p,
             Err(e) => {
@@ -825,6 +832,7 @@ pub async fn route_request(
             folders: vault.folders.clone(),
             deleted_entries: vault.trash.clone(),
             history: vault.history.clone(),
+            cloud_session: vault.cloud_session.clone(),
         };
 
         if let Err(e) = save_vault_data(&vault.master_password, &vault_data) {
@@ -859,7 +867,6 @@ pub async fn route_request(
 }
 
 fn check_request_auth(headers: &HashMap<String, String>, state: &Arc<ServerState>) -> bool {
-    // Only Bearer token authentication
     if let Some(auth_val) = headers.get("authorization") {
         if let Some(token) = auth_val.strip_prefix("Bearer ") {
             return state.validate_token(token.trim());

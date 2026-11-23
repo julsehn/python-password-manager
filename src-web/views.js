@@ -4,9 +4,15 @@ import {
   entryCard,
   sidebarComponent,
 } from "./components.js";
-import { escapeHtml, pairingSecondsRemaining } from "./utils.js";
+import {
+  escapeHtml,
+  formatRelativeTime,
+  pairingSecondsRemaining,
+} from "./utils.js";
 import {
   passwordOptions,
+  passwordRequirementsMarkup,
+  passwordStrengthMarkup,
   passphraseOptions,
   usernameOptions,
 } from "./generator.js";
@@ -16,10 +22,7 @@ import { createDialogViews } from "./dialogs.js";
 export function createViews(state) {
   const {
     downloadPasswordModal,
-    welcomeModal,
-    authMethodSelectionModal,
-    imageAuthSetupModal,
-    imageAuthUnlockModal,
+    privacyPolicyModal,
     changeAuthMethodModal,
     firstEntryGuideModal,
     entryDetailsModal,
@@ -28,6 +31,7 @@ export function createViews(state) {
     resetConfirmModal,
     cloudLoginModal,
     folderModal,
+    appDialogModal,
   } = createDialogViews(state);
   function commandPalette() {
     const query = state.paletteQuery.trim().toLowerCase();
@@ -71,34 +75,72 @@ export function createViews(state) {
   }
 
   function lockScreen() {
+    const isNewUser = state.vaultExists === false;
+
     return `
     <main class="lock-shell">
-      <div class="lock-card">
+      <div class="lock-card ${isNewUser ? "lock-card-setup" : ""}">
         <div class="brand-mark large"><img class="brand-icon" src="/brand/SherLock-brand.png" alt="" /></div>
         <p class="eyebrow">SherLock LOCAL</p>
-        <h1>Un espai segur per als teus accessos</h1>
+        <h1>${isNewUser ? "Benvingut a SherLock" : "Un espai segur per als teus accessos"}</h1>
         <p class="lock-copy">
-          Si és el primer ús, crea ara una contrasenya mestra nova. La necessitaràs cada vegada que obris la SherLock.
+          ${
+            isNewUser
+              ? "Crea ara la teva contrasenya mestra. La necessitaràs cada vegada que obris la SherLock i no la podem recuperar."
+              : "Introdueix la teva contrasenya mestra per desbloquejar la SherLock."
+          }
         </p>
-        <form id="unlock-form">
+        <form id="unlock-form" novalidate>
           <label class="field-label" for="master-password">Contrasenya mestra</label>
           <div class="password-field">
             ${icon("LockKeyhole", 17)}
             <input
               id="master-password"
               type="password"
-              minlength="12"
-              autocomplete="current-password"
-              placeholder="12 caràcters o més"
+              autocomplete="${isNewUser ? "new-password" : "current-password"}"
+              placeholder="${isNewUser ? "Mínim 12 caràcters" : "La teva contrasenya mestra"}"
               required
             />
             <button type="button" class="reveal" id="reveal-password" title="Mostrar contrasenya">
               ${icon("Eye", 17)}
             </button>
           </div>
-          ${state.error ? `<p class="error">${escapeHtml(state.error)}</p>` : ""}
+          ${
+            isNewUser
+              ? `
+            <label class="field-label field-label-spaced" for="master-password-confirm">Repeteix la contrasenya mestra</label>
+            <div class="password-field">
+              ${icon("LockKeyhole", 17)}
+              <input
+                id="master-password-confirm"
+                type="password"
+                autocomplete="new-password"
+                placeholder="Torna-la a escriure"
+                required
+              />
+              <button type="button" class="reveal" id="reveal-password-confirm" title="Mostrar contrasenya">
+                ${icon("Eye", 17)}
+              </button>
+            </div>
+            <div class="password-setup-feedback" id="master-password-feedback">
+              ${passwordStrengthMarkup("")}
+              ${passwordRequirementsMarkup("")}
+              <p class="password-match" data-password-match hidden aria-live="polite"></p>
+            </div>
+          `
+              : ""
+          }
+          <p class="error" id="unlock-error" ${state.error ? "" : "hidden"}>${escapeHtml(state.error)}</p>
           <button class="primary full" type="submit" ${state.loading ? "disabled" : ""}>
-            ${state.loading ? "Desbloquejant..." : "Crear o desbloquejar la SherLock"}
+            ${
+              state.loading
+                ? isNewUser
+                  ? "Creant la SherLock..."
+                  : "Desbloquejant..."
+                : isNewUser
+                  ? "Crear la meva SherLock"
+                  : "Desbloqueja la SherLock"
+            }
           </button>
         </form>
         <button class="secondary full" id="open-cloud-login" data-context="download">
@@ -109,12 +151,9 @@ export function createViews(state) {
         </p>
       </div>
     </main>
-    ${state.showWelcome ? welcomeModal() : ""}
-    ${state.showAuthMethodSelection ? authMethodSelectionModal() : ""}
-    ${state.showGridSetup ? imageAuthSetupModal() : ""}
-    ${state.showGridUnlock ? imageAuthUnlockModal() : ""}
-    ${state.showChangeAuthModal ? changeAuthMethodModal() : ""}
     ${state.showCloudLogin ? cloudLoginModal() : ""}
+    ${state.showPrivacyPolicy ? privacyPolicyModal() : ""}
+    ${state.appDialog ? appDialogModal() : ""}
     ${state.showDownloadPassword ? downloadPasswordModal() : ""}
   `;
   }
@@ -201,6 +240,7 @@ export function createViews(state) {
     ${state.showFirstEntryGuide ? firstEntryGuideModal() : ""}
     ${state.showTrashModal ? trashModal() : ""}
     ${state.showFolderModal ? folderModal() : ""}
+    ${state.appDialog ? appDialogModal() : ""}
   `;
   }
 
@@ -295,6 +335,7 @@ export function createViews(state) {
       ${bottomNavComponent("generator")}
     </main>
     ${state.showFirstEntryGuide ? firstEntryGuideModal() : ""}
+    ${state.appDialog ? appDialogModal() : ""}
   `;
   }
 
@@ -333,7 +374,7 @@ export function createViews(state) {
             </select>
           </label>
           <button class="setting-action" id="change-auth-method">
-            ${icon("KeyRound", 18)} Canvia la contrasenya o l'autenticació
+            ${icon("KeyRound", 18)} Canvia la contrasenya mestra
           </button>
         </section>
 
@@ -416,29 +457,28 @@ export function createViews(state) {
               <div class="cloud-status-header">
                 <span class="cloud-badge">
                   <span class="cloud-badge-dot"></span>
-                  Sessió activa a Railway com a <strong>${escapeHtml(state.cloudConfig.authUser)}</strong>
+                  Connectat com a <strong>${escapeHtml(state.cloudConfig.authUser)}</strong>
                 </span>
                 <span class="cloud-status-provider">
                   ${state.cloudConfig.railwayUrl ? "Servidor propi" : "Núvol oficial"}
                 </span>
               </div>
-              <p class="helper helper-top">
-                Còpia de seguretat xifrada al núvol oficial de Railway. El servidor només guarda les teves credencials i la SherLock xifrada (AES-256-GCM).
-              </p>
-              <div class="cloud-actions-row">
-                <button type="button" class="primary" id="btn-cloud-sync-now" ${state.cloudLoading ? "disabled" : ""}>
-                  ${icon("RefreshCw", 16)} Sincronitzar ara
+              <p class="helper helper-top">La teva SherLock es guarda xifrada. El servidor no la pot llegir.</p>
+              <div class="cloud-sync-row">
+                <button type="button" class="primary" id="btn-cloud-sync-now" ${state.cloudSyncStatus?.phase === "syncing" ? 'disabled aria-busy="true"' : 'aria-busy="false"'}>
+                  <span class="cloud-sync-icon ${state.cloudSyncStatus?.phase === "syncing" ? "is-spinning" : ""}">${icon("RefreshCw", 16)}</span>
+                  ${state.cloudSyncStatus?.phase === "syncing" ? "Sincronitzant…" : "Sincronitzar"}
                 </button>
-                <button type="button" class="secondary" id="btn-cloud-download-now" ${state.cloudLoading ? "disabled" : ""}>
-                  ${icon("DownloadCloud", 16)} Descarregar del núvol
-                </button>
-                <button type="button" class="secondary danger" id="btn-cloud-logout">
-                  ${icon("LogOut", 16)} Tancar sessió
-                </button>
-                <button type="button" class="secondary danger" id="btn-cloud-delete-account">
-                  ${icon("Trash2", 16)} Eliminar compte i dades
-                </button>
+                <span class="cloud-last-sync">Última sincronització: ${state.cloudConfig.lastSyncAt ? formatRelativeTime(state.cloudConfig.lastSyncAt, Date.now()) : "Encara no s'ha sincronitzat en aquest dispositiu"}</span>
               </div>
+              <p class="cloud-sync-status ${state.cloudSyncStatus?.phase === "error" ? "is-error" : ""}" aria-live="polite">${escapeHtml(state.cloudSyncStatus?.text || "")}</p>
+              <details class="cloud-more" ${state.cloudMoreOpen ? "open" : ""}>
+                <summary>Més opcions</summary>
+                <div class="cloud-more-actions">
+                  <button type="button" class="secondary danger" id="btn-cloud-logout">${icon("LogOut", 16)} Tancar sessió</button>
+                  <button type="button" class="secondary danger" id="btn-cloud-delete-account">${icon("Trash2", 16)} Eliminar compte i dades del núvol</button>
+                </div>
+              </details>
             </div>
           `
               : `
@@ -503,9 +543,10 @@ export function createViews(state) {
 
     ${state.showTrashModal ? trashModal() : ""}
     ${state.showChangeAuthModal ? changeAuthMethodModal() : ""}
-    ${state.showGridSetup ? imageAuthSetupModal() : ""}
     ${state.showResetConfirm ? resetConfirmModal() : ""}
     ${state.showCloudLogin ? cloudLoginModal() : ""}
+    ${state.showPrivacyPolicy ? privacyPolicyModal() : ""}
+    ${state.appDialog ? appDialogModal() : ""}
   `;
   }
 

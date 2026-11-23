@@ -5,41 +5,13 @@ use aes_gcm::{
 use argon2::{Algorithm, Argon2, Params, Version};
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use rand::seq::SliceRandom;
-use rand::{rngs::OsRng, Rng, RngCore};
-use serde::{Deserialize, Serialize};
-use zeroize::Zeroize;
+use rand::{rngs::OsRng, RngCore};
+use zeroize::{Zeroize, Zeroizing};
 
 pub const ARGON2_MEMORY_COST_KIB: u32 = 64 * 1024;
 pub const ARGON2_TIME_COST: u32 = 3;
 pub const ARGON2_PARALLELISM: u32 = 1;
 pub const KEY_LENGTH: usize = 32;
-
-pub fn store_os_secret(service: &str, account: &str, secret: &str) -> Result<(), String> {
-    let entry = keyring::Entry::new(service, account)
-        .map_err(|error| format!("Secure credential store unavailable: {}", error))?;
-    entry
-        .set_password(secret)
-        .map_err(|error| format!("Failed to store secret securely: {}", error))
-}
-
-pub fn load_os_secret(service: &str, account: &str) -> Result<Option<String>, String> {
-    let entry = keyring::Entry::new(service, account)
-        .map_err(|error| format!("Secure credential store unavailable: {}", error))?;
-    match entry.get_password() {
-        Ok(secret) => Ok(Some(secret)),
-        Err(keyring::Error::NoEntry) => Ok(None),
-        Err(error) => Err(format!("Failed to read secret securely: {}", error)),
-    }
-}
-
-pub fn delete_os_secret(service: &str, account: &str) -> Result<(), String> {
-    let entry = keyring::Entry::new(service, account)
-        .map_err(|error| format!("Secure credential store unavailable: {}", error))?;
-    match entry.delete_credential() {
-        Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-        Err(error) => Err(format!("Failed to delete secret securely: {}", error)),
-    }
-}
 
 const ASSOCIATED_DATA: &[u8] = b"";
 
@@ -47,48 +19,6 @@ pub fn decode_base64(value: &str, field: &str) -> Result<Vec<u8>, String> {
     BASE64
         .decode(value)
         .map_err(|_| format!("Invalid {} format", field))
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct SecureMessage {
-    pub action: String,
-    pub payload: serde_json::Value,
-    pub timestamp: u64,
-    pub signature: Option<String>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct SecureResponse {
-    pub success: bool,
-    pub data: Option<serde_json::Value>,
-    pub error: Option<String>,
-}
-
-pub fn validate_secure_message(message: &SecureMessage) -> Result<(), String> {
-    let allowed_actions = [
-        "unlock_vault",
-        "save_vault",
-        "change_master_password",
-        "lock_vault",
-        "fetch_credentials",
-        "save_credentials",
-        "get_vault_info",
-    ];
-
-    if !allowed_actions.contains(&message.action.as_str()) {
-        return Err("Unauthorized action".into());
-    }
-
-    let current_timestamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .map_err(|_| "Failed to get current timestamp".to_string())?;
-
-    if current_timestamp.saturating_sub(message.timestamp) > 300 {
-        return Err("Message timestamp too old".into());
-    }
-
-    Ok(())
 }
 
 pub fn generate_secure_token() -> Result<String, String> {
@@ -109,15 +39,26 @@ pub fn generate_nonce() -> Result<Vec<u8>, String> {
     Ok(nonce.to_vec())
 }
 
-pub fn derive_key_from_password(password: &str, salt: &[u8]) -> Result<Vec<u8>, String> {
-    let mut key = [0u8; KEY_LENGTH];
-    let params = Params::new(
+pub fn derive_key_from_password(password: &str, salt: &[u8]) -> Result<Zeroizing<Vec<u8>>, String> {
+    derive_key_from_password_with_params(
+        password,
+        salt,
         ARGON2_MEMORY_COST_KIB,
         ARGON2_TIME_COST,
         ARGON2_PARALLELISM,
-        Some(key.len()),
     )
-    .map_err(|e| format!("Invalid Argon2id parameters: {}", e))?;
+}
+
+pub fn derive_key_from_password_with_params(
+    password: &str,
+    salt: &[u8],
+    memory_cost_kib: u32,
+    time_cost: u32,
+    parallelism: u32,
+) -> Result<Zeroizing<Vec<u8>>, String> {
+    let mut key = [0u8; KEY_LENGTH];
+    let params = Params::new(memory_cost_kib, time_cost, parallelism, Some(key.len()))
+        .map_err(|e| format!("Invalid Argon2id parameters: {}", e))?;
     let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
     let res = argon2
         .hash_password_into(password.as_bytes(), salt, &mut key)
@@ -128,19 +69,18 @@ pub fn derive_key_from_password(password: &str, salt: &[u8]) -> Result<Vec<u8>, 
         return Err(err);
     }
 
-    let key_vec = key.to_vec();
+    let key_vec = Zeroizing::new(key.to_vec());
     key.zeroize();
     Ok(key_vec)
-}
-
-pub fn derive_key_with_argon2(password: &str, salt: &[u8]) -> Result<Vec<u8>, String> {
-    derive_key_from_password(password, salt)
 }
 
 pub fn encrypt_aes_gcm(key: &[u8], nonce: &[u8], plaintext: &[u8]) -> Result<Vec<u8>, String> {
     let cipher = Aes256Gcm::new_from_slice(key)
         .map_err(|e| format!("Failed to initialize cipher: {}", e))?;
 
+    if nonce.len() != 12 {
+        return Err("Invalid nonce length".to_string());
+    }
     cipher
         .encrypt(
             Nonce::from_slice(nonce),
@@ -156,6 +96,9 @@ pub fn decrypt_aes_gcm(key: &[u8], nonce: &[u8], ciphertext: &[u8]) -> Result<Ve
     let cipher = Aes256Gcm::new_from_slice(key)
         .map_err(|e| format!("Failed to initialize cipher: {}", e))?;
 
+    if nonce.len() != 12 {
+        return Err("Invalid nonce length".to_string());
+    }
     cipher
         .decrypt(
             Nonce::from_slice(nonce),
@@ -174,6 +117,7 @@ pub fn generate_password(
     numbers: bool,
     symbols: bool,
 ) -> String {
+    let length = length.clamp(8, 128);
     let charset: Vec<char> = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()_+-=[]{}|;':,./<>?".chars().collect();
 
     let mut charset_vec: Vec<char> = Vec::new();
@@ -203,148 +147,6 @@ pub fn generate_password(
     password_chars.into_iter().collect()
 }
 
-pub fn generate_passphrase(
-    word_count: u32,
-    separator: String,
-    uppercase_words: bool,
-    include_number: bool,
-    remove_accents: bool,
-    language: String,
-) -> String {
-    let words: Vec<&str> = match language.as_str() {
-        "ca" | "catalan" | "catal" => vec![
-            "nubol", "ri", "llum", "bosc", "mar", "lluna", "vent", "foc", "cami", "estrella",
-        ],
-        "es" | "spanish" | "espanol" => vec![
-            "nube", "rio", "luz", "bosque", "mar", "luna", "viento", "fuego", "camino", "estrella",
-        ],
-        "en" | "english" | "angle" => vec![
-            "cloud", "river", "light", "forest", "moon", "wind", "fire", "path", "star", "meadow",
-        ],
-        "fr" | "french" | "frances" => vec![
-            "nuage", "riviere", "lumiere", "foret", "lune", "vent", "feu", "chemin", "etoile",
-            "prairie",
-        ],
-        _ => vec![
-            "cloud", "river", "light", "forest", "moon", "wind", "fire", "path", "star", "meadow",
-        ],
-    };
-
-    let filtered_words: Vec<&str> = if remove_accents {
-        words
-            .iter()
-            .filter(|word| word.is_ascii())
-            .copied()
-            .collect()
-    } else {
-        words.to_vec()
-    };
-
-    let mut passphrase = Vec::new();
-    let mut rng = OsRng;
-    for i in 0..word_count as usize {
-        if include_number && i == word_count as usize - 1 {
-            passphrase.push(format!("{}", rng.gen_range(0..99)));
-        } else {
-            let word = filtered_words.choose(&mut rng).unwrap();
-            if uppercase_words && passphrase.is_empty() {
-                let chars: Vec<char> = word.chars().collect();
-                let mut formatted_word = String::new();
-                if let Some(&first) = chars.first() {
-                    formatted_word.extend(first.to_uppercase());
-                }
-                if let Some(rest) = chars.get(1..) {
-                    formatted_word.extend(rest.iter());
-                }
-                passphrase.push(formatted_word);
-            } else {
-                passphrase.push((*word).to_string());
-            }
-        }
-    }
-
-    passphrase.join(&separator)
-}
-
-pub fn generate_username(
-    first_name: Option<String>,
-    last_name: Option<String>,
-    include_numbers: bool,
-) -> String {
-    let name = if let Some(fn_) = first_name {
-        fn_
-    } else if let Some(ln) = last_name {
-        ln
-    } else {
-        return generate_password(8, false, true, true, false);
-    };
-
-    let parts: Vec<&str> = name.split_whitespace().collect();
-    let first_word = parts.first().copied().unwrap_or(name.as_str());
-
-    let username = if include_numbers {
-        let mut rng = OsRng;
-        format!("{}.{}", first_word.to_lowercase(), rng.gen_range(100..999))
-    } else {
-        first_word.to_lowercase()
-    };
-
-    username
-}
-
-pub fn validate_password_strength(password: &str) -> PasswordStrength {
-    let mut score = 0;
-
-    if password.len() >= 12 {
-        score += 1;
-    }
-    if password.len() >= 16 {
-        score += 1;
-    }
-    if password.len() >= 20 {
-        score += 1;
-    }
-
-    if password.chars().any(|c| c.is_uppercase()) {
-        score += 1;
-    }
-    if password.chars().any(|c| c.is_lowercase()) {
-        score += 1;
-    }
-    if password.chars().any(|c| c.is_ascii_digit()) {
-        score += 1;
-    }
-    if password.chars().any(|c| !c.is_alphanumeric()) {
-        score += 1;
-    }
-
-    match score {
-        0..=2 => PasswordStrength::Weak,
-        3..=4 => PasswordStrength::Fair,
-        5..=6 => PasswordStrength::Good,
-        _ => PasswordStrength::Strong,
-    }
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum PasswordStrength {
-    Weak,
-    Fair,
-    Good,
-    Strong,
-}
-
-impl std::fmt::Display for PasswordStrength {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            PasswordStrength::Weak => write!(f, "Feble"),
-            PasswordStrength::Fair => write!(f, "Acceptable"),
-            PasswordStrength::Good => write!(f, "Bona"),
-            PasswordStrength::Strong => write!(f, "Molt forta"),
-        }
-    }
-}
-
 #[cfg(test)]
 mod kdf_tests {
     use super::derive_key_from_password;
@@ -355,7 +157,7 @@ mod kdf_tests {
         let key = derive_key_from_password("shared-test-password", &salt).unwrap();
 
         assert_eq!(
-            hex::encode(key),
+            hex::encode(&*key),
             "24f35b029273a54b22a71e1aba8fb6d92d7eb469d00ed3eae30d735f0b0a5017"
         );
     }
@@ -377,7 +179,6 @@ mod base64_tests {
 
     #[test]
     fn decode_base64_invalid_length() {
-        // Invalid base64: padding error
         assert!(decode_base64("zz!", "test").is_err());
     }
 

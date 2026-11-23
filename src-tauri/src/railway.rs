@@ -25,6 +25,19 @@ pub struct SyncResponse {
     pub version: Option<i64>,
 }
 
+/// Resposta de l'ordre única de sincronització (`sync_vault_auto` /
+/// `sync_resolve_conflict`). Els camps van en snake_case com `SyncResponse`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SyncAutoResponse {
+    pub outcome: String,
+    pub message: String,
+    pub timestamp: u64,
+    #[serde(default)]
+    pub error: Option<String>,
+    #[serde(default)]
+    pub version: Option<i64>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuthResponseData {
     pub user_id: i64,
@@ -48,13 +61,6 @@ struct UsernameAvailabilityResponse {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-struct VaultRegistration {
-    vault_id: String,
-    token: String,
-    blob: String,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
 struct VaultBlob {
     blob: String,
     expected_version: Option<i64>,
@@ -74,6 +80,57 @@ struct VaultResponse {
 pub enum UploadResult {
     Ok(SyncResponse, i64),
     Conflict,
+}
+
+/// Decisió de sincronització pura (sense HTTP), basada en estat local i remot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SyncAction {
+    /// Local i núbol estan al dia.
+    UpToDate,
+    /// Pujar la caixa local al núbol.
+    Upload,
+    /// Baixar la caixa del núbol sobre la local.
+    Download,
+    /// Conflicte: ambdues tenen canvis no reconciliats. No s'escriu res.
+    Conflict,
+}
+
+/// Taula de decisió per a la sincronització automàtica.
+///
+/// Regles:
+/// - núbol sense caixa (`remote_version == None`) → `Upload`
+///   (excepte si no hi ha versió local coneguda ni caixa remota → `Upload` de caixa nova)
+/// - local sense canvis i `known_version == remote_version` → `UpToDate`
+/// - local amb canvis i `known_version == remote_version` → `Upload`
+/// - local sense canvis i `remote_version > known_version` → `Download`
+/// - local amb canvis i `remote_version > known_version` → `Conflict`
+/// - `known_version == None` i núbol té caixa → `Conflict` (mai pujar a cegues)
+/// - `known_version > remote_version` (núbol reiniciat) → `Conflict`
+pub fn decide_sync_action(
+    local_changed: bool,
+    known_version: Option<i64>,
+    remote_version: Option<i64>,
+) -> SyncAction {
+    match (known_version, remote_version) {
+        (_, None) => SyncAction::Upload,
+        (None, Some(_)) => SyncAction::Conflict,
+        (Some(k), Some(r)) if k == r => {
+            if local_changed {
+                SyncAction::Upload
+            } else {
+                SyncAction::UpToDate
+            }
+        }
+        (Some(k), Some(r)) if r > k => {
+            if local_changed {
+                SyncAction::Conflict
+            } else {
+                SyncAction::Download
+            }
+        }
+        (Some(k), Some(_)) if k > remote_version.unwrap_or(0) => SyncAction::Conflict,
+        _ => SyncAction::Conflict,
+    }
 }
 
 fn http_client(timeout_seconds: u64) -> Result<Client, String> {
@@ -126,13 +183,24 @@ async fn get_access_token(
     Ok(auth.access_token)
 }
 
-fn resolve_url(url: &str) -> String {
+fn resolve_url(url: &str) -> Result<String, String> {
     let trimmed = url.trim().trim_end_matches('/');
-    if trimmed.is_empty() {
+    let candidate = if trimmed.is_empty() {
         DEFAULT_OFFICIAL_URL.to_string()
     } else {
         trimmed.to_string()
+    };
+    if candidate.starts_with("https://") {
+        return Ok(candidate);
     }
+    if let Some(rest) = candidate.strip_prefix("http://") {
+        let authority = rest.split('/').next().unwrap_or("");
+        let host = authority.split(':').next().unwrap_or("");
+        if matches!(host, "127.0.0.1" | "localhost" | "[::1]") {
+            return Ok(candidate);
+        }
+    }
+    Err("La URL del núvol ha de ser HTTPS (només es permet HTTP a loopback)".to_string())
 }
 
 pub async fn auth_user(
@@ -140,7 +208,7 @@ pub async fn auth_user(
     password: &str,
     custom_url: Option<&str>,
 ) -> Result<AuthResponseData, String> {
-    let base_url = resolve_url(custom_url.unwrap_or(DEFAULT_OFFICIAL_URL));
+    let base_url = resolve_url(custom_url.unwrap_or(DEFAULT_OFFICIAL_URL))?;
     let endpoint = format!("{}/v1/auth/login", base_url);
 
     let client = http_client(30)?;
@@ -174,7 +242,7 @@ pub async fn register_user(
     password: &str,
     custom_url: Option<&str>,
 ) -> Result<AuthResponseData, String> {
-    let base_url = resolve_url(custom_url.unwrap_or(DEFAULT_OFFICIAL_URL));
+    let base_url = resolve_url(custom_url.unwrap_or(DEFAULT_OFFICIAL_URL))?;
     let endpoint = format!("{}/v1/auth/register", base_url);
 
     let client = http_client(30)?;
@@ -203,20 +271,27 @@ pub async fn register_user(
     Ok(auth_data)
 }
 
+fn username_availability_url(base_url: &str, username: &str) -> Result<reqwest::Url, String> {
+    let mut endpoint = reqwest::Url::parse(base_url)
+        .map_err(|error| format!("URL de Railway no vàlida: {}", error))?;
+    let mut path = endpoint
+        .path_segments_mut()
+        .map_err(|_| "URL de Railway no vàlida".to_string())?;
+    path.pop_if_empty();
+    path.push("v1");
+    path.push("auth");
+    path.push("check-username");
+    path.push(username);
+    drop(path);
+    Ok(endpoint)
+}
+
 pub async fn check_username_availability(
     username: &str,
     custom_url: Option<&str>,
 ) -> Result<bool, String> {
-    let base_url = resolve_url(custom_url.unwrap_or(DEFAULT_OFFICIAL_URL));
-    let mut endpoint = reqwest::Url::parse(&format!(
-        "{}/v1/auth/check-username/",
-        base_url
-    ))
-    .map_err(|error| format!("URL de Railway no vàlida: {}", error))?;
-    endpoint
-        .path_segments_mut()
-        .map_err(|_| "URL de Railway no vàlida".to_string())?
-        .push(username);
+    let base_url = resolve_url(custom_url.unwrap_or(DEFAULT_OFFICIAL_URL))?;
+    let endpoint = username_availability_url(&base_url, username)?;
     let client = http_client(15)?;
     let response = client
         .get(endpoint)
@@ -241,7 +316,7 @@ pub async fn revoke_refresh_token(config: &SyncConfig) -> Result<(), String> {
     if config.refresh_token.is_empty() {
         return Ok(());
     }
-    let base_url = resolve_url(&config.railway_url);
+    let base_url = resolve_url(&config.railway_url)?;
     let client = http_client(30)?;
     let response = client
         .post(format!("{}/v1/auth/logout", base_url))
@@ -286,10 +361,7 @@ pub(crate) fn parse_upload_status(
     Ok(UploadResult::Ok(
         SyncResponse {
             success: true,
-            message: format!(
-                "Caixa sincronitzada correctament amb Railway (versió {})",
-                vault_response.version
-            ),
+            message: "Caixa sincronitzada correctament amb Railway".to_string(),
             timestamp: chrono::Utc::now().timestamp() as u64,
             error: None,
             version: Some(vault_response.version),
@@ -316,7 +388,7 @@ pub(crate) fn parse_download_response(
 }
 
 pub async fn upload_vault(config: &SyncConfig) -> Result<UploadResult, String> {
-    let base_url = resolve_url(&config.railway_url);
+    let base_url = resolve_url(&config.railway_url)?;
 
     let client = http_client(30)?;
     let access_token = get_access_token(&client, &base_url, config).await?;
@@ -355,7 +427,7 @@ pub async fn download_vault(
     _master_password: String,
     config: &SyncConfig,
 ) -> Result<(String, i64), String> {
-    let base_url = resolve_url(&config.railway_url);
+    let base_url = resolve_url(&config.railway_url)?;
 
     let client = http_client(30)?;
     let access_token = get_access_token(&client, &base_url, config).await?;
@@ -377,76 +449,65 @@ pub async fn download_vault(
     parse_download_response(status, &body)
 }
 
-pub async fn register_vault(
-    _master_password: String,
-    config: &SyncConfig,
-) -> Result<SyncResponse, String> {
-    let base_url = resolve_url(&config.railway_url);
-
-    if config.vault_id.is_empty() {
-        return Err("L'identificador de SherLock no pot estar buit".to_string());
-    }
+/// Obté la versió remota de la caixa sense baixar-la.
+/// Utilitza GET /v1/auth/me amb un access token fresc obtingut via refresh token.
+pub async fn remote_vault_version(config: &SyncConfig) -> Result<Option<i64>, String> {
+    let base_url = resolve_url(&config.railway_url)?;
 
     let client = http_client(30)?;
+    let access_token = get_access_token(&client, &base_url, config).await?;
 
-    let payload = VaultRegistration {
-        vault_id: config.vault_id.clone(),
-        token: config.token.clone(),
-        blob: String::new(),
-    };
-
-    let mut request = client
-        .post(format!("{}/v1/vaults", base_url))
-        .json(&payload)
-        .header("Content-Type", "application/json");
-
-    if !config.token.is_empty() {
-        request = request.header("Authorization", format!("Bearer {}", config.token));
-    }
-
-    let response = request
+    let response = client
+        .get(format!("{}/v1/auth/me", base_url))
+        .header("Authorization", format!("Bearer {}", access_token))
         .send()
         .await
-        .map_err(|e| format!("Error en connectar amb Railway: {}", e))?;
+        .map_err(|e| format!("Error en connectar amb Railway: {e}"))?;
 
-    if !response.status().is_success() {
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
+    let status = response.status();
+    if status == reqwest::StatusCode::NOT_FOUND {
+        // L'usuari no té caixa al núbol (compte nou sense primera pujada).
+        return Ok(None);
+    }
+    if !status.is_success() {
+        let (_, body) = error_details(response).await;
         return Err(format!(
-            "Error en registrar SherLock ({}): {}",
-            status, body
+            "Error al consultar la versió remota ({}): {status}",
+            body
         ));
     }
 
-    let vault_response: VaultResponse = response
-        .json()
-        .await
-        .map_err(|e| format!("Error en interpretar la resposta: {}", e))?;
+    let body = response.text().await.unwrap_or_default();
+    let value: serde_json::Value = serde_json::from_str(&body)
+        .map_err(|e| format!("Error al interpretar la versió remota: {e}"))?;
 
-    Ok(SyncResponse {
-        success: true,
-        message: format!(
-            "SherLock registrat correctament a Railway (versió {})",
-            vault_response.version
-        ),
-        timestamp: chrono::Utc::now().timestamp() as u64,
-        error: None,
-        version: Some(vault_response.version),
-    })
+    let has_vault = value
+        .get("has_vault")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let version = value.get("vault_version").and_then(|v| v.as_i64());
+
+    match (has_vault, version) {
+        (true, Some(v)) if v > 0 => Ok(Some(v)),
+        (true, Some(0)) | (false, _) => Ok(None),
+        (true, None) => Ok(None),
+        _ => Ok(None),
+    }
 }
 
 pub async fn delete_vault(_master_password: String, config: &SyncConfig) -> Result<bool, String> {
-    let base_url = resolve_url(&config.railway_url);
+    let base_url = resolve_url(&config.railway_url)?;
 
     if config.vault_id.is_empty() {
         return Err("L'identificador de SherLock no pot estar buit".to_string());
     }
 
     let client = http_client(30)?;
+    let access_token = get_access_token(&client, &base_url, config).await?;
 
     let response = client
         .delete(format!("{}/v1/vaults/{}", base_url, config.vault_id))
-        .header("Authorization", format!("Bearer {}", config.token))
+        .header("Authorization", format!("Bearer {}", access_token))
         .send()
         .await
         .map_err(|e| format!("Error en connectar amb Railway: {}", e))?;
@@ -462,18 +523,15 @@ pub async fn delete_vault(_master_password: String, config: &SyncConfig) -> Resu
     }
 }
 
-
 /// Elimina el compte d'usuari autenticat al servidor Railway (GDPR right to erasure).
-/// Es requereix l'access token JWT (config.token).
+/// Obté un access token fresc amb el refresh token.
 pub async fn delete_user_account(config: &SyncConfig) -> Result<(), String> {
-    if config.token.is_empty() {
-        return Err("No hi ha token d'autenticació al núvol".to_string());
-    }
-    let base_url = resolve_url(&config.railway_url);
+    let base_url = resolve_url(&config.railway_url)?;
     let client = http_client(30)?;
+    let access_token = get_access_token(&client, &base_url, config).await?;
     let response = client
         .delete(format!("{}/v1/auth/me", base_url))
-        .header("Authorization", format!("Bearer {}", config.token))
+        .header("Authorization", format!("Bearer {}", access_token))
         .send()
         .await
         .map_err(|e| format!("Error en connectar amb Railway: {e}"))?;
@@ -485,15 +543,14 @@ pub async fn delete_user_account(config: &SyncConfig) -> Result<(), String> {
             let (_, body) = error_details(response).await;
             Err(format!(
                 "Error en eliminar el compte al núvol ({}): {}",
-                status,
-                body
+                status, body
             ))
         }
     }
 }
 
 pub async fn check_health(railway_url: Option<&str>) -> Result<bool, String> {
-    let base_url = resolve_url(railway_url.unwrap_or(DEFAULT_OFFICIAL_URL));
+    let base_url = resolve_url(railway_url.unwrap_or(DEFAULT_OFFICIAL_URL))?;
 
     let client = http_client(10)?;
 
@@ -508,12 +565,11 @@ pub async fn check_health(railway_url: Option<&str>) -> Result<bool, String> {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::await_holding_lock)]
     use super::*;
-    use std::sync::Mutex as StdMutex;
+    use crate::TEST_ENV_LOCK as RAILWAY_TEST_LOCK;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
-
-    static RAILWAY_TEST_LOCK: StdMutex<()> = StdMutex::new(());
 
     #[test]
     fn test_vault_blob_serialization() {
@@ -534,13 +590,39 @@ mod tests {
 
     #[test]
     fn test_sync_config_version_deserialization() {
-        let json_with_version = r#"{"railway_url":"http://test","vault_id":"v1","token":"t1","cloud_version":12}"#;
+        let json_with_version =
+            r#"{"railway_url":"http://test","vault_id":"v1","token":"t1","cloud_version":12}"#;
         let config: SyncConfig = serde_json::from_str(json_with_version).unwrap();
         assert_eq!(config.cloud_version, Some(12));
 
         let json_no_version = r#"{"railway_url":"http://test","vault_id":"v1","token":"t1"}"#;
         let config_default: SyncConfig = serde_json::from_str(json_no_version).unwrap();
         assert_eq!(config_default.cloud_version, None);
+    }
+
+    #[test]
+    fn username_availability_url_matches_cloud_api_route() {
+        let expected =
+            "https://password-manager-cloud-production.up.railway.app/v1/auth/check-username/TheUser";
+
+        let with_trailing_slash = username_availability_url(
+            "https://password-manager-cloud-production.up.railway.app/",
+            "TheUser",
+        )
+        .unwrap();
+        assert_eq!(with_trailing_slash.as_str(), expected);
+
+        // The previous implementation pushed the username onto a base URL that
+        // ended in `/`, which produced `/check-username//TheUser`. FastAPI
+        // redirects that path, so the client followed it instead of failing
+        // loudly. Keep the exact single-slash route.
+        let without_trailing_slash = username_availability_url(
+            "https://password-manager-cloud-production.up.railway.app",
+            "TheUser",
+        )
+        .unwrap();
+        assert_eq!(without_trailing_slash, with_trailing_slash);
+        assert!(!with_trailing_slash.as_str().contains("//TheUser"));
     }
 
     async fn read_full_http_request(
@@ -603,8 +685,11 @@ mod tests {
             while let Ok((mut stream, _)) = listener.accept().await {
                 let tx = tx.clone();
                 tokio::spawn(async move {
-                    while let Some((method, path, body)) = read_full_http_request(&mut stream).await {
-                        let _ = tx.send((format!("{} {}", method, path), body.clone())).await;
+                    while let Some((method, path, body)) = read_full_http_request(&mut stream).await
+                    {
+                        let _ = tx
+                            .send((format!("{} {}", method, path), body.clone()))
+                            .await;
 
                         let resp = if path.ends_with("/v1/auth/refresh") {
                             let resp_body = serde_json::json!({
@@ -651,6 +736,30 @@ mod tests {
                                 resp_body.len(),
                                 resp_body
                             )
+                        } else if method == "DELETE" && path.contains("/v1/vaults/") {
+                            if path.contains("nonexistent-vault") {
+                                "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: keep-alive\r\n\r\n".to_string()
+                            } else {
+                                "HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nConnection: keep-alive\r\n\r\n".to_string()
+                            }
+                        } else if method == "GET" && path == "/v1/auth/me" {
+                            let resp_body = serde_json::json!({
+                                "user_id": 1,
+                                "username": "tester",
+                                "email": None::<String>,
+                                "vault_id": "test-vault",
+                                "has_vault": true,
+                                "vault_version": 5,
+                                "updated_at": "2026-11-20T08:00:00Z"
+                            })
+                            .to_string();
+                            format!(
+                                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: keep-alive\r\n\r\n{}",
+                                resp_body.len(),
+                                resp_body
+                            )
+                        } else if method == "DELETE" && path.ends_with("/v1/auth/me") {
+                            "HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nConnection: keep-alive\r\n\r\n".to_string()
                         } else {
                             "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: keep-alive\r\n\r\n".to_string()
                         };
@@ -691,7 +800,6 @@ mod tests {
         let result = upload_vault(&config).await.unwrap();
         assert!(matches!(result, UploadResult::Conflict));
 
-        // Verify that the PUT payload sent to mock server contained expected_version: 999
         let mut put_seen = false;
         while let Ok((req_line, body)) = rx.try_recv() {
             if req_line.starts_with("PUT") {
@@ -768,5 +876,111 @@ mod tests {
         assert_eq!(version, 8);
 
         server_handle.abort();
+    }
+
+    #[tokio::test]
+    async fn test_delete_user_account_refreshes_token_and_deletes() {
+        let _guard = RAILWAY_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+        let (mock_url, server_handle, mut rx) = spawn_mock_railway_server().await;
+
+        let config = SyncConfig {
+            railway_url: mock_url,
+            vault_id: "test-vault".to_string(),
+            token: "expired-token".to_string(),
+            refresh_token: "valid-refresh-token".to_string(),
+            cloud_version: None,
+        };
+
+        let result = delete_user_account(&config).await;
+        assert!(result.is_ok());
+
+        let mut refresh_seen = false;
+        let mut delete_seen = false;
+        while let Ok((req_line, _body)) = rx.try_recv() {
+            if req_line.starts_with("POST") && req_line.contains("/v1/auth/refresh") {
+                refresh_seen = true;
+            }
+            if req_line.starts_with("DELETE") && req_line.contains("/v1/auth/me") {
+                delete_seen = true;
+            }
+        }
+        assert!(refresh_seen, "Expected POST /v1/auth/refresh");
+        assert!(delete_seen, "Expected DELETE /v1/auth/me");
+
+        server_handle.abort();
+    }
+
+    #[tokio::test]
+    async fn test_delete_vault_404_returns_false_not_error() {
+        let _guard = RAILWAY_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+        let (mock_url, server_handle, mut rx) = spawn_mock_railway_server().await;
+
+        let config = SyncConfig {
+            railway_url: mock_url,
+            vault_id: "nonexistent-vault".to_string(),
+            token: "expired-token".to_string(),
+            refresh_token: "valid-refresh-token".to_string(),
+            cloud_version: None,
+        };
+
+        let result = delete_vault("dummy-pwd".to_string(), &config).await;
+        assert!(result.is_ok());
+        assert!(!result.unwrap()); // 404 means vault not found, not an error
+
+        let mut refresh_seen = false;
+        while let Ok((req_line, _body)) = rx.try_recv() {
+            if req_line.starts_with("POST") && req_line.contains("/v1/auth/refresh") {
+                refresh_seen = true;
+            }
+        }
+        assert!(refresh_seen, "Expected POST /v1/auth/refresh");
+
+        server_handle.abort();
+    }
+
+    #[tokio::test]
+    async fn test_remote_vault_version_returns_version() {
+        let _guard = RAILWAY_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+        let (mock_url, server_handle, _rx) = spawn_mock_railway_server().await;
+
+        let config = SyncConfig {
+            railway_url: mock_url,
+            vault_id: "test-vault".to_string(),
+            token: "valid-token".to_string(),
+            refresh_token: "valid-refresh-token".to_string(),
+            cloud_version: None,
+        };
+
+        let version = remote_vault_version(&config).await.unwrap();
+        assert_eq!(version, Some(5));
+
+        server_handle.abort();
+    }
+
+    #[test]
+    fn test_decide_sync_action_table() {
+        use super::SyncAction::*;
+        let cases: &[(bool, Option<i64>, Option<i64>, SyncAction)] = &[
+            (false, None, None, Upload),
+            (true, None, None, Upload),
+            (false, Some(5), Some(5), UpToDate),
+            (true, Some(5), Some(5), Upload),
+            (false, Some(5), Some(6), Download),
+            (true, Some(5), Some(6), Conflict),
+            (false, None, Some(6), Conflict),
+            (true, None, Some(6), Conflict),
+            (false, Some(6), Some(5), Conflict),
+            (true, Some(6), Some(5), Conflict),
+        ];
+        for (local_changed, known_version, remote_version, expected) in cases {
+            let got = decide_sync_action(*local_changed, *known_version, *remote_version);
+            assert_eq!(
+                got, *expected,
+                "local_changed={local_changed:?}, known_version={known_version:?}, remote_version={remote_version:?}"
+            );
+        }
     }
 }

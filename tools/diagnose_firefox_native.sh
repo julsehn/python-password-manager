@@ -30,7 +30,6 @@ echo "════════════════════════�
 echo "  SherLock – Firefox Native Messaging Diagnostics"
 echo "═══════════════════════════════════════════════════════════"
 
-# ── 1. Host manifest exists ───────────
 echo ""
 echo "1. Host manifest"
 if [ -f "$FF_MANIFEST" ]; then
@@ -40,7 +39,6 @@ else
   echo "     Run: ./tools/install_native_host.sh"
 fi
 
-# ── 2. Host manifest is valid JSON ───
 echo ""
 echo "2. Manifest JSON validity"
 if [ -f "$FF_MANIFEST" ]; then
@@ -53,7 +51,6 @@ else
   info "Skipped (manifest not found)"
 fi
 
-# ── 3. Host path is executable ────────
 echo ""
 echo "3. Host path executable"
 if [ -f "$FF_MANIFEST" ]; then
@@ -70,7 +67,6 @@ else
   info "Skipped (manifest not found)"
 fi
 
-# ── 4. allowed_extensions matches gecko id ─────────
 echo ""
 echo "4. allowed_extensions vs. gecko ID"
 if [ -f "$EXT_MANIFEST" ]; then
@@ -99,7 +95,6 @@ else
   fail "Extension manifest not found: $EXT_MANIFEST"
 fi
 
-# ── 5. python3 reachable from the shell wrapper ────
 echo ""
 echo "5. python3 availability"
 FOUND_PYTHON=""
@@ -117,7 +112,6 @@ else
   fail "No python3 found in the paths checked by sherlock_native.sh"
 fi
 
-# ── 6. native Python script present in install dir 
 echo ""
 echo "6. sherlock_native.py in install directory"
 if [ -n "${HOST_PATH:-}" ]; then
@@ -133,7 +127,6 @@ else
   info "Skipped (host path unknown)"
 fi
 
-# ── 7. Quick probe via scripted client 
 echo ""
 echo "7. Quick probe (ping via scripted client)"
 if [ -n "$FOUND_PYTHON" ] && [ -f "$SCRIPT_DIR/tools/native_host_probe.py" ]; then
@@ -150,7 +143,6 @@ else
   info "Skipped (python3 or probe script not available)"
 fi
 
-# ── Summary 
 echo ""
 echo "───────────────────"
 echo "  Results: $PASS passed, $FAIL failed"

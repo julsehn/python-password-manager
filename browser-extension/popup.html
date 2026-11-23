@@ -153,7 +153,6 @@
              user-select: none;
            }
 
-           /* Header */
            .app-header {
              display: flex;
              align-items: center;
@@ -284,7 +283,6 @@
              height: 16px;
            }
 
-           /* Tab Bar */
            .nav-bar {
              display: flex;
              background: var(--bg-card);
@@ -324,7 +322,6 @@
              border-bottom-color: var(--accent-primary);
            }
 
-           /* Tab Contents */
            .tab-content {
              display: none;
              flex: 1;
@@ -338,7 +335,6 @@
              gap: 12px;
            }
 
-           /* Domain Banner */
            .domain-badge {
              display: flex;
              align-items: center;
@@ -363,7 +359,6 @@
              flex-shrink: 0;
            }
 
-           /* Search Input */
            .search-wrap {
              position: relative;
            }
@@ -398,7 +393,6 @@
              pointer-events: none;
            }
 
-           /* Credential List */
            .cred-list {
              display: flex;
              flex-direction: column;
@@ -470,7 +464,6 @@
              gap: 6px;
            }
 
-           /* Buttons */
            .btn {
              display: inline-flex;
              align-items: center;
@@ -513,7 +506,6 @@
              height: 14px;
            }
 
-           /* Credential Section Styles */
             .credential-section {
               margin-bottom: 16px;
             }
@@ -536,7 +528,6 @@
               display: block;
             }
 
-            /* Empty / Disconnected / Locked State */
            .state-box {
              text-align: center;
              padding: 24px 16px;
@@ -591,7 +582,6 @@
              max-width: 240px;
            }
 
-           /* Form Inputs */
            .form-group {
              display: flex;
              flex-direction: column;
@@ -633,7 +623,6 @@
              flex: 1;
            }
 
-           /* Generator Styles */
            .gen-display {
              background: var(--bg-card);
              border: 1px solid var(--border-card);
@@ -715,7 +704,6 @@
              accent-color: var(--accent-primary);
            }
 
-           /* Toast */
            .toast {
              position: fixed;
              bottom: 12px;
@@ -744,7 +732,6 @@
     </style>
   </head>
   <body>
-    <!-- Header -->
     <header class="app-header">
       <div class="brand-area">
         <div class="brand-mark">
@@ -794,7 +781,6 @@
       </div>
     </header>
 
-    <!-- Navigation Tabs -->
     <nav class="nav-bar">
       <button
         class="tab-btn active"
@@ -873,9 +859,7 @@
       </button>
     </nav>
 
-    <!-- TAB 1: VAULT / AUTOFILL -->
     <main id="tab-vault" class="tab-content active">
-      <!-- Active Domain -->
       <div id="domainBanner" class="domain-badge" style="display: none">
         <svg
           viewBox="0 0 24 24"
@@ -894,7 +878,6 @@
         <span>Lloc actiu: <strong id="domainName">-</strong></span>
       </div>
 
-      <!-- Search Input -->
       <div id="searchSection" class="search-wrap" style="display: none">
         <svg
           viewBox="0 0 24 24"
@@ -918,7 +901,6 @@
       <div id="vaultContent"></div>
     </main>
 
-    <!-- TAB 2: GENERATOR -->
     <section id="tab-generator" class="tab-content">
       <div class="gen-display">
         <div id="genOutput" class="gen-password">
@@ -1084,7 +1066,6 @@
       </button>
     </section>
 
-    <!-- TAB 3: SAVE CREDENTIAL -->
     <section id="tab-save" class="tab-content">
       <div
         style="
@@ -1205,7 +1186,6 @@
       </button>
     </section>
 
-    <!-- TAB 4: SETTINGS -->
     <section id="tab-settings" class="tab-content">
       <div class="form-group">
         <label class="form-label" for="serverUrlInput"
@@ -1299,7 +1279,6 @@
       </div>
     </section>
 
-    <!-- Floating Toast -->
     <div id="toast" class="toast">
       <span id="toastMsg">Acció completada</span>
     </div>

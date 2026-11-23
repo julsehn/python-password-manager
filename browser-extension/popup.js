@@ -32,7 +32,6 @@ class PopupController {
     this.initGenerator();
   }
 
-  // --- THEME ---
   async initTheme() {
     const data = await chrome.storage.local.get("sherlock_theme");
     const theme = (data && data.sherlock_theme) || "auto";
@@ -51,7 +50,6 @@ class PopupController {
     }
   }
 
-  // --- NAVIGATION ---
   setupTabNavigation() {
     const tabs = document.querySelectorAll(".tab-btn");
     tabs.forEach((btn) => {
@@ -76,7 +74,6 @@ class PopupController {
     }
   }
 
-  // --- ACTIVE TAB DETECTION ---
   async detectActiveTab() {
     return new Promise((resolve) => {
       chrome.runtime.sendMessage({ action: "getActiveTab" }, (res) => {
@@ -99,9 +96,7 @@ class PopupController {
     });
   }
 
-  // --- CONNECTION & VAULT STATUS ---
   async checkStatus() {
-    // Clear any poll timer started by renderLockedState.
     if (this._unlockPollTimer) {
       clearInterval(this._unlockPollTimer);
       this._unlockPollTimer = null;
@@ -149,7 +144,6 @@ class PopupController {
     });
   }
 
-  // --- CREDENTIALS MANAGEMENT ---
   async refreshCredentials() {
     if (!this.state.connected || !this.state.unlocked) return;
 
@@ -169,7 +163,6 @@ class PopupController {
     });
   }
 
-  // --- RENDERING ---
   renderDisconnectedState() {
     const searchSection = document.getElementById("searchSection");
     if (searchSection) searchSection.style.display = "none";
@@ -208,7 +201,7 @@ class PopupController {
   }
 
   renderLockedState() {
-    // F9 (Phase 2): The master password must NOT travel through the extension.
+    // The master password must NOT travel through the extension.
     // The popup instructs the user to unlock from the desktop app; it polls
     // getVaultInfo to detect when the vault has been unlocked.
     const searchSection = document.getElementById("searchSection");
@@ -469,6 +462,7 @@ class PopupController {
     chrome.tabs.sendMessage(
       this.state.activeTabId,
       { action: "autofillLogin", credential },
+      { frameId: 0 },
       (res) => {
         if (chrome.runtime.lastError || !res || !res.success) {
           this.showToast(res?.error || "No s'ha pogut omplir el formulari");
@@ -479,7 +473,6 @@ class PopupController {
     );
   }
 
-  // --- PASSWORD GENERATOR ---
   initGenerator() {
     const slider = document.getElementById("lengthSlider");
     const lengthVal = document.getElementById("lengthVal");
@@ -543,6 +536,7 @@ class PopupController {
           action: "fillGeneratedPassword",
           password: this.state.generatedPassword,
         },
+        { frameId: 0 },
         (res) => {
           if (chrome.runtime.lastError || !res || !res.success) {
             this.showToast(
@@ -688,7 +682,6 @@ class PopupController {
     this.showToast("Contrasenya copiada!");
   }
 
-  // --- EVENT LISTENERS ---
   setupEventListeners() {
     document.getElementById("pairBrowserBtn")?.addEventListener("click", () => {
       const input = document.getElementById("pairingCodeInput");
@@ -705,13 +698,11 @@ class PopupController {
       });
     });
 
-    // Search input
     document.getElementById("searchInput")?.addEventListener("input", (e) => {
       this.state.searchQuery = e.target.value;
       this.renderCredentialsList();
     });
 
-    // Lock button
     document.getElementById("lockBtn")?.addEventListener("click", () => {
       chrome.runtime.sendMessage({ action: "lockVault" }, () => {
         this.showToast("SherLock bloquejat");
@@ -719,13 +710,11 @@ class PopupController {
       });
     });
 
-    // Refresh button
     document.getElementById("refreshBtn")?.addEventListener("click", () => {
       this.showToast("Actualitzant...");
       this.checkStatus();
     });
 
-    // Save form actions
     document
       .getElementById("grabPageDataBtn")
       ?.addEventListener("click", () => {
@@ -733,6 +722,7 @@ class PopupController {
         chrome.tabs.sendMessage(
           this.state.activeTabId,
           { action: "getFormData" },
+          { frameId: 0 },
           (res) => {
             if (res && res.success) {
               if (res.site)
@@ -814,7 +804,6 @@ class PopupController {
       );
     });
 
-    // Settings actions
     const serverUrlInput = document.getElementById("serverUrlInput");
     chrome.storage.local.get("sherlock_server_url", (data) => {
       if (data.sherlock_server_url && serverUrlInput) {
@@ -846,7 +835,6 @@ class PopupController {
     });
   }
 
-  // --- TOAST NOTIFICATIONS ---
   showToast(msg) {
     const toast = document.getElementById("toast");
     const toastMsg = document.getElementById("toastMsg");

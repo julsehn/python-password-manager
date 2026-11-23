@@ -2,11 +2,15 @@ import { strict as assert } from "node:assert";
 import { describe, it } from "node:test";
 import { EFF_WORDLIST } from "./wordlist-eff.js";
 import {
+  MASTER_PASSWORD_MIN_LENGTH,
   passphraseEntropyBits,
   generateValue,
+  passwordMeetsRequirements,
   passwordOptions,
+  passwordRequirements,
   passwordStrength,
   passphraseOptions,
+  sampleWordsWithoutReplacement,
 } from "./generator.js";
 
 describe("EFF wordlist", () => {
@@ -29,9 +33,9 @@ describe("passphraseEntropyBits", () => {
   it("6 paraules de 7776 ≈ 77.5 bits", () => {
     assert.ok(Math.abs(passphraseEntropyBits(6, 7776) - 77.5) < 0.1);
   });
-  it("4 paraules de 10 amb reemplaçament ≈ 13.3 bits", () => {
+  it("4 paraules de 10 sense reemplaçament ≈ 12.3 bits", () => {
     assert.ok(
-      Math.abs(passphraseEntropyBits(4, 10, { withNumber: false }) - 13.3) <
+      Math.abs(passphraseEntropyBits(4, 10, { withNumber: false }) - 12.3) <
         0.1,
     );
   });
@@ -46,11 +50,59 @@ describe("passphraseEntropyBits", () => {
   });
 });
 
+describe("sampleWordsWithoutReplacement", () => {
+  it("no repeteix paraules encara que l'atzar sempre triï la primera", () => {
+    const picked = sampleWordsWithoutReplacement(
+      ["alba", "bosc", "cel", "duna"],
+      4,
+      () => 0,
+    );
+    assert.deepEqual(picked, ["alba", "bosc", "cel", "duna"]);
+  });
+
+  it("no demana més paraules de les disponibles", () => {
+    const picked = sampleWordsWithoutReplacement(["a", "b"], 5, () => 0);
+    assert.deepEqual(picked, ["a", "b"]);
+  });
+});
+
 describe("passwordStrength", () => {
   it("keeps the existing labels and score thresholds", () => {
     assert.equal(passwordStrength("abc").level, "weak");
     assert.equal(passwordStrength("Abcdefgh1234").level, "good");
     assert.equal(passwordStrength("Abcdefghij1234!xyz").level, "strong");
+  });
+});
+
+describe("master password requirements", () => {
+  it("accepts a password with length and every character class", () => {
+    assert.equal(MASTER_PASSWORD_MIN_LENGTH, 12);
+    assert.equal(passwordMeetsRequirements("Abcdefghij1!x"), true);
+    assert.deepEqual(
+      passwordRequirements("Abcdefghij1!x").map(({ id, met }) => [id, met]),
+      [
+        ["length", true],
+        ["uppercase", true],
+        ["lowercase", true],
+        ["number", true],
+        ["symbol", true],
+      ],
+    );
+  });
+
+  it("rejects passwords below the minimum length", () => {
+    assert.equal(passwordMeetsRequirements("Abcdefgh1!x"), false);
+  });
+
+  it("rejects every missing character class", () => {
+    assert.equal(passwordMeetsRequirements("abcdefghij1!x"), false);
+    assert.equal(passwordMeetsRequirements("ABCDEFGHIJ1!X"), false);
+    assert.equal(passwordMeetsRequirements("Abcdefghijk!x"), false);
+    assert.equal(passwordMeetsRequirements("Abcdefghij12x"), false);
+  });
+
+  it("does not count whitespace as a special character", () => {
+    assert.equal(passwordMeetsRequirements("Abcdefghij1 "), false);
   });
 });
 
@@ -134,14 +186,14 @@ describe("passphraseOptions", () => {
     });
     assert.ok(html.includes('value="12"'));
   });
-  it("mentí que les paraules poden repetir-se i que són de la llista EFF en anglès", () => {
+  it("explica que les paraules no es repeteixen i són de la llista EFF en anglès", () => {
     const html = passphraseOptions({
       words: 6,
       separator: "-",
       includeNumber: false,
     });
     assert.ok(html.includes("llista EFF"));
-    assert.ok(html.includes("poden repetir-se"));
+    assert.ok(html.includes("sense repetir-se"));
   });
 });
 

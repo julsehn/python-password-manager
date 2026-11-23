@@ -24,10 +24,9 @@ Main dependency groups:
 1. `src-web/main.js` still owns state transitions, event wiring, and vault
    workflows. Screen templates are in `src-web/views.js`, and dialog templates
    are in `src-web/dialogs.js`; JavaScript still has no static type checker.
-2. `src-tauri/src/lib.rs` now contains Tauri setup and core vault commands.
-   Image-grid authentication commands and tests are in
-   `src-tauri/src/image_grid.rs`; remaining command groups can be separated as
-   their contracts are exercised by focused tests.
+2. `src-tauri/src/lib.rs` now contains Tauri setup and core vault commands,
+   including master-password validation and re-encryption. Remaining command
+   groups can be separated as their contracts are exercised by focused tests.
 3. `src-tauri/src/server.rs` manages vault sessions, pairing, and client state;
    HTTP parsing, routing, and persistence are now in `src-tauri/src/server/http.rs`.
    `get_entry_count` still uses `unwrap()` on a mutex and should return a
@@ -110,6 +109,8 @@ Python suite passes.
   `dialogs.js`; reused existing constants, components, and generator modules.
 - Moved image-grid authentication commands and their tests to
   `src-tauri/src/image_grid.rs` without changing the registered command names.
+  That module and the image-login flow were later removed completely; the
+  master password is now the only authentication method.
 - Moved the HTTP server, bounded request parser, routing, and vault-persistence
   helpers to `src-tauri/src/server/http.rs`; `server.rs` retains session and
   pairing state while preserving the original public APIs.

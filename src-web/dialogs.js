@@ -1,7 +1,18 @@
 import { icon, folderColors, folderIcons } from "./constants.js";
-import { escapeHtml, formatDate, parseEntryNotes } from "./utils.js";
-import { passwordStrength } from "./generator.js";
+import {
+  cloudUsernameStatus,
+  escapeHtml,
+  formatDate,
+  formatRelativeTime,
+  parseEntryNotes,
+} from "./utils.js";
+import {
+  passwordStrength,
+  passwordRequirementsMarkup,
+  passwordStrengthMarkup,
+} from "./generator.js";
 import { trashCard } from "./modals.js";
+import { privacyPolicyHtml } from "./privacy-policy.js";
 
 export function createDialogViews(state) {
   function downloadPasswordModal() {
@@ -36,171 +47,20 @@ export function createDialogViews(state) {
   `;
   }
 
-  function welcomeModal() {
-    const slides = [
-      {
-        icon: "ShieldCheck",
-        kicker: "PROTECCIÓ LOCAL",
-        title: "Tot el que necessites, en un sol lloc",
-        text: "SherLock guarda els teus accessos de manera local i protegida, perquè els tinguis sempre a mà.",
-      },
-      {
-        icon: "KeyRound",
-        kicker: "UNA SOLA CLAU",
-        title: "Recorda només la contrasenya mestra",
-        text: "És l'única clau que necessitaràs. No la podem recuperar, així que tria'n una de llarga i guarda-la bé.",
-      },
-      {
-        icon: "Plus",
-        kicker: "A punt per començar",
-        title: "Afegeix els teus primers accessos",
-        text: "Després podràs guardar llocs web, usuaris, contrasenyes i notes privades dins la teva SherLock.",
-      },
-    ];
-    const slide = slides[state.welcomeStep] || slides[0];
-    const isLastSlide = state.welcomeStep === slides.length - 1;
-
+  function privacyPolicyModal() {
     return `
-    <div class="modal-backdrop">
-      <section class="entry-modal welcome-slideshow" role="dialog" aria-modal="true" aria-labelledby="welcome-title">
+    <div class="modal-backdrop privacy-policy-backdrop">
+      <section class="entry-modal privacy-policy-modal" role="dialog" aria-modal="true" aria-labelledby="privacy-policy-title">
         <header class="modal-header">
-          <div class="brand-mark">${icon(slide.icon, 22)}</div>
-          <div>
-            <p class="welcome-slide-count">PAS ${state.welcomeStep + 1} DE ${slides.length}</p>
-            <h2 id="welcome-title">Benvingut a SherLock</h2>
-          </div>
+          <button class="modal-icon" id="close-privacy-policy" title="Tancar">${icon("X", 20)}</button>
+          <h2 id="privacy-policy-title">Política de privacitat</h2>
         </header>
-        <div class="welcome-slide" aria-live="polite">
-          <p class="welcome-slide-kicker">${slide.kicker}</p>
-          <h3>${slide.title}</h3>
-          <p>${slide.text}</p>
+        <div class="modal-scroll privacy-policy-scroll">
+          <p class="helper">Text oficial del servei Password Manager Cloud.</p>
+          <div class="privacy-policy-content">${privacyPolicyHtml}</div>
         </div>
         <footer class="modal-footer">
-          <div class="welcome-dots" aria-label="Progrés de la introducció">
-            ${slides.map((_, index) => `<span class="welcome-dot ${index === state.welcomeStep ? "active" : ""}"></span>`).join("")}
-          </div>
-          <button type="button" class="primary" id="next-welcome">
-            ${isLastSlide ? "Crear contrasenya mestra" : "Continuar"} ${icon("ArrowRight", 17)}
-          </button>
-        </footer>
-      </section>
-    </div>
-  `;
-  }
-
-  function authMethodSelectionModal() {
-    return `
-    <div class="modal-backdrop">
-      <section class="entry-modal auth-selection-modal" role="dialog" aria-modal="true" aria-labelledby="auth-selection-title">
-        <header class="modal-header">
-          <button class="modal-icon" id="cancel-auth-selection" title="Tancar">${icon("X", 20)}</button>
-          <h2 id="auth-selection-title">Tria el mètode d'autenticació</h2>
-        </header>
-        <div class="modal-scroll">
-          <div class="auth-method-options">
-            <button class="auth-method-card ${state.authMethodSelected === "password" ? "selected" : ""}" id="auth-method-password">
-              ${icon("LockKeyhole", 32)}
-              <h3>Contrasenya mestra</h3>
-              <p>Utilitza una contrasenya text per obrir la SherLock.</p>
-            </button>
-            <button class="auth-method-card ${state.authMethodSelected === "image" ? "selected" : ""}" id="auth-method-image">
-              ${icon("Camera", 32)}
-              <h3>Autenticació amb imatge</h3>
-              <p>Utilitza una imatge i punts de clic per autenticar-te.</p>
-            </button>
-            <button class="auth-method-card" id="auth-method-cloud-download">
-              ${icon("Cloud", 32)}
-              <h3>Descarregar des del núvol</h3>
-              <p>Si ja tens una caixa al núvol, descarrega-la i desbloqueja-la amb la contrasenya mestra.</p>
-            </button>
-          </div>
-          ${state.gridSetupError ? `<p class="error" id="image-auth-setup-error">${escapeHtml(state.gridSetupError)}</p>` : ""}
-        </div>
-        <footer class="modal-footer">
-          <button type="button" class="secondary" id="cancel-auth-selection-bottom">Cancel·la</button>
-          <button type="button" class="primary" id="continue-auth-selection">Continuar ${icon("ArrowRight", 17)}</button>
-        </footer>
-      </section>
-    </div>
-  `;
-  }
-
-  function imageAuthSetupModal() {
-    return `
-    <div class="modal-backdrop image-auth-modal-backdrop">
-      <section class="entry-modal image-auth-setup-modal" role="dialog" aria-modal="true" aria-labelledby="image-auth-setup-title">
-        <header class="modal-header">
-          <button class="modal-icon" id="cancel-image-auth-setup" title="Tancar">${icon("X", 20)}</button>
-          <h2 id="image-auth-setup-title">Configura la teva autenticació amb imatge</h2>
-        </header>
-        <div class="modal-scroll">
-          <div class="image-auth-instructions">
-            <p>Puja una imatge i marca els punts fent clic o dibuixant-hi a sobre.</p>
-            <p class="hint">Selecciona 12 punts diferents en ordre. La seqüència és la clau d'accés.</p>
-          </div>
-          <div class="image-upload-area" id="image-upload-area" ${state.imageAuthImage ? "hidden" : ""}>
-            <p>${icon("Camera", 40)}</p>
-            <p>Fes clic per pujar la teva imatge</p>
-            <input type="file" accept="image/*" id="image-auth-upload" class="file-input-hidden" />
-          </div>
-          <div class="image-auth-canvas-area" id="image-auth-canvas-area" ${state.imageAuthImage ? "" : "hidden"}>
-            <canvas id="image-auth-canvas" width="500" height="400"></canvas>
-            <p class="image-auth-status">Punts seleccionats: <strong id="image-auth-count">0</strong></p>
-            <p class="image-auth-order">Ordre dels punts: <strong id="image-auth-order">cap</strong></p>
-            <div class="image-auth-point-actions">
-              <button type="button" class="secondary" id="undo-image-auth-point">${icon("Undo2", 17)} Enrere</button>
-              <button type="button" class="secondary" id="clear-image-auth-points">${icon("Eraser", 17)} Esborra selecció</button>
-            </div>
-          </div>
-          ${state.gridSetupError ? `<p class="error">${escapeHtml(state.gridSetupError)}</p>` : ""}
-        </div>
-        <footer class="modal-footer">
-          <button type="button" class="secondary" id="cancel-image-auth-setup-bottom">Cancel·la</button>
-          <button type="button" class="primary" id="save-image-auth-setup">Desa el patró</button>
-        </footer>
-      </section>
-    </div>
-  `;
-  }
-
-  function imageAuthUnlockModal() {
-    return `
-    <div class="modal-backdrop image-auth-modal-backdrop">
-      <section class="entry-modal image-auth-unlock-modal" role="dialog" aria-modal="true" aria-labelledby="image-auth-unlock-title">
-        <header class="modal-header">
-          <button class="modal-icon" id="cancel-image-auth-unlock" title="Tancar">${icon("X", 20)}</button>
-          <h2 id="image-auth-unlock-title">Desbloqueja amb la teva imatge</h2>
-        </header>
-        <div class="modal-scroll">
-          <div class="image-auth-instructions">
-            <p>Marca els mateixos 12 punts, en el mateix ordre.</p>
-          </div>
-          <div class="image-auth-canvas-area">
-            <canvas id="image-auth-unlock-canvas" class="${state.loading ? "is-unlocking" : ""}" width="500" height="400"></canvas>
-            <p class="image-auth-status">Punts seleccionats: <strong id="image-auth-unlock-count">0</strong></p>
-            <p class="image-auth-order">Ordre dels punts: <strong id="image-auth-unlock-order">cap</strong></p>
-            <div class="image-auth-point-actions">
-              <button type="button" class="secondary" id="undo-image-auth-unlock-point" ${state.loading ? "disabled" : ""}>${icon("Undo2", 17)} Enrere</button>
-              <button type="button" class="secondary" id="clear-image-auth-unlock-points" ${state.loading ? "disabled" : ""}>${icon("Eraser", 17)} Esborra selecció</button>
-            </div>
-            ${
-              state.loading
-                ? `
-              <div class="unlock-loading" role="status" aria-live="polite">
-                <div class="unlock-progress-track" role="progressbar" aria-label="Desxifrant la SherLock" aria-valuetext="En curs">
-                  <span class="unlock-progress-indicator"></span>
-                </div>
-                <span>Verificant el patró i desxifrant la SherLock…</span>
-              </div>
-            `
-                : ""
-            }
-          </div>
-          ${state.gridUnlockError ? `<p class="error">${escapeHtml(state.gridUnlockError)}</p>` : ""}
-        </div>
-        <footer class="modal-footer">
-          <button type="button" class="secondary" id="cancel-image-auth-unlock-bottom" ${state.loading ? "disabled" : ""}>Cancel·la</button>
-          <button type="button" class="primary" id="verify-image-auth-unlock" ${state.loading ? "disabled" : ""}>${state.loading ? "Desbloquejant…" : "Verifica i desbloqueja"}</button>
+          <button type="button" class="secondary" id="close-privacy-policy-bottom">Tanca</button>
         </footer>
       </section>
     </div>
@@ -213,39 +73,26 @@ export function createDialogViews(state) {
       <section class="entry-modal change-auth-modal" role="dialog" aria-modal="true" aria-labelledby="change-auth-title">
         <header class="modal-header">
           <button class="modal-icon" id="cancel-change-auth" title="Tancar">${icon("X", 20)}</button>
-          <h2 id="change-auth-title">Canvia la contrasenya o l'autenticació</h2>
+          <h2 id="change-auth-title">Canvia la contrasenya mestra</h2>
         </header>
         <div class="modal-scroll">
-          <div class="auth-method-options">
-            <button type="button" class="auth-method-card ${state.changeAuthSelected === "password" ? "selected" : ""}" id="change-auth-password">
-              ${icon("LockKeyhole", 32)}
-              <h3>Contrasenya mestra</h3>
-              <p>Tria una contrasenya mestra nova per obrir la SherLock.</p>
-            </button>
-            <button type="button" class="auth-method-card ${state.changeAuthSelected === "image" ? "selected" : ""}" id="change-auth-image">
-              ${icon("Camera", 32)}
-              <h3>Autenticació amb imatge</h3>
-              <p>Utilitza una imatge i punts de clic per autenticar-te.</p>
-            </button>
-          </div>
-          ${
-            state.changeAuthSelected === "password"
-              ? `
-            <div class="change-auth-password-fields">
-              <p class="helper">La caixa es tornarà a xifrar. Tria una contrasenya nova de 12 caràcters com a mínim.</p>
-              <label class="form-label" for="change-auth-new-password">Contrasenya mestra nova</label>
-              <input class="form-input" id="change-auth-new-password" type="password" autocomplete="new-password" minlength="12" required />
-              <label class="form-label" for="change-auth-confirm-password">Confirma la contrasenya nova</label>
-              <input class="form-input" id="change-auth-confirm-password" type="password" autocomplete="new-password" minlength="12" required />
+          <div class="change-auth-password-fields">
+            <p class="helper">La caixa es tornarà a xifrar i conservarà tots els accessos. Tria una contrasenya mestra nova.</p>
+            <label class="form-label" for="change-auth-new-password">Contrasenya mestra nova</label>
+            <input class="form-input" id="change-auth-new-password" type="password" autocomplete="new-password" required />
+            <div class="password-setup-feedback" id="change-auth-password-feedback">
+              ${passwordStrengthMarkup("")}
+              ${passwordRequirementsMarkup("")}
             </div>
-          `
-              : ""
-          }
+            <label class="form-label" for="change-auth-confirm-password">Confirma la contrasenya nova</label>
+            <input class="form-input" id="change-auth-confirm-password" type="password" autocomplete="new-password" required />
+            <p class="password-match" data-password-match hidden aria-live="polite"></p>
+          </div>
           <p class="error" id="change-auth-error" ${state.changeAuthError ? "" : "hidden"}>${escapeHtml(state.changeAuthError)}</p>
         </div>
         <footer class="modal-footer">
           <button type="button" class="secondary" id="cancel-change-auth-bottom">Cancel·la</button>
-          <button type="button" class="primary" id="save-auth-method" ${state.changeAuthBusy ? "disabled" : ""}>${state.changeAuthBusy ? "Canviant..." : state.changeAuthSelected === "image" ? "Continua amb imatge" : "Canvia la contrasenya"}</button>
+          <button type="button" class="primary" id="save-auth-method" ${state.changeAuthBusy ? "disabled" : ""}>${state.changeAuthBusy ? "Canviant..." : "Canvia la contrasenya"}</button>
         </footer>
       </section>
     </div>
@@ -610,11 +457,84 @@ export function createDialogViews(state) {
   `;
   }
 
+  function appDialogModal() {
+    const d = state.appDialog || {};
+    const requireText = d.requireText || "";
+    const passwordLabel = d.passwordLabel || "";
+    const danger = Boolean(d.danger);
+    const requireValue = d.requireTextValue || "";
+    const passwordValue = d.passwordValue || "";
+    const thirdLabel = d.thirdLabel || "";
+    const requireOk = !requireText || requireValue === requireText;
+    const passwordOk = !passwordLabel || passwordValue.length > 0;
+    const disabled = !requireOk || !passwordOk;
+
+    return `
+    <div class="modal-backdrop" id="app-dialog-backdrop">
+      <section class="entry-modal" role="dialog" aria-modal="true" aria-labelledby="app-dialog-title">
+        <header class="modal-header">
+          <button class="modal-icon" id="app-dialog-cancel" title="Cancel·lar">
+            ${icon("X", 20)}
+          </button>
+          <h2 id="app-dialog-title">${escapeHtml(d.title || "")}</h2>
+        </header>
+        <div class="modal-scroll">
+          <p>${escapeHtml(d.message || "")}</p>
+          ${d.confirmHelp ? `<p class="dialog-choice-help">${escapeHtml(d.confirmHelp)}</p>` : ""}
+          ${
+            requireText
+              ? `
+          <div class="form-section">
+            <label class="form-label" for="app-dialog-require-text">Per confirmar, escriviu <strong>"${escapeHtml(requireText)}"</strong>:</label>
+            <input type="text" id="app-dialog-require-text" class="form-input" autocomplete="off" value="${escapeHtml(requireValue)}" />
+          </div>
+          `
+              : ""
+          }
+          ${
+            passwordLabel
+              ? `
+          <div class="form-section">
+            <label class="form-label" for="app-dialog-password">${escapeHtml(passwordLabel)}</label>
+            <input type="password" id="app-dialog-password" class="form-input" autocomplete="off" value="${escapeHtml(passwordValue)}" />
+          </div>
+          `
+              : ""
+          }
+        </div>
+        <footer class="modal-footer">
+          <button type="button" class="secondary" id="app-dialog-cancel-bottom">Cancel·lar</button>
+          ${
+            thirdLabel
+              ? `<div class="dialog-choice-group"><button type="button" class="secondary" id="app-dialog-third">${escapeHtml(thirdLabel)}</button>${d.thirdHelp ? `<small class="dialog-choice-help">${escapeHtml(d.thirdHelp)}</small>` : ""}</div>`
+              : ""
+          }
+          <button type="button" class="${danger ? "danger-btn" : "primary"}" id="app-dialog-confirm" ${disabled ? "disabled" : ""}>
+            ${escapeHtml(d.confirmLabel || "Acceptar")}
+          </button>
+        </footer>
+      </section>
+    </div>
+  `;
+  }
+
   function cloudLoginModal() {
     const config = state.cloudConfig;
     const isDownloadContext = state.cloudActionContext === "download";
     const activeTab = state.cloudTab || "login";
-    const isAuthenticated = Boolean(config.authUser && config.token);
+    const isAuthenticated = Boolean(config.authUser && config.vaultId);
+    const usernameStatus = cloudUsernameStatus({
+      tab: activeTab,
+      checking: state.cloudUsernameChecking,
+      available: state.cloudUsernameAvailable,
+      error: state.cloudUsernameCheckError,
+    });
+    const usernameInputTone =
+      usernameStatus.tone === "available"
+        ? "is-available"
+        : usernameStatus.tone === "taken" || usernameStatus.tone === "error"
+          ? "is-taken"
+          : "";
 
     if (isAuthenticated && !isDownloadContext) {
       return `
@@ -634,39 +554,35 @@ export function createDialogViews(state) {
               <div class="cloud-status-header">
                 <span class="cloud-badge">
                   <span class="cloud-badge-dot"></span>
-                  Sessió activa a Railway
+                  Connectat com a <strong>${escapeHtml(config.authUser)}</strong>
                 </span>
                 <span class="cloud-status-provider">
-                  ${config.railwayUrl ? "Servidor personalitzat" : "Núvol oficial"}
+                  ${config.railwayUrl ? "Servidor propi" : "Núvol oficial"}
                 </span>
               </div>
-              <div class="cloud-user-meta cloud-user-meta-spaced">
-                <span><strong>Usuari:</strong> ${escapeHtml(config.authUser)}</span>
-                <span><strong>Identificador:</strong> ${config.vaultId ? escapeHtml(config.vaultId) : "Sincronitzat"}</span>
+            </div>
+
+            <p class="helper">La teva SherLock es guarda xifrada. El servidor no la pot llegir.</p>
+
+            <div class="cloud-sync-row cloud-modal-sync-row">
+              <button type="button" class="primary full" data-cloud-action="sync" ${state.cloudSyncStatus?.phase === "syncing" ? 'disabled aria-busy="true"' : 'aria-busy="false"'}>
+                <span class="cloud-sync-icon ${state.cloudSyncStatus?.phase === "syncing" ? "is-spinning" : ""}">${icon("RefreshCw", 16)}</span>
+                ${state.cloudSyncStatus?.phase === "syncing" ? "Sincronitzant…" : "Sincronitzar"}
+              </button>
+              <span class="cloud-last-sync">Última sincronització: ${state.cloudConfig.lastSyncAt ? formatRelativeTime(state.cloudConfig.lastSyncAt, Date.now()) : "Encara no s'ha sincronitzat en aquest dispositiu"}</span>
+            </div>
+            <p class="cloud-sync-status ${state.cloudSyncStatus?.phase === "error" ? "is-error" : ""}" aria-live="polite">${escapeHtml(state.cloudSyncStatus?.text || "")}</p>
+            <details class="cloud-more" ${state.cloudMoreOpen ? "open" : ""}>
+              <summary>Més opcions</summary>
+              <div class="cloud-more-actions">
+                <button type="button" class="secondary full danger" data-cloud-action="logout">
+                  ${icon("LogOut", 16)} Tancar sessió a Railway
+                </button>
+                <button type="button" class="secondary full danger" data-cloud-action="delete-account">
+                  ${icon("Trash2", 16)} Eliminar compte i dades del núvol
+                </button>
               </div>
-            </div>
-
-            <div class="cloud-info-box">
-              ${icon("ShieldCheck", 18)}
-              <span>
-                <strong>Privacitat garantida:</strong> La SherLock roman sempre xifrada amb AES-256-GCM. El servidor mai coneix la teva contrasenya mestra ni pot desxifrar les teves dades.
-              </span>
-            </div>
-
-            <div class="form-section cloud-actions-form">
-              <button type="button" class="primary full" id="btn-cloud-sync-modal" ${state.cloudLoading ? "disabled" : ""}>
-                ${icon("RefreshCw", 16)} Sincronitzar ara (Pujar canvis)
-              </button>
-              <button type="button" class="secondary full" id="btn-cloud-download-modal" ${state.cloudLoading ? "disabled" : ""}>
-                ${icon("DownloadCloud", 16)} Descarregar còpia del núvol
-              </button>
-              <button type="button" class="secondary full danger" id="btn-cloud-logout-modal">
-                ${icon("LogOut", 16)} Tancar sessió a Railway
-              </button>
-              <button type="button" class="secondary full danger" id="btn-cloud-delete-account-modal">
-                ${icon("Trash2", 16)} Eliminar compte i dades del núvol
-              </button>
-            </div>
+            </details>
           </div>
           <footer class="modal-footer">
             <button type="button" class="secondary" id="cancel-cloud-login">Tancar</button>
@@ -709,23 +625,17 @@ export function createDialogViews(state) {
               </span>
             </div>
 
-            ${
-              state.cloudError
-                ? `
-              <div class="cloud-error-banner">
-                ${icon("AlertCircle", 18)}
-                <span>${escapeHtml(state.cloudError)}</span>
-              </div>
-            `
-                : ""
-            }
+            <div class="cloud-error-banner" id="cloud-error-banner" ${state.cloudError ? "" : "hidden"}>
+              ${icon("AlertCircle", 18)}
+              <span id="cloud-error-text">${escapeHtml(state.cloudError || "")}</span>
+            </div>
 
             <!-- Common Username -->
             <div class="form-section">
               <label class="form-label" for="auth-username">Nom d'usuari a Railway:</label>
-              <div style="position:relative;">
+              <div class="username-field ${usernameStatus.label ? "has-status" : ""}">
                 <input
-                  class="form-input"
+                  class="form-input ${usernameInputTone}"
                   id="auth-username"
                   name="username"
                   type="text"
@@ -734,21 +644,12 @@ export function createDialogViews(state) {
                   placeholder="Ex. joan"
                   value="${escapeHtml(state.cloudFormUsername || config.authUser || "")}"
                   autofocus
-                  style="${activeTab === "register" && state.cloudUsernameAvailable === false ? "border-color:var(--color-danger,#dc2626);" : activeTab === "register" && state.cloudUsernameAvailable === true ? "border-color:var(--color-success,#16a34a);" : ""}"
+                  aria-describedby="auth-username-hint"
+                  ${usernameStatus.tone === "taken" ? 'aria-invalid="true"' : ""}
                 />
-                ${
-                  activeTab === "register" && state.cloudUsernameChecking
-                    ? `<span style="position:absolute;right:10px;top:50%;transform:translateY(-50%);font-size:12px;color:var(--color-muted);">${icon("Loader", 14)} Verificant...</span>`
-                    : activeTab === "register" &&
-                        state.cloudUsernameAvailable === true
-                      ? `<span style="position:absolute;right:10px;top:50%;transform:translateY(-50%);font-size:12px;color:var(--color-success,#16a34a);">${icon("Check", 14)} Disponible</span>`
-                      : activeTab === "register" &&
-                          state.cloudUsernameAvailable === false
-                        ? `<span style="position:absolute;right:10px;top:50%;transform:translateY(-50%);font-size:12px;color:var(--color-danger,#dc2626);">${icon("X", 14)} No disponible</span>`
-                        : ""
-                }
+                <span class="username-status is-${usernameStatus.tone}" id="auth-username-status" role="status" aria-live="polite">${escapeHtml(usernameStatus.label)}</span>
               </div>
-              ${activeTab === "register" && state.cloudUsernameCheckError ? `<small role="status" style="display:block;margin-top:6px;color:var(--color-danger,#dc2626);">${escapeHtml(state.cloudUsernameCheckError)}</small>` : ""}
+              <small class="username-hint is-${usernameStatus.tone}" id="auth-username-hint" ${usernameStatus.hint ? "" : "hidden"}>${escapeHtml(usernameStatus.hint)}</small>
             </div>
 
             <!-- Common Password -->
@@ -761,14 +662,19 @@ export function createDialogViews(state) {
                   name="password"
                   type="password"
                   required
-                  minlength="${activeTab === "register" ? "8" : "1"}"
-                  placeholder="${activeTab === "register" ? "Mínim 8 caràcters" : "La teva contrasenya de Railway"}"
+                  minlength="${activeTab === "register" ? "12" : "1"}"
+                  placeholder="${activeTab === "register" ? "Mínim 12 caràcters" : "La teva contrasenya de Railway"}"
                   class="form-input cloud-password-input"
                 />
                 <button type="button" class="reveal cloud-password-reveal" id="reveal-cloud-password" title="Mostrar/Amagar">
                   ${icon("Eye", 16)}
                 </button>
               </div>
+              ${
+                activeTab === "register"
+                  ? '<p class="helper helper-small helper-top-small">No pot ser la mateixa que la contrasenya mestra de la SherLock.</p>'
+                  : ""
+              }
             </div>
 
             ${
@@ -783,7 +689,7 @@ export function createDialogViews(state) {
                   name="confirmPassword"
                   type="password"
                   required
-                  minlength="8"
+                  minlength="12"
                   placeholder="Repeteix la contrasenya"
                 />
               </div>
@@ -792,7 +698,7 @@ export function createDialogViews(state) {
               <div class="form-section privacy-section">
                 <label class="form-checkbox privacy-checkbox" for="privacy-accepted">
                   <input type="checkbox" id="privacy-accepted" name="privacyAccepted" required />
-                  <span>He llegit i accepto la <a href="PRIVACY_POLICY.md" target="_blank" class="policy-link">Política de Privacitat</a></span>
+                  <span>He llegit i accepto la <button type="button" class="policy-link" id="open-privacy-policy">Política de privacitat</button></span>
                 </label>
               </div>
             `
@@ -933,10 +839,7 @@ export function createDialogViews(state) {
   }
   return {
     downloadPasswordModal,
-    welcomeModal,
-    authMethodSelectionModal,
-    imageAuthSetupModal,
-    imageAuthUnlockModal,
+    privacyPolicyModal,
     changeAuthMethodModal,
     firstEntryGuideModal,
     entryDetailsModal,
@@ -945,5 +848,6 @@ export function createDialogViews(state) {
     resetConfirmModal,
     cloudLoginModal,
     folderModal,
+    appDialogModal,
   };
 }

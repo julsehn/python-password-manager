@@ -12,6 +12,7 @@
     "test": "node --test src-web/*.test.js browser-extension/content.test.js",
     "test:extension:visual": "playwright test browser-extension/test-icon-injection.test.js",
     "tauri": "DEVELOPER_DIR=\"/Applications/Xcode.app/Contents/Developer\" PATH=\"/Applications/Xcode.app/Contents/Developer/usr/bin:$HOME/.cargo/bin:$HOME/.rustup/toolchains/stable-aarch64-apple-darwin/bin:$PATH\" tauri",
+    "tauri:dev": "npm run tauri -- dev --release",
     "icons:compile": "sh tools/compile_icons.sh",
     "build:app": "npm run tauri -- build --bundles app && rm -rf ../SherLock.app && cp -R src-tauri/target/release/bundle/macos/SherLock.app ../SherLock.app",
     "tauri:build:macos:release": "sh tools/build_macos_release.sh"

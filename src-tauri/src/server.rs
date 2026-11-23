@@ -11,7 +11,8 @@ use zeroize::Zeroizing;
 
 use crate::security;
 use crate::{
-    atomic_write, config_dir, vault_path, Entry, Folder, HistoryItem, TrashedEntry, VaultData,
+    atomic_write, config_dir, vault_path, CloudSession, Entry, Folder, HistoryItem, TrashedEntry,
+    VaultData,
 };
 
 pub struct UnlockedVault {
@@ -20,6 +21,7 @@ pub struct UnlockedVault {
     pub folders: Vec<Folder>,
     pub trash: Vec<TrashedEntry>,
     pub history: Vec<HistoryItem>,
+    pub cloud_session: Option<CloudSession>,
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
@@ -44,6 +46,17 @@ pub struct PairingCode {
     pub code: String,
     pub expires_at: i64,
     pub attempts: u32,
+}
+
+fn constant_time_eq(first: &[u8], second: &[u8]) -> bool {
+    if first.len() != second.len() {
+        return false;
+    }
+    let mut difference = 0u8;
+    for (left, right) in first.iter().zip(second.iter()) {
+        difference |= left ^ right;
+    }
+    difference == 0
 }
 
 pub struct ServerState {
@@ -94,6 +107,25 @@ impl ServerState {
         trash: Vec<TrashedEntry>,
         history: Vec<HistoryItem>,
     ) {
+        self.set_unlocked_with_cloud_session(
+            master_password,
+            entries,
+            folders,
+            trash,
+            history,
+            None,
+        );
+    }
+
+    pub fn set_unlocked_with_cloud_session(
+        &self,
+        master_password: String,
+        entries: Vec<Entry>,
+        folders: Vec<Folder>,
+        trash: Vec<TrashedEntry>,
+        history: Vec<HistoryItem>,
+        cloud_session: Option<CloudSession>,
+    ) {
         let mut data = self.unlocked_data.lock().unwrap_or_else(|e| e.into_inner());
         *data = Some(UnlockedVault {
             master_password: Zeroizing::new(master_password),
@@ -101,6 +133,7 @@ impl ServerState {
             folders,
             trash,
             history,
+            cloud_session,
         });
     }
 
@@ -122,6 +155,8 @@ impl ServerState {
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         challenges.clear();
+        let mut pairing = self.pairing_code.lock().unwrap_or_else(|e| e.into_inner());
+        *pairing = None;
     }
 
     pub fn is_unlocked(&self) -> bool {
@@ -131,10 +166,20 @@ impl ServerState {
             .is_some()
     }
 
+    /// Compare a candidate against the in-memory master password without
+    /// exposing the stored value to the frontend. Returns false when locked.
+    pub fn master_password_matches(&self, candidate: &str) -> bool {
+        let data = self.unlocked_data.lock().unwrap_or_else(|e| e.into_inner());
+        match data.as_ref() {
+            Some(vault) => constant_time_eq(vault.master_password.as_bytes(), candidate.as_bytes()),
+            None => false,
+        }
+    }
+
     pub fn get_entry_count(&self) -> usize {
         self.unlocked_data
             .lock()
-            .unwrap()
+            .unwrap_or_else(|e| e.into_inner())
             .as_ref()
             .map(|u| u.entries.len())
             .unwrap_or(0)
@@ -245,37 +290,35 @@ pub fn get_paired_clients_path() -> PathBuf {
     config_dir().join("paired_clients.json")
 }
 
+/// The paired-browser registry is a trust root: whoever can add a public key
+/// here can mint a session token once the vault is unlocked. It lives in a
+/// 0600 JSON file owned by the current user, not in the OS credential store.
+/// Tests opt into a temporary path through `SHERLOCK_PAIRED_CLIENTS_PATH`.
 pub fn load_paired_clients() -> Vec<PairedClient> {
-    let path = get_paired_clients_path();
-    match std::fs::read_to_string(&path) {
-        Ok(c) => serde_json::from_str(&c).unwrap_or_default(),
-        // No es fa fallback a temp_dir(): /tmp és compartit entre usuaris a
-        // Linux i un atacant podria plantar un fitxer de clients aparellats.
-        Err(_) => vec![],
-    }
+    std::fs::read_to_string(get_paired_clients_path())
+        .ok()
+        .and_then(|content| serde_json::from_str(&content).ok())
+        .unwrap_or_default()
 }
 
 pub fn save_paired_clients(clients: &[PairedClient]) -> Result<(), String> {
-    let path = get_paired_clients_path();
-    if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-    let data = serde_json::to_string_pretty(clients)
+    let data = serde_json::to_string(clients)
         .map_err(|e| format!("Failed to serialize paired clients: {}", e))?;
-    match std::fs::write(&path, &data) {
-        Ok(_) => {
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
-            }
-            Ok(())
-        }
-        Err(e) => Err(format!("Failed to write paired clients: {e}")),
-    }
+    atomic_write(&get_paired_clients_path(), data.as_bytes())
 }
 
-// ── ECDSA P-256 verification ────────
+pub fn remove_paired_clients() -> Result<(), String> {
+    let path = get_paired_clients_path();
+    match std::fs::remove_file(&path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(format!(
+            "Failed to remove paired clients {}: {}",
+            path.display(),
+            error
+        )),
+    }
+}
 
 pub fn verify_ecdsa_p256_signature(
     public_key_hex: &str,
@@ -300,8 +343,6 @@ pub fn verify_ecdsa_p256_signature(
         .verify(message_bytes, &signature_bytes)
         .is_ok()
 }
-
-// ── Domain matching ──────────────────
 
 pub fn matches_domain(entry_site: &str, query_domain: &str) -> bool {
     let q = query_domain.trim().to_lowercase();
@@ -422,6 +463,20 @@ mod tests {
     }
 
     #[test]
+    fn test_master_password_match_requires_unlock_and_is_exact() {
+        let state = ServerState::new();
+        assert!(!state.master_password_matches("master123"));
+
+        state.set_unlocked("master123".to_string(), vec![], vec![], vec![], vec![]);
+        assert!(state.master_password_matches("master123"));
+        assert!(!state.master_password_matches("Master123"));
+        assert!(!state.master_password_matches("master1234"));
+
+        state.lock();
+        assert!(!state.master_password_matches("master123"));
+    }
+
+    #[test]
     fn test_token_validation() {
         let state = ServerState::new();
         let token = state.create_session_token();
@@ -462,7 +517,9 @@ mod tests {
     #[tokio::test]
     async fn test_route_generate_password() {
         let state = Arc::new(ServerState::new());
-        let headers = HashMap::new();
+        let token = state.create_session_token();
+        let mut headers = HashMap::new();
+        headers.insert("authorization".to_string(), format!("Bearer {}", token));
         let body_req =
             r#"{"length":20,"uppercase":true,"lowercase":true,"numbers":true,"symbols":true}"#;
         let (status, body) = route_request(
@@ -478,16 +535,38 @@ mod tests {
         let parsed: serde_json::Value = serde_json::from_str(&body).unwrap();
         assert!(parsed["success"].as_bool().unwrap());
         assert_eq!(parsed["password"].as_str().unwrap().len(), 20);
+
+        let (unauth_status, _) = route_request(
+            "POST",
+            "/api/v1/generate-password",
+            "",
+            &HashMap::new(),
+            body_req,
+            &state,
+        )
+        .await;
+        assert_eq!(unauth_status, 401);
+
+        let (clamped_status, clamped_body) = route_request(
+            "POST",
+            "/api/v1/generate-password",
+            "",
+            &headers,
+            r#"{"length":999999}"#,
+            &state,
+        )
+        .await;
+        assert_eq!(clamped_status, 200);
+        let clamped: serde_json::Value = serde_json::from_str(&clamped_body).unwrap();
+        assert_eq!(clamped["password"].as_str().unwrap().len(), 128);
     }
 
     #[test]
     fn test_domain_matching_security() {
-        // Exact match
         assert!(matches_domain("google.com", "google.com"));
         assert!(matches_domain("google.com", "www.google.com"));
         assert!(matches_domain("https://google.com", "google.com"));
 
-        // Subdomain of entry matches
         assert!(matches_domain("google.com", "accounts.google.com"));
         assert!(!matches_domain("accounts.google.com", "google.com"));
         assert!(!matches_domain("github.io", "project.github.io"));
@@ -503,7 +582,6 @@ mod tests {
         assert!(!matches_domain("google.com", "notgoogle.com"));
         assert!(!matches_domain("google.com", "google.co"));
 
-        // Empty domain returns false
         assert!(!matches_domain("google.com", ""));
         assert!(!matches_domain("", "google.com"));
     }
@@ -649,11 +727,9 @@ mod tests {
             route_request("POST", "/api/v1/pair", "", &headers, &correct_body, &state).await;
         assert_eq!(status2, 400);
 
-        // Clean up test client
         state.revoke_client(client_id);
     }
 
-    // Old handshake endpoint removed. Test converted to: route does not exist.
 
     #[tokio::test]
     async fn test_challenge_response_and_revocation_lifecycle() {
@@ -691,7 +767,6 @@ mod tests {
         .unwrap();
         let pub_key_hex = hex::encode(key_pair.public_key().as_ref());
 
-        // 2. Pair device
         let code = state.generate_pairing_code().unwrap();
         let headers = HashMap::new();
         let pair_body = serde_json::json!({
@@ -709,7 +784,6 @@ mod tests {
             .unwrap()
             .to_string();
 
-        // 3. Request challenge nonce
         let (c_status, c_res) = route_request(
             "GET",
             "/api/v1/challenge",
@@ -844,11 +918,14 @@ mod tests {
         assert!(is_loopback_origin("http://localhost:8080"));
         assert!(is_loopback_origin("http://localhost"));
 
-        // Non-loopback origins should be rejected
+        // Non-loopback origins should be rejected, including prefix look-alikes
         assert!(!is_loopback_origin("http://example.com"));
         assert!(!is_loopback_origin("http://evil.com:8080"));
         assert!(!is_loopback_origin("https://example.com"));
         assert!(!is_loopback_origin("http://192.168.1.1"));
+        assert!(!is_loopback_origin("http://localhost.evil.com"));
+        assert!(!is_loopback_origin("http://127.0.0.1.evil.com"));
+        assert!(!is_loopback_origin("http://localhost@evil.com"));
     }
 
     #[test]

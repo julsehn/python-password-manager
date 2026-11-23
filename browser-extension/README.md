@@ -1,140 +1,93 @@
-# SherLock Browser Extension
+# SherLock browser extension
 
-This browser extension provides local autofill functionality for SherLock credentials with native messaging integration.
+Fills login forms and saves new credentials without giving the browser access to the vault file. The extension talks to the desktop app through a native messaging host; it never opens `vault.json` itself.
 
-## Features
+Chrome uses Manifest V3, Firefox Manifest V2. Both builds come from the same source.
 
-- Autofill login credentials for websites
-- Save new credentials to extension storage
-- Cross-browser compatibility (Chrome & Firefox)
-- **Native messaging integration** - Direct communication with the desktop app
-- Browser-local credential storage
+## Before you start
 
-## Installation
+You need the desktop app running, the native host registered for your browser, and a one-time pairing between the extension and the app. Without the pairing the extension can open, but every vault action fails.
 
-### Prerequisites
+```bash
+# from the repository root
+./browser-extension/build.sh
+./tools/install_native_host.sh
+```
 
-1. **Desktop app must be running** - The extension communicates with the native messaging host, which requires the desktop app to be running.
+`install_native_host.sh` copies `browser-extension/native/sherlock_native.sh` into `~/Library/Application Support/SherLock/NativeMessaging` on macOS and drops the host manifest into the Chrome and Firefox registry directories. Chromium forks (Edge, Brave) have their own directories and are not registered by default.
 
-2. **Install the native messaging host**:
-   - Run `./tools/install_native_host.sh` from the project root.
-   - The installer registers `browser-extension/native/sherlock_native.sh` for both browsers.
+## Load the extension
 
-Before loading the extension, run `./browser-extension/build.sh` from the project root.
+### Chrome
 
-### Chrome Installation
+1. Open `chrome://extensions/` and turn on **Developer mode**.
+2. Click **Load unpacked** and pick `browser-extension/build/chrome`.
+3. When Chrome asks for native messaging access, allow it.
 
-1. Open Chrome and navigate to `chrome://extensions/`
-2. Enable **Developer mode** (toggle in the top right)
-3. Click **"Load unpacked"**
-4. Select the `browser-extension/build/chrome` folder
-5. The extension will be loaded
+### Firefox
 
-**Note**: When you first load the extension, Chrome will ask you to allow native messaging access. Click **"Allow"** when prompted.
+1. Open `about:debugging`, then **This Firefox**.
+2. Click **Load Temporary Add-on** and pick `browser-extension/build/firefox/manifest.json`.
 
-### Firefox Installation
+Temporary add-ons disappear when Firefox restarts, and `build.sh` deletes the folder on every build. Reload the add-on in `about:debugging` after rebuilding.
 
-1. Open Firefox and navigate to `about:debugging`
-2. Click **"This Firefox"** in the left sidebar
-3. Click **"Load Temporary Add-on"**
-4. Select `browser-extension/build/firefox/manifest.json`
-5. The extension will be loaded
+## Pair the browser
 
-**Note**: Firefox may ask for native messaging permissions. Accept them when prompted.
+1. In the app, open **Configuració → Browsers vinculats** and press **Generar codi per vincular un navegador**.
+2. Open the extension popup and type the six-digit code.
 
-## How It Works
+The code expires after two minutes and works once. Pairing stores an ECDSA P-256 key pair in the browser's extension storage; the public half goes to the app, the private half never leaves the browser. Every later request signs a fresh challenge, so no long-lived password or token lives in the extension.
 
-The extension uses **native messaging** to communicate directly with the desktop app:
+## What the extension can do
 
-1. **Native Messaging Host** (`native_messaging_host.py`):
-   - A Python script that runs as a background process
-   - Listens for messages from the browser extension
-   - Communicates with the desktop app's vault
+| Action | What it does |
+| --- | --- |
+| `getVaultInfo` | Reports whether the app is reachable, locked or unlocked, and how many entries exist. |
+| `pairBrowser` | Exchanges the six-digit code for a client id and registers the public key. |
+| `getBrowserChallenge` / `authenticatePairedBrowser` | Signs a nonce to prove the browser is the paired one. |
+| `fetchCredentials` | Returns the credentials that match a site, after checking the page origin. |
+| `listCredentials` | Lists entries for the popup, without passwords. |
+| `saveCredentials` | Offers to save a login after a form submit. |
+| `generatePassword` | Asks the app for a generated password. |
+| `lockVault` | Locks the vault from the popup. |
+| `getActiveTab` | Returns the hostname of the current tab. |
 
-2. **Manifest Configuration**:
-   - The browser-specific manifest grants native messaging permission
-   - The installer registers the native host with the browser
+## How a request travels
 
-3. **Communication Flow**:
-   ```
-   Browser Extension → Native Messaging Host → Desktop App
-   ```
+```
+page form → content script → background service worker
+          → native host (stdio, length-prefixed JSON)
+          → http://127.0.0.1:<port>/api/v1 (Bearer token)
+          → Tauri app
+```
 
-## Available Actions
+The app writes its current port to `~/.password_manager/extension_port`; both the host and the Firefox manifest default to 8080 if that file is missing.
 
-The extension supports the following actions:
-
-- `getVaultInfo` - Get vault status (locked/unlocked, entry count)
-- `unlockVault` - Unlock vault with master password
-- `lockVault` - Lock the vault
-- `fetchCredentials` - Get credentials for a specific site
-- `saveCredentials` - Save new credentials
-- `generatePassword` - Generate a random password
-- `getActiveTab` - Get information about the active tab
+Content scripts only receive a password after the user picks one of the matches, or when a single match makes the choice unambiguous. They also only get it for the frame whose URL the browser reports as the sender; the background worker drops any request whose `domain` does not match the sender's hostname.
 
 ## Troubleshooting
 
-### Extension shows "Disconnected"
+**"Disconnected" in the popup.** The app is probably not running, or the host is not registered. Run `./tools/install_native_host.sh` again, then restart the browser.
 
-1. **Make sure the desktop app is running** - The native messaging host requires the desktop app to be active.
+**"Aquest navegador no està vinculat".** Pair it from the settings screen. If it was paired before and the app was reset, pair it again.
 
-2. **Check native messaging permissions**:
-   - Chrome: `chrome://native-messaging/`
-   - Firefox: `about:native-messaging`
-   - Ensure `sherlock` is listed and enabled
+**Host not found.** Check that `sherlock_native.sh` is executable and that the manifest in the browser's native messaging directory points at the installed copy, not at the build folder.
 
-3. **Reinstall the extension**:
-   - Remove the extension
-   - Reload the unpacked extension
-   - Accept native messaging permissions when prompted
+**"Permission denied" on macOS.** Open System Settings → Privacy & Security and allow the script to run.
 
-### Native messaging host not found
-
-1. **Reinstall the native messaging host**:
-
-   ```bash
-   ./tools/install_native_host.sh
-   ```
-
-2. **Check the registered host path**:
-   - Ensure the browser host manifest points to `browser-extension/native/sherlock_native.sh`
-
-3. **Restart the browser** after making changes
-
-### Extension can't connect to the app
-
-The extension has a fallback to HTTP API if native messaging fails:
-
-1. **Check the server is running**:
-   - The desktop app should start an HTTPS server on `https://127.0.0.1:8080`
-
-2. **Verify the server endpoints**:
-   - `/health` - Health check
-   - `/api/v1/vault/unlock` - Unlock vault
-   - `/api/v1/vault/credentials` - Get credentials
-   - `/api/v1/vault/lock` - Lock vault
-   - `/api/v1/vault/generate-password` - Generate password
-
-## Security
-
-- Credentials are stored in the browser's extension storage
-- Native messaging provides a secure, port-less communication channel
-- The desktop app handles all encryption and decryption
-- No credentials are sent over the network
+**Firefox keeps loading old code.** Reload the temporary add-on in `about:debugging` after each build.
 
 ## Files
 
-- `manifest.chrome.json` and `manifest.firefox.json` - Browser-specific source manifests
-- `build/chrome/` and `build/firefox/` - Generated packages for loading in each browser
-- `background.js` - Background service worker
-- `popup.html` - Popup UI
-- `popup.js` - Popup controller
-- `content.js` - Content script for autofill
-- `content.css` - Content script styles
-- `native_messaging_host.py` - Native messaging host (Python)
-- `native_messaging_host_wrapper.sh` - Shell wrapper for the host
-- `icons/` - Extension icons
+- `manifest.chrome.json`, `manifest.firefox.json`: source manifests.
+- `background.js`: service worker, pairing and message routing.
+- `content.js`, `content.css`: autofill and save prompts.
+- `popup.html`, `popup.js`: extension popup.
+- `native/sherlock_native.py`: native messaging host.
+- `native/sherlock_native.sh`: wrapper registered with the browser.
+- `build.sh`: produces `build/chrome` and `build/firefox`.
+- `SECURITY.md`, `NATIVE_MESSAGING.md`: deeper notes on the trust boundary and host setup.
 
 ## License
 
-MIT License - See the main repository for details.
+MIT. See the main repository.

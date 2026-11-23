@@ -1,17 +1,7 @@
 // SherLock - Background Service Worker
 // Uses the WebExtensions native messaging API in Firefox and Chromium.
-//
-// Phase 1 changes:
-//  - Removed computeExtensionHash() / browser.runtime.getManifestUrl() (did not exist).
-//  - Each native message now carries a unique request_id; responses are matched by
-//    ID instead of FIFO order, so out-of-order replies never corrupt pending requests.
-//  - Added per-request timeout (10 s) with automatic port reconnect.
-//  - getActiveTab now uses the Promise form (async/await) so it works in both
-//    Firefox (Promise-based browser.*) and Chrome (callback-based chrome.*).
 
 const browser = globalThis.browser ?? globalThis.chrome;
-
-// ── Native port management
 
 let nativePort = null;
 // Map from request_id → { resolve, reject, timeoutId }
@@ -38,11 +28,10 @@ function connectToNative() {
           reject(new Error(response.error || "Unknown native host error"));
         }
       } else {
-        // Ignore responses without a matching request_id and log a warning.
-        console.warn(
-          "[sherlock] Response with no/unknown request_id:",
-          response,
-        );
+        console.warn("[sherlock] Response with no/unknown request_id:", {
+          success: response?.success,
+          error: response?.error,
+        });
       }
     });
 
@@ -53,7 +42,6 @@ function connectToNative() {
         "Native messaging host disconnected";
       console.error("[sherlock] Native port disconnected:", errorMessage);
       nativePort = null;
-      // Reject all pending requests
       for (const [_id, { reject, timeoutId }] of pendingRequests) {
         clearTimeout(timeoutId);
         reject(new Error(errorMessage));
@@ -65,8 +53,6 @@ function connectToNative() {
     nativePort = null;
   }
 }
-
-// ── Send a message to the native host
 
 async function sendNativeMessage(action, payload = {}) {
   if (!nativePort) {
@@ -245,8 +231,6 @@ async function sendToNative(action, payload = {}) {
   return sendNativeMessage(action, payload);
 }
 
-// ── Public vault actions ──────────────
-
 async function getVaultInfo() {
   const {
     sherlock_browser_client_id: clientId,
@@ -283,7 +267,27 @@ async function generatePassword(options = {}) {
   return sendToNative("generatePassword", { options });
 }
 
-// ── Message router (popup / content scripts) ───────
+function senderInfo(sender = {}) {
+  let url = null;
+  try {
+    url = new URL(sender.url);
+  } catch {
+    url = null;
+  }
+  const host = url?.hostname.toLowerCase().replace(/^www\./, "") || "";
+  const extensionBase = browser.runtime.getURL("");
+  const isExtensionPage =
+    sender.id === browser.runtime.id &&
+    typeof sender.url === "string" &&
+    sender.url.startsWith(extensionBase);
+  const isTopFrameContentScript =
+    sender.id === browser.runtime.id &&
+    sender.frameId === 0 &&
+    Boolean(url) &&
+    ["http:", "https:"].includes(url.protocol) &&
+    Boolean(host);
+  return { url, host, isExtensionPage, isTopFrameContentScript };
+}
 
 browser.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (
@@ -407,7 +411,17 @@ browser.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
 
   if (request.action === "fetchCredentials") {
-    const domain = request.site || request.domain || "";
+    const info = senderInfo(sender);
+    const domain = String(request.site || request.domain || "")
+      .toLowerCase()
+      .replace(/^www\./, "");
+    if (
+      !info.isExtensionPage &&
+      !(info.isTopFrameContentScript && domain && domain === info.host)
+    ) {
+      sendResponse({ success: false, error: "Untrusted sender" });
+      return false;
+    }
     fetchCredentials(domain)
       .then(sendResponse)
       .catch((error) => {
@@ -418,6 +432,11 @@ browser.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
 
   if (request.action === "listCredentials") {
+    const info = senderInfo(sender);
+    if (!info.isExtensionPage && !info.isTopFrameContentScript) {
+      sendResponse({ success: false, error: "Untrusted sender" });
+      return false;
+    }
     listCredentials()
       .then(sendResponse)
       .catch((error) => sendResponse({ success: false, error: error.message }));
@@ -425,28 +444,19 @@ browser.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
 
   if (request.action === "saveCredentials") {
-    // Validació de l'emissora: només la pàgina del mateix domini pot desar
-    // credencials per a aquest domini. Evita que una pàgina maliciosa forgi
-    // el missatge "Desar contrasenya".
-    const senderUrl = (() => {
-      try {
-        return new URL(sender.url);
-      } catch {
-        return null;
-      }
-    })();
+    // A content script may only save for its own host. The extension popup is
+    // trusted to save the site the user typed into the form.
+    const info = senderInfo(sender);
     const requestedHost = String(request.data?.site || "")
       .toLowerCase()
       .replace(/^www\./, "");
-    const senderHost = senderUrl?.hostname.toLowerCase().replace(/^www\./, "");
     if (
-      sender.id !== browser.runtime.id ||
-      sender.frameId !== 0 ||
-      !senderUrl ||
-      !["http:", "https:"].includes(senderUrl.protocol) ||
-      !senderHost ||
-      !requestedHost ||
-      requestedHost !== senderHost
+      !info.isExtensionPage &&
+      !(
+        info.isTopFrameContentScript &&
+        requestedHost &&
+        requestedHost === info.host
+      )
     ) {
       sendResponse({ success: false, error: "Emisor no de confiança" });
       return false;
@@ -508,8 +518,6 @@ browser.runtime.onMessage.addListener((request, sender, sendResponse) => {
   return false;
 });
 
-// ── Context menus
-
 browser.runtime.onInstalled.addListener(() => {
   try {
     browser.contextMenus.create({
@@ -534,10 +542,14 @@ browser.contextMenus.onClicked.addListener(async (info, tab) => {
       const urlObj = new URL(tab.url);
       const creds = await fetchCredentials(urlObj.hostname);
       if (creds.success && creds.credentials && creds.credentials.length > 0) {
-        browser.tabs.sendMessage(tab.id, {
-          action: "autofillLogin",
-          credential: creds.credentials[0],
-        });
+        browser.tabs.sendMessage(
+          tab.id,
+          {
+            action: "autofillLogin",
+            credential: creds.credentials[0],
+          },
+          { frameId: 0 },
+        );
       }
     } catch (e) {
       console.error("[sherlock] Error in autofill context menu:", e);
@@ -545,10 +557,14 @@ browser.contextMenus.onClicked.addListener(async (info, tab) => {
   } else if (info.menuItemId === "sherlock_generate") {
     const gen = await generatePassword({ length: 18 });
     if (gen.success) {
-      browser.tabs.sendMessage(tab.id, {
-        action: "fillGeneratedPassword",
-        password: gen.password,
-      });
+      browser.tabs.sendMessage(
+        tab.id,
+        {
+          action: "fillGeneratedPassword",
+          password: gen.password,
+        },
+        { frameId: 0 },
+      );
     }
   }
 });

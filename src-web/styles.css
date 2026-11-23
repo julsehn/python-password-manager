@@ -28,7 +28,6 @@ button:not(:disabled):active {
   color-scheme: light;
   font-synthesis: none;
 
-  /* Color system - Light */
   --bg-app: #edf3f7;
   --bg-shell: #f7fafc;
   --bg-sidebar: #ffffff;
@@ -77,7 +76,6 @@ button:not(:disabled):active {
   --shadow-modal: -10px 0 35px rgba(23, 43, 77, 0.18);
   --shadow-toast: 0 10px 30px rgba(39, 83, 114, 0.15);
 
-  /* Accent defaults (Blue) */
   --accent-primary: #2471d1;
   --accent-hover: #185cac;
   --accent-subtle: #d9edff;
@@ -85,7 +83,6 @@ button:not(:disabled):active {
   --accent-shadow: rgba(36, 113, 209, 0.25);
   --accent-focus-ring: #dcecfb;
 
-  /* Badge colors */
   --badge-blue-bg: #d9edff;
   --badge-blue-text: #2474cf;
   --badge-yellow-bg: #fff3cc;
@@ -134,7 +131,6 @@ button:not(:disabled):active {
   font-size: 24px;
 }
 
-/* Dark mode definitions */
 html[data-theme="dark"] {
   color-scheme: dark;
   --bg-app: #080d1a;
@@ -257,7 +253,6 @@ html[data-theme="dark"] {
   }
 }
 
-/* Accent Color Variations */
 html[data-accent="green"] {
   --accent-primary: #299b70;
   --accent-hover: #1f7b57;
@@ -1776,87 +1771,4 @@ html[data-locked="false"] .workspace {
     transition-duration: 0.001ms !important;
     scroll-behavior: auto !important;
   }
-}
-
-/* Grid authentication styles */
-.auth-method-options {
-  display: flex;
-  gap: 16px;
-  margin: 16px 0;
-}
-
-.auth-method-card {
-  flex: 1;
-  padding: 20px;
-  border: 2px solid var(--border-subtle);
-  border-radius: 12px;
-  background: var(--bg-card);
-  cursor: pointer;
-  text-align: center;
-  transition: all 0.15s ease;
-}
-
-.auth-method-card:hover {
-  border-color: var(--accent-primary);
-}
-
-.auth-method-card.selected {
-  border-color: var(--accent-primary);
-  background: var(--bg-hover);
-}
-
-.auth-method-card svg {
-  margin-bottom: 8px;
-}
-
-.auth-method-card h3 {
-  margin: 0 0 8px 0;
-  font-size: 0.875rem;
-}
-
-.auth-method-card p {
-  font-size: 0.75rem;
-  color: var(--text-muted);
-  margin: 0;
-}
-
-.grid-container {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 8px;
-  margin: 16px 0;
-}
-
-.grid-cell {
-  aspect-ratio: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border: 2px solid var(--border-subtle);
-  border-radius: 8px;
-  background: var(--bg-card);
-  cursor: pointer;
-  font-weight: 600;
-  transition: all 0.15s ease;
-  user-select: none;
-}
-
-.grid-cell:hover {
-  border-color: var(--accent-primary);
-}
-
-.grid-cell.selected {
-  border-color: var(--accent-primary);
-  background: var(--accent-subtle);
-  color: var(--accent-primary);
-}
-
-.grid-setup-instructions,
-.grid-unlock-instructions {
-  margin-bottom: 16px;
-}
-
-.grid-setup-status,
-.grid-unlock-status {
-  margin-top: 16px;
 }

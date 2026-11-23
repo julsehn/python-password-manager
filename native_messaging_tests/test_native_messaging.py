@@ -30,9 +30,6 @@ HOST_SCRIPT = (
 MESSAGE_TIMEOUT_SECONDS = 5
 
 
-# ── Helpers 
-
-
 def send_message(process: subprocess.Popen, message: dict) -> None:
     encoded = json.dumps(message, separators=(",", ":")).encode("utf-8")
     process.stdin.write(struct.pack("@I", len(encoded)) + encoded)
@@ -75,9 +72,6 @@ def _terminate(process: subprocess.Popen) -> None:
                 pass
 
 
-# ── Fixtures ─
-
-
 @pytest.fixture
 def host_dir(tmp_path):
     """A temporary directory containing a copy of the host script (no registry file)."""
@@ -102,9 +96,6 @@ def host_process(host_dir, monkeypatch):
         yield proc
     finally:
         _terminate(proc)
-
-
-# ── Tests ──
 
 
 class TestBasicProtocol:
@@ -171,7 +162,6 @@ class TestRegistryRemoved:
         finally:
             _terminate(proc)
 
-        # No registry file should have been written anywhere in host_dir
         registry_files = list(host_dir.rglob("extensions.json"))
         assert not registry_files, (
             f"Host created extensions.json files: {registry_files}. "
@@ -218,7 +208,6 @@ class TestArgvOriginValidation:
             # The host may send one error message then exit, or just exit.
             # Either way it must not answer a ping successfully.
             deadline = time.monotonic() + 3
-            # Try to read stdout; host should exit quickly.
             fd = proc.stdout.fileno()
             ready, _, _ = select.select([fd], [], [], 3)
             if ready:
@@ -258,7 +247,6 @@ class TestArgvOriginValidation:
                 except (OSError, json.JSONDecodeError):
                     pass  # Host exited before we could read – that's fine too
 
-            # Host must have exited or be exiting.
             proc.stdin.close()
             exit_code = proc.wait(timeout=3)
             assert exit_code != 0, (
@@ -323,23 +311,27 @@ class TestExtensionIdCheck:
             "won't match the allowed_origins in the host manifest."
         )
 
-    def test_chrome_manifest_key_matches_root(self):
-        """manifest.chrome.json key must match the key in the root manifest.json."""
-        root = (
-            Path(__file__).resolve().parents[1]
-            / "browser-extension"
-            / "manifest.json"
-        )
+    def test_chrome_manifest_key_maps_to_the_native_host_id(self):
+        """The pinned Chrome key must derive the extension id the host allows."""
+        import base64
+        import hashlib
+
         chrome = (
             Path(__file__).resolve().parents[1]
             / "browser-extension"
             / "manifest.chrome.json"
         )
-        root_data = json.loads(root.read_text())
-        chrome_data = json.loads(chrome.read_text())
-        assert root_data.get("key") == chrome_data.get("key"), (
-            "Root manifest.json and manifest.chrome.json have different keys. "
-            "They must be identical so both load the same extension ID."
+        data = json.loads(chrome.read_text())
+        key = data.get("key", "")
+        assert key, "manifest.chrome.json must pin a public key"
+
+        digest = hashlib.sha256(base64.b64decode(key)).hexdigest()[:32]
+        extension_id = "".join(
+            chr(ord("a") + int(nibble, 16)) for nibble in digest
+        )
+        assert extension_id == "lcbgmkafanopplcefoapdfmhhjfoaamd", (
+            "manifest.chrome.json key no longer derives the extension id "
+            "allowed by the native messaging host"
         )
 
     def test_firefox_manifest_has_gecko_id(self):

@@ -81,14 +81,11 @@ def get_railway_url() -> str:
     config = load_config()
     provider = config.get("cloud_provider", "official")
 
-    # If using official cloud, return the official URL
     if provider == "official":
         return "https://password-manager-cloud-production.up.railway.app"
 
-    # Otherwise use configured URL
     url = config.get("railway_url", "")
 
-    # Auto-generate URL from project_id if only project_id is set
     if not url and config.get("railway_project_id"):
         return generate_railway_url(config["railway_project_id"])
 
@@ -124,10 +121,8 @@ def is_railway_configured() -> bool:
     provider = config.get("cloud_provider", "official")
 
     if provider == "official":
-        # Official cloud is always configured
         return True
 
-    # For custom cloud, check all required fields
     return bool(
         config.get("railway_url") and config.get("railway_vault_id") and config.get("railway_token")
     )
@@ -163,7 +158,6 @@ def _parse_railway_domain(url: str) -> Optional[str]:
         hostname = parsed.hostname or ""
         if not hostname.endswith(".up.railway.app"):
             return None
-        # Extract project ID: password-manager-cloud-XXXXX
         base = hostname.replace(".up.railway.app", "")
         if base.startswith("password-manager-cloud-"):
             return base[len("password-manager-cloud-") :]

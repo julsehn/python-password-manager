@@ -48,6 +48,34 @@ export function formatDate(isoString) {
   }
 }
 
+/**
+ * Format relative time in Catalan (tone: "tu").
+ * Returns e.g. "ara mateix", "fa 3 min", "fa 2 h", "ahir", or a short date.
+ * Empty string when no timestamp is given.
+ */
+export function formatRelativeTime(timestampMs, nowMs) {
+  if (timestampMs === null || timestampMs === undefined) return "";
+  if (!Number.isFinite(Number(timestampMs))) return "";
+  const diff = nowMs - Number(timestampMs);
+  if (diff < 60_000) return "ara mateix";
+  const min = Math.floor(diff / 60_000);
+  if (min < 60) return `fa ${min} min`;
+  const h = Math.floor(min / 60);
+  if (h < 24) return `fa ${h} h`;
+  const d = Math.floor(h / 24);
+  if (d === 1) return "ahir";
+  if (d < 7) return `fa ${d} dies`;
+  try {
+    return new Date(Number(timestampMs)).toLocaleDateString("ca-ES", {
+      day: "2-digit",
+      month: "short",
+      year: "numeric",
+    });
+  } catch {
+    return "";
+  }
+}
+
 export function parseEntryNotes(notes = "") {
   let url = "";
   let cleanNotes = notes;
@@ -73,6 +101,42 @@ export function mapVaultEntry(entry) {
 }
 
 export const isTauriRuntime = () => Boolean(window.__TAURI_INTERNALS__);
+
+/**
+ * Presentational state for the Railway username availability indicator.
+ * Kept pure so the same labels drive the initial render and the in-place
+ * updates that follow an availability check.
+ */
+export function cloudUsernameStatus({ tab, checking, available, error }) {
+  if (tab !== "register") {
+    return { tone: "idle", label: "", hint: "" };
+  }
+  if (checking) {
+    return { tone: "checking", label: "Comprovant…", hint: "" };
+  }
+  if (available === true) {
+    return {
+      tone: "available",
+      label: "✓ Disponible",
+      hint: "El nom d'usuari està lliure.",
+    };
+  }
+  if (available === false) {
+    return {
+      tone: "taken",
+      label: "✕ No disponible",
+      hint: "Aquest nom d'usuari ja existeix. Tria'n un altre.",
+    };
+  }
+  if (error) {
+    return {
+      tone: "error",
+      label: "No verificat",
+      hint: String(error),
+    };
+  }
+  return { tone: "idle", label: "", hint: "" };
+}
 
 /**
  * Compute remaining seconds until expiration. Returns integer ≥ 0.
