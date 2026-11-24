@@ -143,6 +143,8 @@ const state = {
     symbols: true,
     words: 6,
     separator: "-",
+    usernameFormat: "word",
+    uppercaseInitial: false,
     removeAccents: false,
     onlyUnaccented: false,
   },
@@ -1290,6 +1292,8 @@ function updateGeneratorOptions(event) {
     );
   if (event.target.id === "generator-separator")
     state.generatorOptions.separator = event.target.value;
+  if (event.target.id === "username-format")
+    state.generatorOptions.usernameFormat = event.target.value;
   state.generatedValue = generateValue();
   const lengthValue = document.querySelector("#generator-length-value");
   if (lengthValue && event.target.id === "generator-length") {
@@ -2625,6 +2629,9 @@ function bindEvents() {
     ?.addEventListener("input", updateGeneratorOptions);
   document
     .querySelector("#generator-words")
+    ?.addEventListener("change", updateGeneratorOptions);
+  document
+    .querySelector("#username-format")
     ?.addEventListener("change", updateGeneratorOptions);
   document
     .querySelector("#generator-separator")

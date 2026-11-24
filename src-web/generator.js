@@ -4,45 +4,12 @@
  */
 
 import { escapeHtml } from "./utils.js";
+import { DICEWARE_USERNAME_WORDLISTS } from "./wordlist-diceware.js";
 import { EFF_WORDLIST } from "./wordlist-eff.js";
 
-export const wordsByLanguage = {
-  Català: [
-    "núvol",
-    "riu",
-    "llum",
-    "bosc",
-    "mar",
-    "lluna",
-    "vent",
-    "foc",
-    "camí",
-    "estrella",
-  ],
-  Castellà: [
-    "nube",
-    "rio",
-    "luz",
-    "bosque",
-    "mar",
-    "luna",
-    "viento",
-    "fuego",
-    "camino",
-    "estrella",
-  ],
-  Español: [
-    "nube",
-    "rio",
-    "luz",
-    "bosque",
-    "mar",
-    "luna",
-    "viento",
-    "fuego",
-    "camino",
-    "estrella",
-  ],
+// Short fallback lists for languages without a bundled Diceware wordlist.
+// Catalan and Spanish usernames are generated from wordlist-diceware.js.
+const fallbackWordsByLanguage = {
   Anglès: [
     "cloud",
     "river",
@@ -93,6 +60,22 @@ export const wordsByLanguage = {
   ],
 };
 
+const USERNAME_LANGUAGE_ALIASES = {
+  Català: "Català",
+  Castellà: "Castellà",
+  Español: "Castellà",
+  Anglès: "Anglès",
+  English: "Anglès",
+  Francès: "Francès",
+  Français: "Francès",
+};
+
+export const USERNAME_FORMATS = Object.freeze([
+  { id: "word", label: "Paraula aleatòria" },
+  { id: "two-words", label: "Dues paraules" },
+  { id: "alias", label: "Àlies amb números" },
+]);
+
 export function secureRandomIndex(max) {
   if (!Number.isSafeInteger(max) || max < 1)
     throw new Error("Límit aleatori no vàlid.");
@@ -112,15 +95,41 @@ export function withoutAccents(word) {
   return word.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
 }
 
-export function generatorWords(language = "Català", onlyUnaccented = false) {
-  const words =
-    wordsByLanguage[language] ||
-    wordsByLanguage.Català ||
-    wordsByLanguage.Anglès;
+function canonicalUsernameLanguage(language) {
+  return USERNAME_LANGUAGE_ALIASES[language] || "Català";
+}
+
+export function usernameFormatId(value) {
+  return USERNAME_FORMATS.some(({ id }) => id === value) ? value : "word";
+}
+
+const usernamePoolCache = new Map();
+
+export function usernameWordPool(language = "Català", options = {}) {
+  const canonical = canonicalUsernameLanguage(language);
+  const onlyUnaccented = options.onlyUnaccented === true;
+  const removeAccents = options.removeAccents === true;
+  const cacheKey = `${canonical}\u0000${onlyUnaccented}\u0000${removeAccents}`;
+  const cached = usernamePoolCache.get(cacheKey);
+  if (cached) return cached;
+
+  const base =
+    DICEWARE_USERNAME_WORDLISTS[canonical] ||
+    fallbackWordsByLanguage[canonical] ||
+    fallbackWordsByLanguage.Anglès;
   const available = onlyUnaccented
-    ? words.filter((word) => word === withoutAccents(word))
-    : words;
-  return available.length ? available : words;
+    ? base.filter((word) => word === withoutAccents(word))
+    : base;
+  const words = removeAccents
+    ? available.map((word) => withoutAccents(word))
+    : available;
+  const pool = Object.freeze([...new Set(words)]);
+  usernamePoolCache.set(cacheKey, pool);
+  return pool;
+}
+
+export function generatorWords(language = "Català", onlyUnaccented = false) {
+  return [...usernameWordPool(language, { onlyUnaccented })];
 }
 
 export function formatGeneratorWord(word, removeAccents = false) {
@@ -153,6 +162,22 @@ export function sampleWordsWithoutReplacement(
     picked.push(available.splice(pick, 1)[0]);
   }
   return picked;
+}
+
+export function generateUsername(options = {}, language = "Català") {
+  const format = usernameFormatId(options.usernameFormat);
+  const wordCount = format === "two-words" ? 2 : 1;
+  const pool = usernameWordPool(language, options);
+  const words = sampleWordsWithoutReplacement(pool, wordCount).map((word) =>
+    options.uppercaseInitial === true
+      ? word.charAt(0).toUpperCase() + word.slice(1)
+      : word,
+  );
+  let value = words.join(format === "two-words" ? "-" : "");
+  if (format === "alias" || options.includeNumber) {
+    value += String(secureRandomIndex(90) + 10);
+  }
+  return value;
 }
 
 export const MASTER_PASSWORD_MIN_LENGTH = 12;
@@ -315,9 +340,7 @@ export function generateValue(type, options, language = "Català") {
     const value = words.join(options.separator);
     return options.includeNumber ? `${value}${secureRandomIndex(10)}` : value;
   }
-  const words = generatorWords(language, options.onlyUnaccented);
-  const value = `${formatGeneratorWord(randomItem(words), options.removeAccents)}${formatGeneratorWord(randomItem(words), options.removeAccents)}`;
-  return options.includeNumber ? `${value}${secureRandomIndex(100)}` : value;
+  return generateUsername(options, language);
 }
 
 export function passwordOptions(options) {
@@ -390,22 +413,25 @@ export function passphraseOptions(options, language = "Català") {
 }
 
 export function usernameOptions(options) {
+  const format = usernameFormatId(options.usernameFormat);
+  const alias = format === "alias";
   return `
     <label>
       Format
       <select id="username-format">
-        <option>Paraula aleatòria</option>
-        <option>Nom i cognom</option>
-        <option>Àlies amb números</option>
+        ${USERNAME_FORMATS.map(
+          ({ id, label }) =>
+            `<option value="${id}" ${format === id ? "selected" : ""}>${label}</option>`,
+        ).join("")}
       </select>
     </label>
     <label class="check-label">
-      <input data-option="uppercaseInitial" type="checkbox" ${options.uppercaseInitial !== false ? "checked" : ""} />
+      <input data-option="uppercaseInitial" type="checkbox" ${options.uppercaseInitial === true ? "checked" : ""} />
       Majúscules inicials
     </label>
     <label class="check-label">
-      <input data-option="includeNumber" type="checkbox" ${options.includeNumber ? "checked" : ""} />
-      Inclou número
+      <input data-option="includeNumber" type="checkbox" ${options.includeNumber || alias ? "checked" : ""} ${alias ? "disabled" : ""} />
+      Inclou número${alias ? " (sempre a l'àlies)" : ""}
     </label>
     <label class="check-label">
       <input data-option="removeAccents" type="checkbox" ${options.removeAccents ? "checked" : ""} />
@@ -415,5 +441,6 @@ export function usernameOptions(options) {
       <input data-option="onlyUnaccented" type="checkbox" ${options.onlyUnaccented ? "checked" : ""} />
       Només paraules sense accents
     </label>
+    <small class="helper">Català i castellà: paraules de llistes Diceware, sense repetir-se.</small>
   `;
 }

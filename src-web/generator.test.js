@@ -1,16 +1,23 @@
 import { strict as assert } from "node:assert";
 import { describe, it } from "node:test";
+import { DICEWARE_USERNAME_WORDLISTS } from "./wordlist-diceware.js";
 import { EFF_WORDLIST } from "./wordlist-eff.js";
 import {
   MASTER_PASSWORD_MIN_LENGTH,
-  passphraseEntropyBits,
+  USERNAME_FORMATS,
+  generateUsername,
   generateValue,
+  passphraseEntropyBits,
   passwordMeetsRequirements,
   passwordOptions,
   passwordRequirements,
   passwordStrength,
   passphraseOptions,
   sampleWordsWithoutReplacement,
+  usernameFormatId,
+  usernameOptions,
+  usernameWordPool,
+  withoutAccents,
 } from "./generator.js";
 
 describe("EFF wordlist", () => {
@@ -208,5 +215,159 @@ describe("passwordOptions", () => {
     });
     assert.ok(html.includes('min="8"'));
     assert.ok(!html.includes('min="5"'));
+  });
+});
+
+describe("Diceware username wordlists", () => {
+  for (const language of ["Català", "Castellà"]) {
+    it(`la llista de ${language} és àmplia, única i apta per a usernames`, () => {
+      const list = DICEWARE_USERNAME_WORDLISTS[language];
+      assert.ok(list.length >= 4000, `${language} només té ${list.length}`);
+      const seen = new Set();
+      for (const word of list) {
+        assert.match(word, /^\p{L}{3,16}$/u, `paraula no vàlida: ${word}`);
+        assert.equal(word, word.toLowerCase());
+        assert.ok(!seen.has(word), `${word} està duplicat`);
+        seen.add(word);
+      }
+    });
+  }
+
+  it("el català conserva accents i el castellà ja és ASCII", () => {
+    assert.ok(
+      DICEWARE_USERNAME_WORDLISTS.Català.some(
+        (word) => word !== withoutAccents(word),
+      ),
+      "el català no té cap paraula accentuada",
+    );
+    assert.ok(
+      DICEWARE_USERNAME_WORDLISTS.Castellà.every(
+        (word) => word === withoutAccents(word),
+      ),
+      "el castellà hauria de ser ASCII",
+    );
+  });
+
+  it("onlyUnaccented elimina les paraules amb accents", () => {
+    const pool = usernameWordPool("Català", { onlyUnaccented: true });
+    assert.ok(pool.length > 1000);
+    for (const word of pool) assert.equal(word, withoutAccents(word));
+  });
+
+  it("removeAccents deixa el pool en ASCII i sense duplicats", () => {
+    const pool = usernameWordPool("Català", { removeAccents: true });
+    assert.ok(pool.length > 1000);
+    assert.equal(new Set(pool).size, pool.length);
+    for (const word of pool) {
+      assert.match(word, /^[a-z]+$/);
+    }
+  });
+
+  it("el pool és immutable i els àlies d'idioma apunten a la mateixa llista", () => {
+    const catalan = usernameWordPool("Català");
+    assert.ok(Object.isFrozen(catalan));
+    assert.deepEqual(usernameWordPool("Español"), usernameWordPool("Castellà"));
+  });
+
+  it("un idioma desconegut cau al català", () => {
+    assert.deepEqual(usernameWordPool("Klingon"), usernameWordPool("Català"));
+  });
+});
+
+describe("generateUsername", () => {
+  const catalanPool = new Set(usernameWordPool("Català"));
+  const spanishPool = new Set(usernameWordPool("Castellà"));
+
+  it("el format paraula retorna una sola paraula del diccionari", () => {
+    const value = generateUsername({ usernameFormat: "word" }, "Català");
+    assert.ok(catalanPool.has(value), `${value} no és al diccionari català`);
+  });
+
+  it("el format dues paraules uneix dues paraules diferents amb '-'", () => {
+    const value = generateUsername({ usernameFormat: "two-words" }, "Català");
+    const parts = value.split("-");
+    assert.equal(parts.length, 2);
+    assert.notEqual(parts[0], parts[1]);
+    for (const part of parts) assert.ok(catalanPool.has(part));
+  });
+
+  it("l'àlies amb números acaba sempre en dos dígits", () => {
+    const value = generateUsername({ usernameFormat: "alias" }, "Castellà");
+    assert.match(value, /^\p{L}+\d{2}$/u);
+    assert.ok(spanishPool.has(value.replace(/\d+$/, "")));
+  });
+
+  it("inclou número opcional després de la paraula", () => {
+    const value = generateUsername(
+      { usernameFormat: "word", includeNumber: true },
+      "Català",
+    );
+    assert.match(value, /\d{2}$/);
+    assert.ok(catalanPool.has(value.slice(0, -2)));
+  });
+
+  it("aplica majúscules inicials a cada paraula", () => {
+    const value = generateUsername(
+      {
+        usernameFormat: "two-words",
+        uppercaseInitial: true,
+        removeAccents: true,
+      },
+      "Català",
+    );
+    for (const part of value.split("-")) assert.match(part, /^\p{Lu}/u);
+  });
+
+  it("treu accents quan es demana", () => {
+    const pool = new Set(usernameWordPool("Català", { removeAccents: true }));
+    for (let index = 0; index < 25; index += 1) {
+      const value = generateUsername(
+        { usernameFormat: "word", removeAccents: true },
+        "Català",
+      );
+      assert.match(value, /^[a-z]+$/);
+      assert.ok(pool.has(value));
+    }
+  });
+
+  it("generateValue amb tipus username respecta el format", () => {
+    const value = generateValue(
+      "username",
+      { usernameFormat: "alias" },
+      "Castellà",
+    );
+    assert.match(value, /\d{2}$/);
+  });
+});
+
+describe("usernameOptions", () => {
+  it("inclou els tres formats i marca el seleccionat", () => {
+    assert.deepEqual(
+      USERNAME_FORMATS.map(({ id }) => id),
+      ["word", "two-words", "alias"],
+    );
+    const html = usernameOptions({
+      usernameFormat: "two-words",
+      uppercaseInitial: false,
+    });
+    assert.ok(html.includes('value="word"'));
+    assert.ok(html.includes('value="two-words" selected'));
+    assert.ok(html.includes('value="alias"'));
+    assert.ok(html.includes("Diceware"));
+  });
+
+  it("desactiva el número a l'àlies perquè sempre n'afegeix", () => {
+    const html = usernameOptions({ usernameFormat: "alias" });
+    assert.ok(html.includes("disabled"));
+    assert.ok(html.includes("sempre a l'àlies"));
+  });
+
+  it("cau al format paraula si el valor no és vàlid", () => {
+    assert.equal(usernameFormatId("nope"), "word");
+    assert.ok(
+      usernameOptions({ usernameFormat: "nope" }).includes(
+        'value="word" selected',
+      ),
+    );
   });
 });
