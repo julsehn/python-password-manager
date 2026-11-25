@@ -30,7 +30,7 @@
   ],
   "web_accessible_resources": [
     {
-      "resources": ["icons/icon128.png"],
+      "resources": ["icons/icon128.png", "icons/icon128-dark.png"],
       "matches": ["<all_urls>"]
     }
   ],

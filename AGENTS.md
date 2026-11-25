@@ -69,7 +69,7 @@ The remaining `src/*.py` modules are legacy Python code kept only to support `te
 - Store Railway access and refresh tokens only in the encrypted vault's `cloud_session`; never persist them in the OS credential store or frontend local storage.
 - The app does not use the macOS Keychain. Keychain entries left by older builds are not read, written, or deleted; no Railway token is ever written to the Keychain again.
 - A Railway login that cannot save its session must not be reported as a persistent connection. Unlock the vault first, except when logging in specifically to download and unlock a cloud vault.
-- Registration must refuse a Railway account password that equals the local master password. Compare inside Rust (`ServerState::master_password_matches`) and never send or expose the master password to the frontend.
+- Registration must require a strong Railway password (12+ characters with upper/lowercase, digit and symbol) in the client, the Rust command and the cloud API. It must also refuse a Railway account password that equals the local master password. Compare inside Rust (`ServerState::master_password_matches`) and never send or expose the master password to the frontend.
 
 ### Local server and browser pairing
 

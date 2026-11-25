@@ -730,7 +730,6 @@ mod tests {
         state.revoke_client(client_id);
     }
 
-
     #[tokio::test]
     async fn test_challenge_response_and_revocation_lifecycle() {
         let _paired_clients = PairedClientsTestIsolation::new();

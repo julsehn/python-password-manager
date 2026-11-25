@@ -30,7 +30,7 @@
       "run_at": "document_idle"
     }
   ],
-  "web_accessible_resources": ["icons/icon128.png"],
+  "web_accessible_resources": ["icons/icon128.png", "icons/icon128-dark.png"],
   "background": {
     "scripts": ["background.js"]
   },

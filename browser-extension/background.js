@@ -3,6 +3,124 @@
 
 const browser = globalThis.browser ?? globalThis.chrome;
 
+// Only real web pages can provide a site to autofill. Extension pages
+// (moz-extension://, chrome-extension://), about:, file: and similar
+// schemes must not leak a UUID or internal URL into the popup.
+const WEB_PROTOCOLS = new Set(["http:", "https:"]);
+
+function websiteHostname(rawUrl) {
+  try {
+    const url = new URL(rawUrl);
+    if (!WEB_PROTOCOLS.has(url.protocol)) return "";
+    return url.hostname.toLowerCase().replace(/^www\./, "");
+  } catch {
+    return "";
+  }
+}
+
+const MULTI_LEVEL_SUFFIXES = new Set([
+  "co.uk",
+  "org.uk",
+  "ac.uk",
+  "gov.uk",
+  "com.au",
+  "net.au",
+  "org.au",
+  "co.nz",
+  "co.jp",
+  "com.br",
+  "com.mx",
+  "com.es",
+  "com.ar",
+  "com.co",
+  "co.in",
+]);
+
+function baseHostname(hostname) {
+  const host = String(hostname || "").toLowerCase();
+  if (!host || host.includes(":") || /^\d+\.\d+\.\d+\.\d+$/.test(host)) {
+    return host;
+  }
+  const parts = host.split(".");
+  if (parts.length <= 2) return host;
+  const suffix = parts.slice(-2).join(".");
+  return MULTI_LEVEL_SUFFIXES.has(suffix) ? parts.slice(-3).join(".") : suffix;
+}
+
+function normalizeSiteHost(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  try {
+    return new URL(raw.includes("://") ? raw : `https://${raw}`).hostname
+      .toLowerCase()
+      .replace(/^www\./, "");
+  } catch {
+    return "";
+  }
+}
+
+const TOOLBAR_ICONS = {
+  light: {
+    16: "icons/icon16.png",
+    48: "icons/icon48.png",
+    128: "icons/icon128.png",
+  },
+  dark: {
+    16: "icons/icon16-dark.png",
+    48: "icons/icon48-dark.png",
+    128: "icons/icon128-dark.png",
+  },
+};
+
+function applyToolbarTheme(theme, systemTheme) {
+  const action = browser.action || browser.browserAction;
+  if (!action?.setIcon) return;
+
+  // In a Chrome MV3 service worker `matchMedia` does not exist, so the
+  // popup/content script stores the resolved system theme for us.
+  let resolved = theme;
+  if (theme !== "dark" && theme !== "light") {
+    if (typeof globalThis.matchMedia === "function") {
+      resolved = globalThis.matchMedia("(prefers-color-scheme: dark)").matches
+        ? "dark"
+        : "light";
+    } else {
+      resolved = systemTheme === "dark" ? "dark" : "light";
+    }
+  }
+
+  try {
+    action.setIcon({
+      path: resolved === "dark" ? TOOLBAR_ICONS.dark : TOOLBAR_ICONS.light,
+    });
+  } catch (error) {
+    console.error("[sherlock] Could not update toolbar icon:", error);
+  }
+}
+
+function loadToolbarTheme() {
+  browser.storage.local.get(
+    ["sherlock_theme", "sherlock_resolved_theme"],
+    (data) => {
+      applyToolbarTheme(
+        (data && data.sherlock_theme) || "auto",
+        data && data.sherlock_resolved_theme,
+      );
+    },
+  );
+}
+
+loadToolbarTheme();
+browser.storage.onChanged.addListener((changes, areaName) => {
+  if (
+    areaName === "local" &&
+    (changes.sherlock_theme || changes.sherlock_resolved_theme)
+  ) {
+    loadToolbarTheme();
+  }
+});
+browser.runtime.onStartup?.addListener(loadToolbarTheme);
+
 let nativePort = null;
 // Map from request_id → { resolve, reject, timeoutId }
 const pendingRequests = new Map();
@@ -223,6 +341,7 @@ async function sendToNative(action, payload = {}) {
       "listCredentials",
       "fetchCredentials",
       "saveCredentials",
+      "deleteCredential",
       "lockVault",
     ].includes(action)
   ) {
@@ -263,6 +382,10 @@ async function saveCredential(data) {
   return sendToNative("saveCredentials", { data });
 }
 
+async function deleteCredential(id) {
+  return sendToNative("deleteCredential", { id });
+}
+
 async function generatePassword(options = {}) {
   return sendToNative("generatePassword", { options });
 }
@@ -292,7 +415,8 @@ function senderInfo(sender = {}) {
 browser.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (
     request.action === "sherlockGetCredentialChoices" ||
-    request.action === "sherlockSelectCredential"
+    request.action === "sherlockSelectCredential" ||
+    request.action === "sherlockCheckCredential"
   ) {
     // Only top-frame content scripts may request credentials, and the requested
     // hostname must match the browser-verified sender URL.
@@ -313,7 +437,8 @@ browser.runtime.onMessage.addListener((request, sender, sendResponse) => {
       !senderUrl ||
       !["http:", "https:"].includes(senderUrl.protocol) ||
       !senderHost ||
-      requestedHost !== senderHost
+      (requestedHost !== senderHost &&
+        requestedHost !== baseHostname(senderHost))
     ) {
       sendResponse({ success: false, error: "Untrusted sender" });
       return false;
@@ -339,6 +464,37 @@ browser.runtime.onMessage.addListener((request, sender, sendResponse) => {
             return senderHost === site || senderHost.endsWith(`.${site}`);
           },
         );
+        if (request.action === "sherlockCheckCredential") {
+          const requestedUsername = String(request.username || "")
+            .trim()
+            .toLowerCase();
+          const requestedPassword = String(request.password || "");
+          const sameUsername = credentials.some(
+            (credential) =>
+              normalizeSiteHost(credential.site || credential.url) ===
+                requestedHost &&
+              String(credential.username || credential.email || "")
+                .trim()
+                .toLowerCase() === requestedUsername,
+          );
+          const samePassword = credentials.some(
+            (credential) =>
+              normalizeSiteHost(credential.site || credential.url) ===
+                requestedHost &&
+              String(credential.username || credential.email || "")
+                .trim()
+                .toLowerCase() === requestedUsername &&
+              String(credential.password || "") === requestedPassword,
+          );
+          sendResponse({
+            success: true,
+            hasCredentials: credentials.length > 0,
+            sameUsername,
+            samePassword,
+          });
+          return;
+        }
+
         if (request.action === "sherlockGetCredentialChoices") {
           sendResponse({
             success: true,
@@ -346,6 +502,7 @@ browser.runtime.onMessage.addListener((request, sender, sendResponse) => {
               id: String(credential.id || ""),
               username: String(credential.username || credential.email || ""),
               domain: senderHost,
+              site: String(credential.site || credential.url || senderHost),
             })),
           });
           return;
@@ -455,7 +612,8 @@ browser.runtime.onMessage.addListener((request, sender, sendResponse) => {
       !(
         info.isTopFrameContentScript &&
         requestedHost &&
-        requestedHost === info.host
+        (requestedHost === info.host ||
+          requestedHost === baseHostname(info.host))
       )
     ) {
       sendResponse({ success: false, error: "Emisor no de confiança" });
@@ -471,6 +629,21 @@ browser.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return true;
   }
 
+  if (request.action === "deleteCredential") {
+    const info = senderInfo(sender);
+    if (!info.isExtensionPage) {
+      sendResponse({ success: false, error: "Untrusted sender" });
+      return false;
+    }
+    deleteCredential(String(request.id || ""))
+      .then(sendResponse)
+      .catch((error) => {
+        console.error("[sherlock] deleteCredential error:", error);
+        sendResponse({ success: false, error: error.message });
+      });
+    return true;
+  }
+
   if (request.action === "generatePassword") {
     generatePassword(request.options || {})
       .then(sendResponse)
@@ -481,29 +654,103 @@ browser.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return true;
   }
 
+  if (request.action === "openSaveEntry") {
+    const info = senderInfo(sender);
+    const site = normalizeSiteHost(request.site) || info.host;
+    if (
+      !site ||
+      (!info.isExtensionPage &&
+        !(
+          info.isTopFrameContentScript &&
+          (site === info.host || site === baseHostname(info.host))
+        ))
+    ) {
+      sendResponse({ success: false, error: "Untrusted sender" });
+      return false;
+    }
+
+    const pending = {
+      site,
+      username: String(request.username || "").trim(),
+      createdAt: Date.now(),
+    };
+    browser.storage.local.set({ sherlock_pending_save: pending }, async () => {
+      let opened = false;
+      const action = browser.action || browser.browserAction;
+      try {
+        if (action?.openPopup) {
+          await action.openPopup();
+          opened = true;
+        }
+      } catch {
+        opened = false;
+      }
+      if (!opened) {
+        try {
+          const url = browser.runtime.getURL("popup.html?window=1");
+          if (browser.windows?.create) {
+            await browser.windows.create({
+              url,
+              type: "normal",
+              width: 560,
+              height: 760,
+            });
+            opened = true;
+          } else {
+            await browser.tabs.create({ url });
+            opened = true;
+          }
+        } catch {
+          opened = false;
+        }
+      }
+      sendResponse({ success: opened });
+    });
+    return true;
+  }
+
+  if (request.action === "getUiFontSize") {
+    sendNativeMessage("getUiPreferences")
+      .then((response) => {
+        const size = Number(response?.font_size);
+        if (Number.isFinite(size) && size >= 14 && size <= 24) {
+          browser.storage.local.set({ sherlock_font_size: size });
+          sendResponse({ success: true, size });
+        } else {
+          sendResponse({ success: false, error: "No font size stored" });
+        }
+      })
+      .catch((error) => sendResponse({ success: false, error: error.message }));
+    return true;
+  }
+
+  if (request.action === "setUiFontSize") {
+    const size = Number(request.size);
+    if (!Number.isFinite(size) || size < 14 || size > 24) {
+      sendResponse({ success: false, error: "Invalid font size" });
+      return false;
+    }
+    sendNativeMessage("setUiPreferences", { font_size: size })
+      .then(() => {
+        browser.storage.local.set({ sherlock_font_size: size });
+        sendResponse({ success: true, size });
+      })
+      .catch((error) => sendResponse({ success: false, error: error.message }));
+    return true;
+  }
+
   // Use async/await + Promise form so this works in both Firefox and Chrome.
   if (request.action === "getActiveTab") {
     browser.tabs
       .query({ active: true, currentWindow: true })
       .then((tabs) => {
         if (tabs && tabs[0]) {
-          try {
-            const urlObj = new URL(tabs[0].url);
-            sendResponse({
-              id: tabs[0].id,
-              url: tabs[0].url,
-              hostname: urlObj.hostname.replace(/^www\./, ""),
-              title: tabs[0].title,
-            });
-          } catch (_) {
-            // URL parsing failed (about:, chrome://, etc.)
-            sendResponse({
-              id: tabs[0].id,
-              url: tabs[0].url,
-              hostname: "",
-              title: tabs[0].title,
-            });
-          }
+          sendResponse({
+            id: tabs[0].id,
+            url: tabs[0].url,
+            hostname: websiteHostname(tabs[0].url),
+            title: tabs[0].title,
+          });
         } else {
           sendResponse(null);
         }
@@ -519,6 +766,7 @@ browser.runtime.onMessage.addListener((request, sender, sendResponse) => {
 });
 
 browser.runtime.onInstalled.addListener(() => {
+  loadToolbarTheme();
   try {
     browser.contextMenus.create({
       id: "sherlock_autofill",

@@ -34,30 +34,6 @@ const fallbackWordsByLanguage = {
     "star",
     "meadow",
   ],
-  Francès: [
-    "nuage",
-    "rivière",
-    "lumière",
-    "forêt",
-    "lune",
-    "vent",
-    "feu",
-    "chemin",
-    "étoile",
-    "prairie",
-  ],
-  Français: [
-    "nuage",
-    "rivière",
-    "lumière",
-    "forêt",
-    "lune",
-    "vent",
-    "feu",
-    "chemin",
-    "étoile",
-    "prairie",
-  ],
 };
 
 const USERNAME_LANGUAGE_ALIASES = {
@@ -66,8 +42,6 @@ const USERNAME_LANGUAGE_ALIASES = {
   Español: "Castellà",
   Anglès: "Anglès",
   English: "Anglès",
-  Francès: "Francès",
-  Français: "Francès",
 };
 
 export const USERNAME_FORMATS = Object.freeze([
@@ -223,10 +197,14 @@ export function passwordMeetsRequirements(password) {
   return passwordRequirements(password).every((requirement) => requirement.met);
 }
 
-export function passwordRequirementsMarkup(password = "") {
+export function passwordRequirementsMarkup(
+  password = "",
+  title = "La contrasenya mestra ha de complir:",
+  ariaLabel = "Requisits de la contrasenya mestra",
+) {
   return `
-    <p class="requirements-title">La contrasenya mestra ha de complir:</p>
-    <ul class="password-requirements" data-password-requirements aria-label="Requisits de la contrasenya mestra">
+    <p class="requirements-title">${title}</p>
+    <ul class="password-requirements" data-password-requirements aria-label="${ariaLabel}">
       ${passwordRequirements(password)
         .map(
           (requirement) =>
@@ -292,8 +270,12 @@ export function passwordStrength(password) {
 
 export function passphraseWordPool(options, language = "Català") {
   const seen = new Set();
-  const words = generatorWords(language, options.onlyUnaccented);
-  return words.reduce((pool, word) => {
+  const canonical = canonicalUsernameLanguage(language);
+  const base =
+    canonical === "Anglès"
+      ? EFF_WORDLIST
+      : generatorWords(canonical, options.onlyUnaccented);
+  return base.reduce((pool, word) => {
     const formatted = formatGeneratorWord(word, options.removeAccents);
     const displayWord =
       options.uppercaseWords === false
@@ -308,6 +290,34 @@ export function passphraseWordPool(options, language = "Català") {
   }, []);
 }
 
+export const GENERATOR_MIN_LENGTH = 8;
+export const GENERATOR_MAX_LENGTH = 128;
+export const GENERATOR_MAX_MIN_COUNT = 20;
+export const GENERATOR_DEFAULT_MIN_COUNT = 2;
+
+export function clampGeneratorMinCount(value) {
+  const count = Number(value);
+  if (!Number.isFinite(count)) return 0;
+  return Math.min(GENERATOR_MAX_MIN_COUNT, Math.max(0, Math.trunc(count)));
+}
+
+export function generatorMinimumLength(options = {}) {
+  return (
+    (options.uppercase ? 1 : 0) +
+    (options.lowercase ? 1 : 0) +
+    (options.numbers
+      ? clampGeneratorMinCount(
+          options.minNumbers ?? GENERATOR_DEFAULT_MIN_COUNT,
+        )
+      : 0) +
+    (options.symbols
+      ? clampGeneratorMinCount(
+          options.minSymbols ?? GENERATOR_DEFAULT_MIN_COUNT,
+        )
+      : 0)
+  );
+}
+
 export function generateValue(type, options, language = "Català") {
   if (type === "password") {
     const characterSets = [
@@ -320,8 +330,49 @@ export function generateValue(type, options, language = "Català") {
       ? characterSets
       : ["abcdefghijkmnopqrstuvwxyz"];
     const alphabet = sets.join("");
-    const characters = sets.map((set) => set[secureRandomIndex(set.length)]);
-    while (characters.length < options.length) {
+    const characters = [];
+    if (options.uppercase) {
+      characters.push(
+        characterSets[0][secureRandomIndex(characterSets[0].length)],
+      );
+    }
+    const offset = options.uppercase ? 1 : 0;
+    if (options.lowercase) {
+      characters.push(
+        characterSets[offset][secureRandomIndex(characterSets[offset].length)],
+      );
+    }
+    const numberCount = options.numbers
+      ? clampGeneratorMinCount(
+          options.minNumbers ?? GENERATOR_DEFAULT_MIN_COUNT,
+        )
+      : 0;
+    const symbolCount = options.symbols
+      ? clampGeneratorMinCount(
+          options.minSymbols ?? GENERATOR_DEFAULT_MIN_COUNT,
+        )
+      : 0;
+    if (options.numbers) {
+      const numbers = "23456789";
+      for (let index = 0; index < numberCount; index += 1) {
+        characters.push(numbers[secureRandomIndex(numbers.length)]);
+      }
+    }
+    if (options.symbols) {
+      const symbols = "!@#$%^&*";
+      for (let index = 0; index < symbolCount; index += 1) {
+        characters.push(symbols[secureRandomIndex(symbols.length)]);
+      }
+    }
+    const length = Math.min(
+      GENERATOR_MAX_LENGTH,
+      Math.max(
+        GENERATOR_MIN_LENGTH,
+        Number(options.length) || 20,
+        characters.length,
+      ),
+    );
+    while (characters.length < length) {
       characters.push(alphabet[secureRandomIndex(alphabet.length)]);
     }
     for (let index = characters.length - 1; index > 0; index -= 1) {
@@ -336,7 +387,10 @@ export function generateValue(type, options, language = "Català") {
   if (type === "passphrase") {
     const wordCount = Math.min(12, Math.max(5, Number(options.words) || 6));
     options.words = wordCount;
-    const words = sampleWordsWithoutReplacement(EFF_WORDLIST, wordCount);
+    const words = sampleWordsWithoutReplacement(
+      passphraseWordPool(options, language),
+      wordCount,
+    );
     const value = words.join(options.separator);
     return options.includeNumber ? `${value}${secureRandomIndex(10)}` : value;
   }
@@ -344,17 +398,41 @@ export function generateValue(type, options, language = "Català") {
 }
 
 export function passwordOptions(options) {
+  const length = Math.min(
+    GENERATOR_MAX_LENGTH,
+    Math.max(
+      GENERATOR_MIN_LENGTH,
+      Number(options.length) || 20,
+      generatorMinimumLength(options),
+    ),
+  );
+  const minNumbers = clampGeneratorMinCount(
+    options.minNumbers ?? GENERATOR_DEFAULT_MIN_COUNT,
+  );
+  const minSymbols = clampGeneratorMinCount(
+    options.minSymbols ?? GENERATOR_DEFAULT_MIN_COUNT,
+  );
   return `
-    <label class="range-label">
-      Longitud <output id="generator-length-value">${options.length}</output>
+    <div class="range-label">
+      <label for="generator-length">Longitud</label>
+      <input
+        id="generator-length-input"
+        class="range-number"
+        type="number"
+        min="${Math.max(GENERATOR_MIN_LENGTH, generatorMinimumLength(options))}"
+        max="${GENERATOR_MAX_LENGTH}"
+        value="${length}"
+        aria-label="Longitud exacta"
+      />
       <input
         id="generator-length"
         type="range"
-        min="8"
-        max="128"
-        value="${options.length}"
+        min="${Math.max(GENERATOR_MIN_LENGTH, generatorMinimumLength(options))}"
+        max="${GENERATOR_MAX_LENGTH}"
+        value="${length}"
+        aria-label="Longitud"
       />
-    </label>
+    </div>
     <div class="check-grid">
       <label>
         <input data-option="uppercase" type="checkbox" ${options.uppercase ? "checked" : ""} />
@@ -373,12 +451,22 @@ export function passwordOptions(options) {
         !@#$%&*
       </label>
     </div>
+    <div class="generator-min-grid">
+      <label for="generator-min-numbers">Mínim de números
+        <input id="generator-min-numbers" type="number" min="0" max="${GENERATOR_MAX_MIN_COUNT}" value="${minNumbers}" ${options.numbers ? "" : "disabled"} />
+      </label>
+      <label for="generator-min-symbols">Mínim de caràcters especials
+        <input id="generator-min-symbols" type="number" min="0" max="${GENERATOR_MAX_MIN_COUNT}" value="${minSymbols}" ${options.symbols ? "" : "disabled"} />
+      </label>
+    </div>
+    <small class="helper">Els mínims de números i símbols només s'apliquen si la casella corresponent està activada.</small>
   `;
 }
 
 export function passphraseOptions(options, language = "Català") {
   const minWords = 5;
   const maxWords = 12;
+  const isEnglish = canonicalUsernameLanguage(language) === "Anglès";
   const wordCount = Math.min(
     maxWords,
     Math.max(minWords, Number(options.words) || 6),
@@ -400,6 +488,10 @@ export function passphraseOptions(options, language = "Català") {
       <input data-option="includeNumber" type="checkbox" ${options.includeNumber ? "checked" : ""} />
       Inclou número
     </label>
+    ${
+      isEnglish
+        ? ""
+        : `
     <label class="check-label">
       <input data-option="removeAccents" type="checkbox" ${options.removeAccents ? "checked" : ""} />
       Treure accents
@@ -408,7 +500,9 @@ export function passphraseOptions(options, language = "Català") {
       <input data-option="onlyUnaccented" type="checkbox" ${options.onlyUnaccented ? "checked" : ""} />
       Només paraules sense accents
     </label>
-    <small class="helper">Les paraules s'escullen de la llista EFF (anglès) sense repetir-se.</small>
+    `
+    }
+    <small class="helper">Les paraules s'escullen de la llista de l'idioma seleccionat sense repetir-se.</small>
   `;
 }
 

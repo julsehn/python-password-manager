@@ -13,12 +13,16 @@ pub const ARGON2_TIME_COST: u32 = 3;
 pub const ARGON2_PARALLELISM: u32 = 1;
 pub const KEY_LENGTH: usize = 32;
 
+/// Shared message for failed authenticated decryption (wrong password or tampered data).
+pub const DECRYPTION_FAILED: &str =
+    "No s'ha pogut desxifrar les dades. Comprova que la contrasenya mestra sigui correcta.";
+
 const ASSOCIATED_DATA: &[u8] = b"";
 
 pub fn decode_base64(value: &str, field: &str) -> Result<Vec<u8>, String> {
     BASE64
         .decode(value)
-        .map_err(|_| format!("Invalid {} format", field))
+        .map_err(|_| format!("Format de {} no vàlid", field))
 }
 
 pub fn generate_secure_token() -> Result<String, String> {
@@ -58,11 +62,11 @@ pub fn derive_key_from_password_with_params(
 ) -> Result<Zeroizing<Vec<u8>>, String> {
     let mut key = [0u8; KEY_LENGTH];
     let params = Params::new(memory_cost_kib, time_cost, parallelism, Some(key.len()))
-        .map_err(|e| format!("Invalid Argon2id parameters: {}", e))?;
+        .map_err(|e| format!("Paràmetres d'Argon2id no vàlids: {}", e))?;
     let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
     let res = argon2
         .hash_password_into(password.as_bytes(), salt, &mut key)
-        .map_err(|e| format!("Failed to derive key with Argon2id: {}", e));
+        .map_err(|e| format!("No s'ha pogut derivar la clau amb Argon2id: {}", e));
 
     if let Err(err) = res {
         key.zeroize();
@@ -76,7 +80,7 @@ pub fn derive_key_from_password_with_params(
 
 pub fn encrypt_aes_gcm(key: &[u8], nonce: &[u8], plaintext: &[u8]) -> Result<Vec<u8>, String> {
     let cipher = Aes256Gcm::new_from_slice(key)
-        .map_err(|e| format!("Failed to initialize cipher: {}", e))?;
+        .map_err(|e| format!("No s'ha pogut inicialitzar el xifratge: {}", e))?;
 
     if nonce.len() != 12 {
         return Err("Invalid nonce length".to_string());
@@ -89,16 +93,18 @@ pub fn encrypt_aes_gcm(key: &[u8], nonce: &[u8], plaintext: &[u8]) -> Result<Vec
                 aad: ASSOCIATED_DATA,
             },
         )
-        .map_err(|e| format!("Encryption failed: {}", e))
+        .map_err(|e| format!("No s'ha pogut xifrar: {}", e))
 }
 
 pub fn decrypt_aes_gcm(key: &[u8], nonce: &[u8], ciphertext: &[u8]) -> Result<Vec<u8>, String> {
     let cipher = Aes256Gcm::new_from_slice(key)
-        .map_err(|e| format!("Failed to initialize cipher: {}", e))?;
+        .map_err(|e| format!("No s'ha pogut inicialitzar el xifratge: {}", e))?;
 
     if nonce.len() != 12 {
-        return Err("Invalid nonce length".to_string());
+        return Err("Longitud del nonce no vàlida".to_string());
     }
+    // AES-256-GCM cannot tell a wrong key from tampered data, so the message
+    // covers both cases and never leaks the internal aead error.
     cipher
         .decrypt(
             Nonce::from_slice(nonce),
@@ -107,7 +113,7 @@ pub fn decrypt_aes_gcm(key: &[u8], nonce: &[u8], ciphertext: &[u8]) -> Result<Ve
                 aad: ASSOCIATED_DATA,
             },
         )
-        .map_err(|e| format!("Decryption failed - invalid password: {}", e))
+        .map_err(|_| DECRYPTION_FAILED.to_string())
 }
 
 pub fn generate_password(

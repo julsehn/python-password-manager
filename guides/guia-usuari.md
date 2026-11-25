@@ -50,6 +50,25 @@ La pestanya **Generador** crea contrasenyes o frases. Pots triar la longitud, el
 - **Temps de bloqueig automàtic**: per defecte, 15 minuts. També pots triar 5, 30 o mai. Qualsevol clic o tecla reinicia el comptador.
 - **Canvia la contrasenya mestra**: rexifra la caixa sencera. Les entrades, carpetes, la paperera, l'historial i la sessió del núvol es conserven.
 
+### Aparença i accessibilitat
+
+Abans de crear la caixa, SherLock et demana el **tema** (clar, obscur o automàtic) i la **mida del text**. Ho pots canviar sempre que vulguis a **Configuració → Aparença**, entre 14 i 24 px, amb vista prèvia immediata. Els textos secundaris mantenen una mida mínima llegible i un contrast alt, també en mode fosc.
+
+La mida del text se sincronitza amb l'extensió del navegador: si la canvies a l'app, l'extensió l'adopta en obrir-se; si la canvies a l'extensió, l'app l'adopta en tornar a tenir el focus. Cal tenir el native host instal·lat.
+
+### Paperera
+
+Els accessos eliminats no es perden: van a la **Paperera**, que s'obre amb la icona de la paperera de la capçalera de la llista d'accessos (mostra quants elements hi ha). Des d'allà els pots recuperar o esborrar definitivament.
+
+Cada entrada de l'extensió té un **llapis** per editar-la i un botó de **copiar** amb dues opcions: copiar l'usuari o copiar la contrasenya. En clicar la targeta de l'entrada es mostren el lloc, l'usuari, la contrasenya i les notes.
+
+### Emplenament des de l'extensió
+
+- En clicar la icona de SherLock en un camp de login, si hi ha diversos accessos per al lloc apareix un menú per triar-ne un.
+- Si l'accés triat està desat per a un altre domini del mateix lloc, l'extensió pregunta si vols **afegir aquest lloc i omplir** o **només omplir**.
+- Si no hi ha cap accés per al lloc, pregunta si vols obrir l'extensió per **crear una entrada nova**. S'obre la pestanya **Desar** amb el lloc i l'usuari ja emplenats; només cal posar la contrasenya.
+- Quan envies un formulari amb una contrasenya diferent de la desada, pregunta si vols **actualitzar** l'accés existent o **crear una entrada nova**. Si confirmes, es desa automàticament.
+
 ### Browsers vinculats
 
 Cada navegador s'ha de vincular un cop. Prem **Generar codi per vincular un navegador** i escriu el codi a l'extensió. El codi dura dos minuts i només serveix una vegada. Si un navegador deixa de ser teu, revoca la vinculació des d'aquesta mateixa llista.
@@ -58,12 +77,13 @@ Cada navegador s'ha de vincular un cop. Prem **Generar codi per vincular un nave
 
 - **Importar JSON / CSV**: accepta exportacions d'altres gestors. Revisa el resultat abans de confiar-hi.
 - **Exportar**: baixa un JSON amb les entrades en text pla. L'aplicació t'avisa abans i té motiu: serveix per migrar o per fer una còpia de seguretat, però no el deixis en un lloc compartit.
-- **Paperera**: els accessos esborrats hi queden fins que els buidis.
 - **Eliminar dades locals i començar de nou**: esborra la caixa d'aquest dispositiu. No toca el núvol.
 
 ### Sincronització amb Railway
 
 Si connectes el compte, el botó **Sincronitzar** puja els canvis i baixa els que hagi fet un altre dispositiu. El servidor guarda el fitxer xifrat i la versió, res més.
+
+En crear el compte de Railway, la contrasenya ha de complir els mateixos requisits de força que la mestra (12 caràcters, majúscula, minúscula, número i símbol). L'aplicació també t'avisa si escrius exactament la mateixa contrasenya mestra; la comprovació es fa dins del nucli de SherLock i la mestra no s'envia mai a la interfície.
 
 - **Tancar sessió** revoca els testimonis al servidor. La còpia local es queda on és.
 - **Eliminar compte i dades del núvol** esborra la caixa remota i el compte. La còpia local tampoc no es toca.

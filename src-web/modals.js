@@ -31,7 +31,7 @@ export function trashCard(item) {
 export function historyItem(item) {
   return `
     <div class="history-item">
-      <span class="history-kind">${escapeHtml(item.type)}</span>
+      <span class="history-kind">${escapeHtml(item.type || item.kind || "Generador")}</span>
       <code>${escapeHtml(item.value)}</code>
       <button class="icon-btn" data-copy-history="${escapeHtml(item.value)}" title="Copiar">
         ${icon("Copy", 16)}

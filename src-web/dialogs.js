@@ -106,27 +106,27 @@ export function createDialogViews(state) {
         1: {
           kicker: "PAS 1 DE 5",
           title: "Comença aquí",
-          text: "Fes clic al botó «Nou accés» per començar a guardar el teu primer servei.",
+          text: "Fes clic a «Nou accés» per començar a guardar el teu primer servei.",
         },
         2: {
           kicker: "PAS 2 DE 5",
           title: "Afegeix les dades",
-          text: "Escriu el nom del servei. Després t'ensenyarem a crear una contrasenya segura.",
+          text: "Escriu el nom del servei. Quan vulguis, prem «Continuar» per veure com generar una contrasenya segura.",
         },
         3: {
           kicker: "PAS 3 DE 5",
           title: "Genera una contrasenya segura",
-          text: "Fes clic a la icona de regenerar del camp de contrasenya per obrir el generador.",
+          text: "Fes clic a «Generar», al costat del camp de contrasenya, per obrir el generador.",
         },
         4: {
           kicker: "PAS 4 DE 5",
           title: "Utilitza la contrasenya",
-          text: "Revisa la suggerencia i prem «Utilitza aquesta contrasenya» per tornar al formulari.",
+          text: "Revisa la suggerència i prem «Utilitza aquesta contrasenya» per tornar al formulari.",
         },
         5: {
           kicker: "PAS 5 DE 5",
           title: "Desa el teu accés",
-          text: "Quan hagis completat els camps obligatoris, fes clic a la icona de confirmació per desar-lo.",
+          text: "Quan els camps obligatoris estiguin plens, prem «Guarda» per desar l'accés.",
         },
       }[step] || {};
 
@@ -200,8 +200,9 @@ export function createDialogViews(state) {
                 readonly
                 value="${escapeHtml(entry.password)}"
               />
-              <button class="icon-btn" id="reveal-details-password" title="Mostrar/ocultar la contrasenya">
-                ${icon("Eye", 17)}
+              <button class="icon-btn" id="reveal-details-password" title="Mostrar contrasenya" aria-label="Mostrar contrasenya" aria-pressed="false">
+                <span class="eye-open">${icon("Eye", 17)}</span>
+                <span class="eye-off">${icon("EyeOff", 17)}</span>
               </button>
               <button class="icon-btn" data-copy-text="${escapeHtml(entry.password)}" title="Copiar la contrasenya">
                 ${icon("Copy", 17)}
@@ -286,7 +287,7 @@ export function createDialogViews(state) {
             ${icon("X", 20)}
           </button>
           <h2 id="entry-title">${isEditing ? "Editar accés" : "Nou accés"}</h2>
-          <button class="modal-icon ${state.showFirstEntryGuide && state.firstEntryGuideStep === 5 ? "guide-highlight" : ""}" id="save-entry-top" title="Desar">
+          <button class="modal-icon" id="save-entry-top" title="Desar">
             ${icon("Check", 20)}
           </button>
         </header>
@@ -337,22 +338,22 @@ export function createDialogViews(state) {
                   autocomplete="new-password"
                   value="${escapeHtml(values.password)}"
                 />
-                <button type="button" class="field-action" id="entry-password-reveal" title="Mostrar contrasenya">
-                  ${icon("Eye", 18)}
-                </button>
-                <button type="button" class="field-action ${state.showFirstEntryGuide && state.firstEntryGuideStep === 3 ? "guide-highlight" : ""}" id="generate-password" title="Obrir el generador" aria-label="Obrir el generador de contrasenyes">
-                  ${icon("RefreshCw", 18)}
-                  <span class="field-action-text">Generar</span>
-                </button>
+                <div class="field-actions">
+                  <button type="button" class="field-action" id="entry-password-reveal" title="Mostrar contrasenya" aria-label="Mostrar contrasenya" aria-pressed="false">
+                    <span class="eye-open">${icon("Eye", 18)}</span>
+                    <span class="eye-off">${icon("EyeOff", 18)}</span>
+                  </button>
+                  <button type="button" class="field-action ${state.showFirstEntryGuide && state.firstEntryGuideStep === 3 ? "guide-highlight" : ""}" id="generate-password" title="Obrir el generador" aria-label="Obrir el generador de contrasenyes">
+                    ${icon("RefreshCw", 18)}
+                    <span class="field-action-text">Generar</span>
+                  </button>
+                </div>
               </div>
               <div class="inline-password-strength" id="entry-password-strength" ${values.password ? "" : "hidden"}>
                 <div class="strength-label"><span>Força</span><strong>${values.password ? passwordStrength(values.password).label : ""}</strong></div>
                 <div class="strength-track"><span class="strength-fill strength-${values.password ? passwordStrength(values.password).level : "weak"} strength-width-${values.password ? passwordStrength(values.password).percent : 0}"></span></div>
                 <small>${values.password ? passwordStrength(values.password).hint : ""}</small>
               </div>
-              <small class="helper">
-                La contrasenya està oculta. Utilitza el generador per crear-ne una de forta i única.
-              </small>
             </section>
 
             <section class="form-section">
@@ -379,7 +380,7 @@ export function createDialogViews(state) {
             <button type="button" class="secondary" id="cancel-entry-bottom">
               Cancel·la
             </button>
-            <button type="submit" class="primary" ${state.saving ? "disabled" : ""}>
+            <button type="submit" id="save-entry-bottom" class="primary ${state.showFirstEntryGuide && state.firstEntryGuideStep === 5 ? "guide-highlight" : ""}" ${state.saving ? "disabled" : ""}>
               ${state.saving ? "Desant..." : isEditing ? "Desar canvis" : "Guarda"}
             </button>
           </footer>
@@ -657,7 +658,6 @@ export function createDialogViews(state) {
               <label class="form-label" for="auth-password">Contrasenya de Railway:</label>
               <div class="password-input-wrapper">
                 <input
-                  class="form-input"
                   id="auth-password"
                   name="password"
                   type="password"
@@ -666,13 +666,22 @@ export function createDialogViews(state) {
                   placeholder="${activeTab === "register" ? "Mínim 12 caràcters" : "La teva contrasenya de Railway"}"
                   class="form-input cloud-password-input"
                 />
-                <button type="button" class="reveal cloud-password-reveal" id="reveal-cloud-password" title="Mostrar/Amagar">
-                  ${icon("Eye", 16)}
+                <button type="button" class="reveal cloud-password-reveal" id="reveal-cloud-password" title="Mostrar contrasenya" aria-label="Mostrar contrasenya" aria-pressed="false">
+                  <span class="eye-open">${icon("Eye", 16)}</span>
+                  <span class="eye-off">${icon("EyeOff", 16)}</span>
                 </button>
               </div>
               ${
                 activeTab === "register"
-                  ? '<p class="helper helper-small helper-top-small">No pot ser la mateixa que la contrasenya mestra de la SherLock.</p>'
+                  ? `
+                <p class="helper helper-small helper-top-small">No pot ser la mateixa que la contrasenya mestra de la SherLock.</p>
+                <div class="password-setup-feedback cloud-password-feedback" id="cloud-password-feedback">
+                  ${passwordStrengthMarkup("")}
+                  ${passwordRequirementsMarkup("", "La contrasenya de Railway ha de complir:", "Requisits de la contrasenya de Railway")}
+                  <p class="password-match" data-password-match hidden aria-live="polite"></p>
+                </div>
+                <p class="cloud-password-warning" id="cloud-password-warning" role="alert" hidden></p>
+              `
                   : ""
               }
             </div>

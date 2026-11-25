@@ -789,6 +789,8 @@ pub async fn route_request(
         let username = parsed["username"].as_str().unwrap_or("").trim();
         let password = parsed["password"].as_str().unwrap_or("").trim();
         let notes = parsed["notes"].as_str().unwrap_or("").trim();
+        let force_new = parsed["force_new"].as_bool().unwrap_or(false);
+        let entry_id = parsed["id"].as_str().unwrap_or("").trim();
 
         if site.is_empty() || password.is_empty() {
             return (
@@ -797,15 +799,32 @@ pub async fn route_request(
             );
         }
 
-        let existing_index = vault.entries.iter().position(|e| {
-            e.site.eq_ignore_ascii_case(site) && e.username.eq_ignore_ascii_case(username)
-        });
+        let existing_index = if force_new {
+            None
+        } else if !entry_id.is_empty() {
+            vault.entries.iter().position(|e| e.id == entry_id)
+        } else {
+            vault.entries.iter().position(|e| {
+                e.site.eq_ignore_ascii_case(site) && e.username.eq_ignore_ascii_case(username)
+            })
+        };
+
+        if !entry_id.is_empty() && existing_index.is_none() {
+            return (
+                404,
+                r#"{"success":false,"error":"Credential not found"}"#.to_string(),
+            );
+        }
 
         let saved_entry = match existing_index {
             Some(idx) => {
                 let existing = &mut vault.entries[idx];
+                if !entry_id.is_empty() {
+                    existing.site = site.to_string();
+                    existing.username = username.to_string();
+                }
                 existing.password = password.to_string();
-                if !notes.is_empty() {
+                if !entry_id.is_empty() || !notes.is_empty() {
                     existing.notes = notes.to_string();
                 }
                 existing.updated_at = Some(Utc::now().to_rfc3339());
@@ -861,6 +880,82 @@ pub async fn route_request(
             "entry": saved_entry
         });
         return (200, res.to_string());
+    }
+
+    if path == "/api/v1/credentials" && method == "DELETE" {
+        if !check_request_auth(headers, state) {
+            return (
+                401,
+                r#"{"success":false,"error":"Authentication required"}"#.to_string(),
+            );
+        }
+        let parsed: serde_json::Value = match serde_json::from_str(body) {
+            Ok(value) => value,
+            Err(_) => return (400, r#"{"error":"Invalid JSON body"}"#.to_string()),
+        };
+        let entry_id = parsed["id"].as_str().unwrap_or("").trim();
+        if entry_id.is_empty() {
+            return (
+                400,
+                r#"{"success":false,"error":"Credential id is required"}"#.to_string(),
+            );
+        }
+
+        let _permit = match state.write_semaphore.acquire().await {
+            Ok(permit) => permit,
+            Err(error) => {
+                return (
+                    500,
+                    serde_json::json!({"success": false, "error": error.to_string()}).to_string(),
+                )
+            }
+        };
+        let mut unlocked = state
+            .unlocked_data
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let vault = match &mut *unlocked {
+            Some(vault) => vault,
+            None => {
+                return (
+                    401,
+                    r#"{"success":false,"unlocked":false,"error":"Vault is locked"}"#.to_string(),
+                )
+            }
+        };
+        let Some(index) = vault.entries.iter().position(|entry| entry.id == entry_id) else {
+            return (
+                404,
+                r#"{"success":false,"error":"Credential not found"}"#.to_string(),
+            );
+        };
+        let removed = vault.entries.remove(index);
+        let vault_data = VaultData {
+            entries: vault.entries.clone(),
+            folders: vault.folders.clone(),
+            deleted_entries: vault.trash.clone(),
+            history: vault.history.clone(),
+            cloud_session: vault.cloud_session.clone(),
+        };
+        if let Err(error) = save_vault_data(&vault.master_password, &vault_data) {
+            return (
+                500,
+                serde_json::json!({"success": false, "error": error}).to_string(),
+            );
+        }
+        if let Some(handle) = state
+            .app_handle
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .as_ref()
+        {
+            use tauri::Emitter;
+            let _ = handle.emit("vault-updated", serde_json::json!({"deleted": removed.id}));
+        }
+        return (
+            200,
+            serde_json::json!({"success": true, "deleted_id": removed.id}).to_string(),
+        );
     }
 
     (404, r#"{"error":"Not Found"}"#.to_string())

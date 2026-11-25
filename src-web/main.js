@@ -26,8 +26,13 @@ import {
   icons,
 } from "./constants.js";
 import {
+  GENERATOR_DEFAULT_MIN_COUNT,
+  GENERATOR_MAX_LENGTH,
+  GENERATOR_MIN_LENGTH,
   MASTER_PASSWORD_MIN_LENGTH,
+  clampGeneratorMinCount,
   generateValue as generateCredentialValue,
+  generatorMinimumLength,
   passwordMeetsRequirements,
   passwordRequirements,
   passwordStrength,
@@ -42,6 +47,8 @@ let paletteHideTimer;
 let cloudUsernameCheckSequence = 0;
 let cloudUsernameCheckTimer = null;
 let cloudUsernameChecked = { username: "", railwayUrl: "" };
+let cloudPasswordMatchTimer = null;
+let cloudPasswordMatchSequence = 0;
 
 const savedSettings = (() => {
   try {
@@ -86,6 +93,7 @@ const state = {
   locked: true,
   vaultExists: null,
   showFirstEntryGuide: false,
+  showSetupPreferences: false,
   firstEntryGuideStep: 1,
   loading: false,
   entries: [],
@@ -105,6 +113,7 @@ const state = {
   entryFormDraft: null,
   showEntryForm: false,
   showTrashModal: false,
+  showTrashHint: false,
   showResetConfirm: false,
   showFolderModal: false,
   editingFolderId: null,
@@ -141,6 +150,8 @@ const state = {
     lowercase: true,
     numbers: true,
     symbols: true,
+    minNumbers: GENERATOR_DEFAULT_MIN_COUNT,
+    minSymbols: GENERATOR_DEFAULT_MIN_COUNT,
     words: 6,
     separator: "-",
     usernameFormat: "word",
@@ -284,6 +295,10 @@ async function lockVault() {
   state.query = "";
   state.showChangeAuthModal = false;
   state.showPrivacyPolicy = false;
+  state.showSetupPreferences = false;
+  state.showTrashHint = false;
+  state.generatorType = "password";
+  state.generatedValue = "";
   state.changeAuthError = "";
   state.view = "vault";
   render();
@@ -297,6 +312,7 @@ async function initializeApp() {
     state.vaultExists = Boolean(info.exists);
     if (!state.vaultExists) {
       state.error = "";
+      state.showSetupPreferences = true;
     }
     render();
   } catch {
@@ -427,6 +443,66 @@ function setCloudError(message) {
   if (state.cloudError) render();
 }
 
+function resetCloudPasswordMatchCheck() {
+  if (cloudPasswordMatchTimer) {
+    clearTimeout(cloudPasswordMatchTimer);
+    cloudPasswordMatchTimer = null;
+  }
+  cloudPasswordMatchSequence++;
+  const warning = document.querySelector("#cloud-password-warning");
+  if (warning) {
+    warning.hidden = true;
+    warning.textContent = "";
+  }
+  document.querySelector("#auth-password")?.removeAttribute("aria-invalid");
+}
+
+function updateCloudPasswordFeedback() {
+  const passwordInput = document.querySelector("#auth-password");
+  const feedback = document.querySelector("#cloud-password-feedback");
+  if (!passwordInput || !feedback) return;
+
+  const password = passwordInput.value;
+  const confirm = document.querySelector("#auth-confirm-password")?.value || "";
+  renderPasswordFeedback(feedback, password, confirm);
+  resetCloudPasswordMatchCheck();
+
+  if (
+    state.cloudTab !== "register" ||
+    state.locked ||
+    !isTauriRuntime() ||
+    [...password].length < MASTER_PASSWORD_MIN_LENGTH
+  ) {
+    return;
+  }
+
+  const sequence = cloudPasswordMatchSequence;
+  cloudPasswordMatchTimer = setTimeout(async () => {
+    cloudPasswordMatchTimer = null;
+    try {
+      const matches = await invoke("cloud_password_matches_master", {
+        password,
+      });
+      if (sequence !== cloudPasswordMatchSequence) return;
+      if (state.cloudTab !== "register") return;
+      const warning = document.querySelector("#cloud-password-warning");
+      if (!warning) return;
+      if (matches) {
+        warning.hidden = false;
+        warning.textContent =
+          "Aquesta contrasenya és la mateixa que la contrasenya mestra de la SherLock. Tria'n una de diferent.";
+        passwordInput.setAttribute("aria-invalid", "true");
+      } else {
+        warning.hidden = true;
+        warning.textContent = "";
+        passwordInput.removeAttribute("aria-invalid");
+      }
+    } catch {
+      // The registration command still rejects equality server-side.
+    }
+  }, 350);
+}
+
 async function checkUsernameAvailability({ force = false } = {}) {
   if (state.cloudTab !== "register") return null;
   if (cloudUsernameCheckTimer) {
@@ -542,10 +618,11 @@ async function cloudAuthSubmit(event) {
       setCloudError("Les contrasenyes no coincideixen.");
       return;
     }
-    if (password.length < 12) {
+    if (!passwordMeetsRequirements(password)) {
       setCloudError(
-        "La contrasenya de Railway ha de tenir almenys 12 caràcters.",
+        `La contrasenya de Railway ha de tenir com a mínim ${MASTER_PASSWORD_MIN_LENGTH} caràcters i incloure majúscules, minúscules, números i un caràcter especial.`,
       );
+      document.querySelector("#auth-password")?.focus();
       return;
     }
     if (!privacyAccepted) {
@@ -646,7 +723,12 @@ async function cloudAuthSubmit(event) {
 
       const vault = JSON.parse(serialized);
       state.entries = (vault.entries || []).map(mapVaultEntry);
-      state.folders = vault.folders || [];
+      state.entries.forEach((entry) => {
+        if (entry.folderId === "default") entry.folderId = "";
+      });
+      state.folders = (vault.folders || []).filter(
+        (folder) => folder.id !== "default",
+      );
       state.trash = (vault.deleted_entries || []).map((entry) => ({
         ...entry,
         folderId: entry.folder_id || null,
@@ -687,6 +769,7 @@ async function handleCloudSyncNow() {
   if (!state.cloudConfig.authUser || !state.cloudConfig.vaultId) {
     state.showCloudLogin = true;
     state.cloudActionContext = "sync";
+    resetCloudPasswordMatchCheck();
     render();
     return;
   }
@@ -830,8 +913,12 @@ async function handleCloudSyncNow() {
  * "downloaded"). No toca el fitxer local: això ja ho fa la comanda Rust.
  */
 function applyDownloadedVault(vault) {
-  state.entries = (vault.entries || []).map(mapVaultEntry);
-  state.folders = vault.folders || [];
+  state.entries = (vault.entries || []).map((entry) =>
+    entry.folderId === "default" ? { ...entry, folderId: "" } : entry,
+  );
+  state.folders = (vault.folders || []).filter(
+    (folder) => folder.id !== "default",
+  );
   state.trash = (vault.deleted_entries || vault.trash || []).map((entry) => ({
     ...entry,
     folderId: entry.folder_id || null,
@@ -990,6 +1077,8 @@ async function confirmResetLocalVault() {
     state.locked = true;
     state.vaultExists = false;
     state.error = "";
+    state.showSetupPreferences = true;
+    state.showTrashHint = false;
     state.firstEntryGuideStep = 1;
     state.view = "vault";
     state.showChangeAuthModal = false;
@@ -1070,8 +1159,122 @@ function render() {
   enhanceRenderedUi();
   applySettings();
   bindEvents();
+  scheduleGuidePosition();
 
   restoreScroll(scrollPositions, prevView, prevLocked);
+}
+
+const GUIDE_TARGETS = {
+  1: { selector: "#new-entry", prefer: "below", align: "right" },
+  2: { selector: "#entry-name", prefer: "below", align: "left" },
+  3: { selector: "#generate-password", prefer: "below", align: "right" },
+  4: { selector: "#use-generated", prefer: "below", align: "center" },
+  5: { selector: "#save-entry-bottom", prefer: "above", align: "right" },
+};
+
+let guidePositionFrame = 0;
+
+function scheduleGuidePosition() {
+  if (guidePositionFrame) return;
+  guidePositionFrame = requestAnimationFrame(() => {
+    guidePositionFrame = 0;
+    positionGuideCallout();
+  });
+}
+
+function positionGuideCallout() {
+  const callout = document.querySelector(".guide-callout");
+  if (!callout) return;
+  const config = GUIDE_TARGETS[Number(state.firstEntryGuideStep)];
+  const target = config ? document.querySelector(config.selector) : null;
+  if (!target) return;
+
+  const targetRect = target.getBoundingClientRect();
+  if (!targetRect.width || !targetRect.height) return;
+  const calloutRect = callout.getBoundingClientRect();
+  const width = calloutRect.width;
+  const height = calloutRect.height;
+  const gap = 16;
+  const edge = 16;
+  const viewportWidth = window.innerWidth;
+  const viewportHeight = window.innerHeight;
+  const centerX = targetRect.left + targetRect.width / 2;
+  const centerY = targetRect.top + targetRect.height / 2;
+  const clamp = (value, min, max) => Math.min(Math.max(value, min), max);
+  const alignLeft = () =>
+    clamp(targetRect.left, edge, viewportWidth - width - edge);
+  const alignRight = () =>
+    clamp(targetRect.right - width, edge, viewportWidth - width - edge);
+  const alignCenter = () =>
+    clamp(centerX - width / 2, edge, viewportWidth - width - edge);
+  const aligns = { left: alignLeft, right: alignRight, center: alignCenter };
+
+  const below = {
+    placement: "below",
+    left: aligns[config.align](),
+    top: targetRect.bottom + gap,
+  };
+  const above = {
+    placement: "above",
+    left: aligns[config.align](),
+    top: targetRect.top - height - gap,
+  };
+  const left = {
+    placement: "left",
+    left: targetRect.left - width - gap,
+    top: centerY - height / 2,
+  };
+  const fits = (candidate) =>
+    candidate.left >= edge &&
+    candidate.top >= edge &&
+    candidate.left + width <= viewportWidth - edge &&
+    candidate.top + height <= viewportHeight - edge;
+
+  const candidates = [];
+  if (config.prefer === "above") candidates.push(above, below, left);
+  else if (config.prefer === "left") candidates.push(left, below, above);
+  else candidates.push(below, above, left);
+
+  let chosen = candidates.find(fits);
+  if (!chosen) {
+    const fallback = candidates[0];
+    chosen = {
+      placement: fallback.placement,
+      left: clamp(fallback.left, edge, viewportWidth - width - edge),
+      top: clamp(fallback.top, edge, viewportHeight - height - edge),
+    };
+  }
+
+  callout.style.left = `${chosen.left}px`;
+  callout.style.top = `${chosen.top}px`;
+  callout.style.right = "auto";
+  callout.style.transform = "none";
+  callout.dataset.placement = chosen.placement;
+
+  const arrow = callout.querySelector(".guide-callout-arrow");
+  if (!arrow) return;
+  arrow.style.left = "auto";
+  arrow.style.right = "auto";
+  arrow.style.top = "auto";
+  arrow.style.bottom = "auto";
+  arrow.style.marginLeft = "0";
+  if (chosen.placement === "below") {
+    arrow.style.top = "-9px";
+    arrow.style.left = `${clamp(centerX - chosen.left, 20, width - 20)}px`;
+    arrow.style.transform = "rotate(225deg)";
+  } else if (chosen.placement === "above") {
+    arrow.style.bottom = "-9px";
+    arrow.style.left = `${clamp(centerX - chosen.left, 20, width - 20)}px`;
+    arrow.style.transform = "rotate(45deg)";
+  } else if (chosen.placement === "left") {
+    arrow.style.right = "-9px";
+    arrow.style.top = `${clamp(centerY - chosen.top, 20, height - 20)}px`;
+    arrow.style.transform = "rotate(-45deg)";
+  } else {
+    arrow.style.left = "-9px";
+    arrow.style.top = `${clamp(centerY - chosen.top, 20, height - 20)}px`;
+    arrow.style.transform = "rotate(135deg)";
+  }
 }
 
 function applySettings() {
@@ -1084,7 +1287,7 @@ function applySettings() {
         : rawSize === "medium"
           ? 16
           : Number(rawSize) || 16;
-  const clampedSize = Math.min(24, Math.max(12, numSize));
+  const clampedSize = Math.min(24, Math.max(14, numSize));
   state.settings.fontSize = String(clampedSize);
 
   document.documentElement.dataset.theme = state.settings.theme || "auto";
@@ -1114,6 +1317,38 @@ function persistSettings() {
   applySettings();
 }
 
+function persistFontSizeToBackend(size) {
+  if (!isTauriRuntime()) return;
+  invoke("set_ui_font_size", { size: Number(size) }).catch(() => {});
+}
+
+async function syncFontSizeFromBackend() {
+  if (!isTauriRuntime()) return;
+  try {
+    const stored = await invoke("get_ui_font_size");
+    if (stored === null || stored === undefined) {
+      persistFontSizeToBackend(state.settings.fontSize);
+      return;
+    }
+    const size = Math.min(24, Math.max(14, Number(stored) || 16));
+    if (state.settings.fontSize === String(size)) return;
+    state.settings.fontSize = String(size);
+    localStorage.setItem("sherlock-settings", JSON.stringify(state.settings));
+    applySettings();
+    document
+      .querySelectorAll('input[name="font-size-choice"]')
+      .forEach((input) => {
+        input.checked = input.value === String(size);
+      });
+    const preview = document.querySelector("#font-size-preview");
+    if (preview) preview.style.fontSize = `${size}px`;
+    const value = document.querySelector("#font-size-preview-value");
+    if (value) value.textContent = `${size} px`;
+  } catch {
+    // The desktop backend is optional in the web build.
+  }
+}
+
 function enhanceRenderedUi() {
   document.querySelector(".sidebar-note")?.remove();
 
@@ -1132,11 +1367,9 @@ function enhanceRenderedUi() {
   }
 
   const output = document.querySelector(".generated-card output");
-  if (
-    output &&
-    state.generatorType === "password" &&
-    !output.querySelector("span")
-  ) {
+  const colorizeGenerated =
+    state.generatorType === "password" || state.generatorType === "passphrase";
+  if (output && colorizeGenerated && !output.querySelector("span")) {
     replaceMarkup(
       output,
       Array.from(output.textContent || "", (character) => {
@@ -1277,28 +1510,124 @@ function generateValue() {
   );
 }
 
+function normalizeGeneratorLength() {
+  const required = Math.max(
+    GENERATOR_MIN_LENGTH,
+    generatorMinimumLength(state.generatorOptions),
+  );
+  const current = Number(state.generatorOptions.length);
+  state.generatorOptions.length = Math.min(
+    GENERATOR_MAX_LENGTH,
+    Math.max(required, Number.isFinite(current) ? current : 20),
+  );
+}
+
+function syncGeneratorPasswordControls({ force = false } = {}) {
+  const required = Math.max(
+    GENERATOR_MIN_LENGTH,
+    generatorMinimumLength(state.generatorOptions),
+  );
+  const values = [
+    ["#generator-length", state.generatorOptions.length],
+    ["#generator-length-input", state.generatorOptions.length],
+    [
+      "#generator-min-numbers",
+      clampGeneratorMinCount(state.generatorOptions.minNumbers),
+    ],
+    [
+      "#generator-min-symbols",
+      clampGeneratorMinCount(state.generatorOptions.minSymbols),
+    ],
+  ];
+  for (const [selector, value] of values) {
+    const control = document.querySelector(selector);
+    if (!control) continue;
+    if (!force && document.activeElement === control) continue;
+    control.value = String(value);
+  }
+  for (const selector of ["#generator-length", "#generator-length-input"]) {
+    const control = document.querySelector(selector);
+    if (control) control.min = String(required);
+  }
+}
+
+function updateGeneratedStrengthMeter() {
+  const meter = document.querySelector(".password-strength");
+  if (!meter) return;
+  const strength = passwordStrength(state.generatedValue);
+  meter.hidden = false;
+  const label = meter.querySelector(".strength-label strong");
+  if (label) {
+    label.className = `strength-${strength.level}`;
+    label.textContent = strength.label;
+  }
+  const fill = meter.querySelector(".strength-fill");
+  if (fill) {
+    fill.className = `strength-fill strength-${strength.level} strength-width-${strength.percent}`;
+  }
+  const hint = meter.querySelector("small");
+  if (hint) hint.textContent = strength.hint;
+}
+
+function refreshGeneratedDisplay() {
+  const output = document.querySelector(".generated-card output");
+  if (output) output.textContent = state.generatedValue;
+  enhanceRenderedUi();
+  updateGeneratedStrengthMeter();
+}
+
 function updateGeneratorOptions(event) {
-  if (event.target.dataset.option)
-    state.generatorOptions[event.target.dataset.option] = event.target.checked;
-  if (event.target.id === "generator-length")
+  const target = event.target;
+  if (target.dataset.option) {
+    state.generatorOptions[target.dataset.option] = target.checked;
+    state.generatedValue = generateValue();
+    render();
+    return;
+  }
+
+  if (
+    target.id === "generator-length" ||
+    target.id === "generator-length-input"
+  ) {
+    const value = Number(target.value);
     state.generatorOptions.length = Math.min(
-      128,
-      Math.max(8, Number(event.target.value) || 20),
+      GENERATOR_MAX_LENGTH,
+      Math.max(GENERATOR_MIN_LENGTH, Number.isFinite(value) ? value : 20),
     );
-  if (event.target.id === "generator-words")
+    normalizeGeneratorLength();
+    state.generatedValue = generateValue();
+    syncGeneratorPasswordControls();
+    refreshGeneratedDisplay();
+    return;
+  }
+
+  if (
+    target.id === "generator-min-numbers" ||
+    target.id === "generator-min-symbols"
+  ) {
+    const key =
+      target.id === "generator-min-numbers" ? "minNumbers" : "minSymbols";
+    state.generatorOptions[key] = clampGeneratorMinCount(target.value);
+    normalizeGeneratorLength();
+    state.generatedValue = generateValue();
+    syncGeneratorPasswordControls();
+    refreshGeneratedDisplay();
+    return;
+  }
+
+  if (target.id === "generator-words") {
     state.generatorOptions.words = Math.min(
       12,
-      Math.max(5, Number(event.target.value) || 6),
+      Math.max(5, Number(target.value) || 6),
     );
-  if (event.target.id === "generator-separator")
-    state.generatorOptions.separator = event.target.value;
-  if (event.target.id === "username-format")
-    state.generatorOptions.usernameFormat = event.target.value;
-  state.generatedValue = generateValue();
-  const lengthValue = document.querySelector("#generator-length-value");
-  if (lengthValue && event.target.id === "generator-length") {
-    lengthValue.textContent = String(state.generatorOptions.length);
   }
+  if (target.id === "generator-separator") {
+    state.generatorOptions.separator = target.value;
+  }
+  if (target.id === "username-format") {
+    state.generatorOptions.usernameFormat = target.value;
+  }
+  state.generatedValue = generateValue();
   render();
 }
 
@@ -1417,6 +1746,23 @@ function setUnlockError(message) {
   errorElement.hidden = !state.error;
 }
 
+function setPasswordRevealState(button, visible) {
+  if (!button) return;
+  button.dataset.passwordVisible = String(visible);
+  button.setAttribute("aria-pressed", String(visible));
+  const label = visible ? "Amagar contrasenya" : "Mostrar contrasenya";
+  button.title = label;
+  button.setAttribute("aria-label", label);
+}
+
+function togglePasswordReveal(inputSelector, button) {
+  const input = document.querySelector(inputSelector);
+  if (!input) return;
+  const visible = input.type === "password";
+  input.type = visible ? "text" : "password";
+  setPasswordRevealState(button, visible);
+}
+
 function renderPasswordFeedback(feedback, password, confirm) {
   if (!feedback) return;
   const meter = feedback.querySelector("[data-password-strength]");
@@ -1529,9 +1875,24 @@ async function unlock(event) {
     if (input) input.value = "";
     document.querySelector("#master-password")?.setAttribute("value", "");
     state.entries = (result.entries || []).map(mapVaultEntry);
-    state.history = result.history || [];
-    state.trash = result.trash || [];
-    state.folders = result.folders || [];
+    state.history = (result.history || []).map((item) => ({
+      ...item,
+      type: item.kind,
+      createdAt: item.created_at,
+    }));
+    state.trash = (result.trash || []).map((entry) => ({
+      ...entry,
+      folderId: entry.folder_id || null,
+      createdAt: entry.created_at,
+      updatedAt: entry.updated_at,
+      deletedAt: entry.deleted_at,
+    }));
+    state.entries.forEach((entry) => {
+      if (entry.folderId === "default") entry.folderId = "";
+    });
+    state.folders = (result.folders || []).filter(
+      (folder) => folder.id !== "default",
+    );
     state.activeFolderId = "";
     state.vaultExists = true;
     state.locked = false;
@@ -1540,12 +1901,6 @@ async function unlock(event) {
     if (isNewVault) {
       state.firstEntryGuideStep = 1;
       const defaultFolders = [
-        {
-          id: "default",
-          name: "Tots els elements",
-          icon: "ShieldCheck",
-          color: "#2563eb",
-        },
         { id: "favorits", name: "Favorits", icon: "Star", color: "#fbbf24" },
         { id: "social", name: "Social", icon: "Heart", color: "#ec4899" },
       ];
@@ -1597,10 +1952,10 @@ async function saveVault(syncToRailway = false, backupExisting = false) {
 
   const history = state.history.map((h) => ({
     id: h.id,
-    kind: h.type,
+    kind: h.kind || h.type || "Generador",
     value: h.value,
-    language: h.language,
-    created_at: h.createdAt,
+    language: h.language || "Català",
+    created_at: h.createdAt || h.created_at || new Date().toISOString(),
   }));
 
   try {
@@ -1641,7 +1996,7 @@ async function exportVault() {
   const result = await askDialog({
     title: "Exportar la SherLock",
     message:
-      "L'export conté les contrasenyes en text pla. Desa'l només en un lloc segur.",
+      "L'exportació conté les contrasenyes en text pla. Desa'l només en un lloc segur.",
     confirmLabel: "Exportar",
     danger: true,
   });
@@ -1758,6 +2113,7 @@ function closeEntryForm() {
     state.entryFormDraft = null;
     state.returnToEntryForm = false;
     state.formError = "";
+    if (state.showFirstEntryGuide) state.showFirstEntryGuide = false;
     render();
   }
 }
@@ -1899,9 +2255,12 @@ async function saveEntry(event) {
   state.entries.push(entry);
   try {
     await saveVault();
+    const firstGuidedEntry =
+      state.showFirstEntryGuide && state.entries.length === 1;
     state.showEntryForm = false;
     state.editingEntryId = null;
     state.showFirstEntryGuide = false;
+    state.showTrashHint = firstGuidedEntry;
     state.saving = false;
     render();
     showToast("Accés desat de forma xifrada.");
@@ -2165,17 +2524,15 @@ function bindEvents() {
     state.firstEntryGuideStep = 1;
     render();
   });
-  document.querySelector("#reveal-password")?.addEventListener("click", () => {
-    const input = document.querySelector("#master-password");
-    if (!input) return;
-    input.type = input.type === "password" ? "text" : "password";
-  });
+  document
+    .querySelector("#reveal-password")
+    ?.addEventListener("click", (event) => {
+      togglePasswordReveal("#master-password", event.currentTarget);
+    });
   document
     .querySelector("#reveal-password-confirm")
-    ?.addEventListener("click", () => {
-      const input = document.querySelector("#master-password-confirm");
-      if (!input) return;
-      input.type = input.type === "password" ? "text" : "password";
+    ?.addEventListener("click", (event) => {
+      togglePasswordReveal("#master-password-confirm", event.currentTarget);
     });
   document.querySelectorAll("#open-cloud-login").forEach((button) =>
     button.addEventListener("click", () => {
@@ -2184,6 +2541,7 @@ function bindEvents() {
       state.cloudActionContext =
         button.dataset.context || (state.locked ? "download" : "settings");
       state.showCloudLogin = true;
+      resetCloudPasswordMatchCheck();
       render();
     }),
   );
@@ -2260,6 +2618,7 @@ function bindEvents() {
     state.cloudTab = "login";
     state.cloudError = "";
     resetCloudUsernameCheck();
+    resetCloudPasswordMatchCheck();
     render();
   });
   document
@@ -2268,6 +2627,7 @@ function bindEvents() {
       state.cloudTab = "register";
       state.cloudError = "";
       resetCloudUsernameCheck();
+      resetCloudPasswordMatchCheck();
       render();
     });
   document
@@ -2288,10 +2648,18 @@ function bindEvents() {
   });
   document
     .querySelector("#reveal-cloud-password")
-    ?.addEventListener("click", () => {
-      const input = document.querySelector("#auth-password");
-      if (input) input.type = input.type === "password" ? "text" : "password";
+    ?.addEventListener("click", (event) => {
+      togglePasswordReveal("#auth-password", event.currentTarget);
     });
+  document
+    .querySelector("#auth-password")
+    ?.addEventListener("input", updateCloudPasswordFeedback);
+  document
+    .querySelector("#auth-confirm-password")
+    ?.addEventListener("input", updateCloudPasswordFeedback);
+  if (document.querySelector("#cloud-password-feedback")) {
+    updateCloudPasswordFeedback();
+  }
 
   document
     .querySelector("#auth-username")
@@ -2455,6 +2823,12 @@ function bindEvents() {
     if (state.returnToEntryForm) {
       state.returnToEntryForm = false;
       state.showEntryForm = true;
+      if (state.showFirstEntryGuide && state.firstEntryGuideStep === 4) {
+        state.firstEntryGuideStep = 3;
+      }
+    }
+    if (state.showFirstEntryGuide && !state.showEntryForm) {
+      state.showFirstEntryGuide = false;
     }
     state.view = "vault";
     stopBrowserPairingTimers();
@@ -2462,14 +2836,16 @@ function bindEvents() {
     render();
   });
   document.querySelector("#nav-settings")?.addEventListener("click", () => {
+    state.showFirstEntryGuide = false;
     state.view = "settings";
     render();
     // Refresh browser list in background — don't block or re-render here.
     refreshPairedBrowsers().catch(() => {});
   });
   document.querySelector("#nav-generator")?.addEventListener("click", () => {
+    state.showFirstEntryGuide = false;
     state.generatorType = "password";
-    state.generatedValue = state.generatedValue || generateValue();
+    state.generatedValue = generateValue();
     state.view = "generator";
     stopBrowserPairingTimers();
     state.browserPairingCode = "";
@@ -2493,7 +2869,58 @@ function bindEvents() {
       if (out) out.textContent = `${val} px`;
       localStorage.setItem("sherlock-settings", JSON.stringify(state.settings));
     });
+    fontSlider.addEventListener("change", (event) => {
+      persistFontSizeToBackend(event.target.value);
+    });
   }
+
+  document
+    .querySelectorAll('input[name="font-size-choice"]')
+    .forEach((input) => {
+      input.addEventListener("change", (event) => {
+        if (!event.target.checked) return;
+        state.settings.fontSize = String(event.target.value);
+        persistSettings();
+        persistFontSizeToBackend(event.target.value);
+        const preview = document.querySelector("#font-size-preview");
+        if (preview) preview.style.fontSize = `${event.target.value}px`;
+        const value = document.querySelector("#font-size-preview-value");
+        if (value) value.textContent = `${event.target.value} px`;
+      });
+    });
+
+  document.querySelectorAll("[data-setup-theme]").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.settings.theme = button.dataset.setupTheme;
+      persistSettings();
+      document.querySelectorAll("[data-setup-theme]").forEach((item) => {
+        const active = item.dataset.setupTheme === state.settings.theme;
+        item.classList.toggle("selected", active);
+        item.setAttribute("aria-pressed", String(active));
+      });
+    });
+  });
+
+  if (state.showSetupPreferences) {
+    requestAnimationFrame(() => {
+      document.querySelector(".setup-theme-choice.selected")?.focus();
+    });
+  }
+
+  const finishSetupPreferences = () => {
+    persistSettings();
+    state.showSetupPreferences = false;
+    render();
+    requestAnimationFrame(() =>
+      document.querySelector("#master-password")?.focus(),
+    );
+  };
+  document
+    .querySelector("#confirm-setup-preferences")
+    ?.addEventListener("click", finishSetupPreferences);
+  document
+    .querySelector("#skip-setup-preferences")
+    ?.addEventListener("click", finishSetupPreferences);
 
   document.querySelector("#auto-lock")?.addEventListener("change", (event) => {
     state.settings.autoLock = event.target.value;
@@ -2522,6 +2949,17 @@ function bindEvents() {
     state.showTrashModal = true;
     render();
   });
+  document.querySelector("#trash-hint-open")?.addEventListener("click", () => {
+    state.showTrashHint = false;
+    state.showTrashModal = true;
+    render();
+  });
+  document
+    .querySelector("#trash-hint-dismiss")
+    ?.addEventListener("click", () => {
+      state.showTrashHint = false;
+      render();
+    });
 
   document
     .querySelectorAll("#close-trash, #close-trash-bottom")
@@ -2625,8 +3063,16 @@ function bindEvents() {
     });
 
   document
-    .querySelector("#generator-length")
-    ?.addEventListener("input", updateGeneratorOptions);
+    .querySelectorAll(
+      "#generator-length, #generator-length-input, #generator-min-numbers, #generator-min-symbols",
+    )
+    .forEach((input) => {
+      input.addEventListener("input", updateGeneratorOptions);
+      input.addEventListener("change", () => {
+        normalizeGeneratorLength();
+        syncGeneratorPasswordControls({ force: true });
+      });
+    });
   document
     .querySelector("#generator-words")
     ?.addEventListener("change", updateGeneratorOptions);
@@ -2646,7 +3092,7 @@ function bindEvents() {
     .querySelectorAll("#new-entry, #empty-new, #nav-new")
     .forEach((button) =>
       button.addEventListener("click", () => {
-        if (state.showFirstEntryGuide && button.id === "new-entry") {
+        if (state.showFirstEntryGuide) {
           state.firstEntryGuideStep = 2;
         }
         openNewEntry();
@@ -2691,11 +3137,8 @@ function bindEvents() {
 
   document
     .querySelector("#reveal-details-password")
-    ?.addEventListener("click", () => {
-      const input = document.querySelector("#details-password");
-      if (input) {
-        input.type = input.type === "password" ? "text" : "password";
-      }
+    ?.addEventListener("click", (event) => {
+      togglePasswordReveal("#details-password", event.currentTarget);
     });
 
   document.querySelectorAll("[data-copy-text]").forEach((button) =>
@@ -2718,17 +3161,13 @@ function bindEvents() {
   document
     .querySelector("#entry-password-reveal")
     ?.addEventListener("click", (event) => {
-      const input = document.querySelector("#entry-password");
-      input.type = input.type === "password" ? "text" : "password";
-      event.currentTarget.title =
-        input.type === "password"
-          ? "Mostrar contrasenya"
-          : "Ocultar contrasenya";
+      togglePasswordReveal("#entry-password", event.currentTarget);
     });
 
   document
     .querySelector("#generate-password")
     ?.addEventListener("click", openPasswordGenerator);
+
   document
     .querySelector("#entry-password")
     ?.addEventListener("input", (event) => {
@@ -2901,9 +3340,17 @@ listen("palette-shortcut", () => {
 }).catch(() => {});
 
 window.addEventListener("focus", () => {
+  syncFontSizeFromBackend();
   if (!state.locked) {
     reloadVaultEntries();
   }
 });
 
+window.addEventListener("resize", scheduleGuidePosition);
+document.addEventListener("scroll", scheduleGuidePosition, true);
+if (document.fonts?.ready) {
+  document.fonts.ready.then(scheduleGuidePosition).catch(() => {});
+}
+
 initializeApp();
+syncFontSizeFromBackend();

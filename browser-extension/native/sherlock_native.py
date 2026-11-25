@@ -52,6 +52,30 @@ APP_PORT = _read_app_port()
 APP_API_BASE = f"http://127.0.0.1:{APP_PORT}/api/v1"
 APP_TOKEN: Optional[str] = None
 
+UI_PREFERENCES_PATH = Path(VAULT_DIR) / "ui_preferences.json"
+
+
+def read_ui_font_size() -> Optional[int]:
+    try:
+        data = json.loads(UI_PREFERENCES_PATH.read_text(encoding="utf-8"))
+        size = int(data.get("font_size"))
+        return size if 14 <= size <= 24 else None
+    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        return None
+
+
+def write_ui_font_size(size: int) -> None:
+    if isinstance(size, bool) or not 14 <= size <= 24:
+        raise ValueError("La mida del text ha d'estar entre 14 i 24 px.")
+    UI_PREFERENCES_PATH.parent.mkdir(parents=True, exist_ok=True)
+    temporary = UI_PREFERENCES_PATH.with_suffix(".tmp")
+    temporary.write_text(json.dumps({"font_size": size}), encoding="utf-8")
+    try:
+        os.chmod(temporary, 0o600)
+    except OSError:
+        pass
+    os.replace(temporary, UI_PREFERENCES_PATH)
+
 DEBUG_MODE: bool = "--debug" in sys.argv or "-d" in sys.argv
 
 logging.basicConfig(
@@ -367,6 +391,27 @@ def main() -> None:
                     ):
                         logger.info("Token expired or app unavailable, refreshing…")
                         APP_TOKEN = None
+
+                elif action == "getUiPreferences":
+                    response = {
+                        "success": True,
+                        "font_size": read_ui_font_size(),
+                    }
+
+                elif action == "setUiPreferences":
+                    try:
+                        write_ui_font_size(int(message.get("font_size")))
+                        response = {"success": True}
+                    except (TypeError, ValueError) as exc:
+                        response = {"success": False, "error": str(exc)}
+
+                elif action == "deleteCredential":
+                    response = app_request(
+                        "DELETE",
+                        "/credentials",
+                        {"id": message.get("id", "")},
+                        timeout=10,
+                    )
 
                 elif action == "lockVault":
                     response = app_request("POST", "/lock")

@@ -19,28 +19,77 @@ class PopupController {
       searchQuery: "",
       generatedPassword: "",
     };
+    this.windowMode =
+      new URLSearchParams(window.location.search).get("window") === "1";
 
     this.init();
   }
 
   async init() {
+    this.setupWindowMode();
     await this.initTheme();
+    await this.initFontSize();
     this.setupTabNavigation();
     this.setupEventListeners();
+    await this.initPendingSave();
     await this.detectActiveTab();
     await this.checkStatus();
     this.initGenerator();
   }
 
-  async initTheme() {
-    const data = await chrome.storage.local.get("sherlock_theme");
-    const theme = (data && data.sherlock_theme) || "auto";
-    const select = document.getElementById("themeSelect");
-    if (select) select.value = theme;
-    this.applyTheme(theme);
+  setupWindowMode() {
+    if (!this.windowMode) return;
+    document.body.classList.add("window-mode");
+    document.getElementById("detachBtn")?.remove();
+  }
+
+  openDetachedWindow() {
+    const url = chrome.runtime.getURL("popup.html?window=1");
+    const fallback = () => {
+      if (chrome.tabs?.create) {
+        chrome.tabs.create({ url });
+      } else {
+        window.open(url, "_blank", "width=560,height=760");
+      }
+      window.close();
+    };
+
+    if (chrome.windows?.create) {
+      chrome.windows.create(
+        { url, type: "normal", width: 560, height: 760 },
+        (created) => {
+          if (chrome.runtime.lastError || !created) {
+            fallback();
+            return;
+          }
+          window.close();
+        },
+      );
+      return;
+    }
+    fallback();
+  }
+
+  initTheme() {
+    // Use the callback form: it is supported by both Chrome and Firefox,
+    // whereas Firefox's `chrome.*` namespace does not return a Promise.
+    return new Promise((resolve) => {
+      chrome.storage.local.get("sherlock_theme", (data) => {
+        const theme = (data && data.sherlock_theme) || "auto";
+        const select = document.getElementById("themeSelect");
+        if (select) select.value = theme;
+        this.applyTheme(theme);
+        this.themeMedia = window.matchMedia("(prefers-color-scheme: dark)");
+        this.themeMedia.addEventListener?.("change", () => {
+          if (this.currentTheme === "auto") this.applyTheme("auto");
+        });
+        resolve();
+      });
+    });
   }
 
   applyTheme(theme) {
+    this.currentTheme = theme;
     if (theme === "dark") {
       document.documentElement.setAttribute("data-theme", "dark");
     } else if (theme === "light") {
@@ -48,6 +97,72 @@ class PopupController {
     } else {
       document.documentElement.removeAttribute("data-theme");
     }
+
+    const dark =
+      theme === "dark" ||
+      (theme === "auto" &&
+        window.matchMedia("(prefers-color-scheme: dark)").matches);
+    try {
+      chrome.storage.local.set({
+        sherlock_resolved_theme: dark ? "dark" : "light",
+      });
+    } catch {
+      // Storage may be unavailable in a non-extension preview.
+    }
+    document.querySelectorAll("img.brand-icon").forEach((img) => {
+      img.src = chrome.runtime.getURL(
+        dark ? "icons/icon128-dark.png" : "icons/icon128.png",
+      );
+    });
+  }
+
+  clampFontSize(value) {
+    const size = Number(value);
+    if (!Number.isFinite(size)) return 16;
+    return Math.min(24, Math.max(14, Math.round(size)));
+  }
+
+  initFontSize() {
+    return new Promise((resolve) => {
+      chrome.storage.local.get("sherlock_font_size", (data) => {
+        const size = this.clampFontSize(data && data.sherlock_font_size);
+        this.setFontSizeControls(size);
+        this.applyFontSize(size);
+        resolve();
+        this.syncFontSizeFromNative(size);
+      });
+    });
+  }
+
+  setFontSizeControls(size) {
+    const slider = document.getElementById("fontSizeSlider");
+    const output = document.getElementById("fontSizeVal");
+    if (slider) slider.value = String(size);
+    if (output) output.textContent = `${size} px`;
+  }
+
+  syncFontSizeFromNative(fallbackSize) {
+    chrome.runtime.sendMessage({ action: "getUiFontSize" }, (response) => {
+      if (chrome.runtime.lastError) return;
+      if (!response?.success) {
+        if (response?.error === "No font size stored") {
+          chrome.runtime.sendMessage({
+            action: "setUiFontSize",
+            size: this.clampFontSize(fallbackSize),
+          });
+        }
+        return;
+      }
+      const size = this.clampFontSize(response.size);
+      this.setFontSizeControls(size);
+      this.applyFontSize(size);
+      chrome.storage.local.set({ sherlock_font_size: size });
+    });
+  }
+
+  applyFontSize(size) {
+    const clamped = this.clampFontSize(size);
+    document.documentElement.style.fontSize = `${clamped}px`;
   }
 
   setupTabNavigation() {
@@ -56,6 +171,31 @@ class PopupController {
       btn.addEventListener("click", () => {
         const targetTab = btn.getAttribute("data-tab");
         this.switchTab(targetTab);
+      });
+    });
+  }
+
+  initPendingSave() {
+    return new Promise((resolve) => {
+      chrome.storage.local.get("sherlock_pending_save", (data) => {
+        const pending = data && data.sherlock_pending_save;
+        if (!pending || !pending.site) {
+          resolve();
+          return;
+        }
+        chrome.storage.local.remove("sherlock_pending_save");
+        if (Date.now() - Number(pending.createdAt || 0) > 60_000) {
+          resolve();
+          return;
+        }
+        this.switchTab("save");
+        const site = document.getElementById("saveSite");
+        const username = document.getElementById("saveUser");
+        const password = document.getElementById("savePass");
+        if (site) site.value = pending.site;
+        if (username) username.value = pending.username || "";
+        if (password) setTimeout(() => password.focus(), 0);
+        resolve();
       });
     });
   }
@@ -72,24 +212,31 @@ class PopupController {
     if (tabId === "vault") {
       this.refreshCredentials();
     }
+    if (tabId === "generator" && !this.state.generatedPassword) {
+      this.runGenerator();
+    }
   }
 
   async detectActiveTab() {
     return new Promise((resolve) => {
       chrome.runtime.sendMessage({ action: "getActiveTab" }, (res) => {
+        const banner = document.getElementById("domainBanner");
+        const nameEl = document.getElementById("domainName");
         if (res && res.hostname) {
-          this.state.domain = res.hostname;
+          this.state.domain = this.baseHost(res.hostname);
           this.state.activeTabId = res.id;
-          const banner = document.getElementById("domainBanner");
-          const nameEl = document.getElementById("domainName");
           if (banner && nameEl) {
-            nameEl.textContent = res.hostname;
+            nameEl.textContent = this.baseHost(res.hostname);
             banner.style.display = "flex";
           }
           const saveSiteInput = document.getElementById("saveSite");
           if (saveSiteInput && !saveSiteInput.value) {
             saveSiteInput.value = res.hostname;
           }
+        } else {
+          this.state.domain = "";
+          this.state.activeTabId = null;
+          if (banner) banner.style.display = "none";
         }
         resolve();
       });
@@ -271,6 +418,8 @@ class PopupController {
       UserRound:
         '<circle cx="12" cy="8" r="5"></circle><path d="M20 21a8 8 0 0 0-16 0"></path>',
       Copy: '<rect x="8" y="8" width="14" height="14" rx="2"></rect><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"></path>',
+      Pencil:
+        '<path d="M12 20h9"></path><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"></path>',
       Sparkles:
         '<path d="m12 3 1.9 5.8L20 11l-6.1 2.2L12 19l-1.9-5.8L4 11l6.1-2.2L12 3Z"></path><path d="m19 14 1.1 2.9L23 18l-2.9 1.1L19 22l-1.1-2.9L15 18l2.9-1.1L19 14Z"></path>',
     };
@@ -278,18 +427,19 @@ class PopupController {
   }
 
   renderCredentialsList() {
+    this.closeCopyMenu();
     const searchSection = document.getElementById("searchSection");
     if (searchSection) searchSection.style.display = "block";
 
     const container = document.getElementById("vaultContent");
     const query = (this.state.searchQuery || "").trim().toLowerCase();
-    const currentDomain = this.normalizeHost(this.state.domain);
+    const currentDomain = this.baseHost(this.state.domain);
 
     let matched = [];
     let others = [];
 
     this.state.credentials.forEach((cred) => {
-      const site = this.normalizeHost(cred.site);
+      const site = this.baseHost(cred.site);
       const user = (cred.username || "").toLowerCase();
 
       if (query) {
@@ -357,6 +507,34 @@ class PopupController {
     }
   }
 
+  baseHost(value = "") {
+    const host = this.normalizeHost(value);
+    if (!host || host.includes(":") || /^\d+\.\d+\.\d+\.\d+$/.test(host)) {
+      return host;
+    }
+    const suffixes = new Set([
+      "co.uk",
+      "org.uk",
+      "ac.uk",
+      "gov.uk",
+      "com.au",
+      "net.au",
+      "org.au",
+      "co.nz",
+      "co.jp",
+      "com.br",
+      "com.mx",
+      "com.es",
+      "com.ar",
+      "com.co",
+      "co.in",
+    ]);
+    const parts = host.split(".");
+    if (parts.length <= 2) return host;
+    const suffix = parts.slice(-2).join(".");
+    return suffixes.has(suffix) ? parts.slice(-3).join(".") : suffix;
+  }
+
   hostMatches(savedHost, activeHost) {
     return Boolean(
       savedHost &&
@@ -367,27 +545,23 @@ class PopupController {
 
   renderCredCard(cred) {
     const domainIcon = this.iconSvg("Globe", 18);
-    const autofillAllowed = this.hostMatches(
-      this.normalizeHost(cred.site),
-      this.normalizeHost(this.state.domain),
-    );
     return `
       <div class="cred-card" data-id="${this.escapeHtml(cred.id)}">
         <div class="cred-header">
           <div class="cred-icon">${domainIcon}</div>
           <div class="cred-info">
-            <div class="cred-title" title="${this.escapeHtml(cred.site)}">${this.escapeHtml(cred.site)}</div>
+            <div class="cred-title" title="${this.escapeHtml(this.baseHost(cred.site))}">${this.escapeHtml(this.baseHost(cred.site))}</div>
             <div class="cred-user" title="${this.escapeHtml(cred.username)}">${this.escapeHtml(cred.username || "Sense usuari")}</div>
           </div>
-          <button class="btn btn-secondary action-copy-user" data-user="${this.escapeHtml(cred.username)}" title="Copiar usuari">
-            ${this.iconSvg("UserRound", 14)}
+          <button class="btn btn-secondary action-edit" data-id="${this.escapeHtml(cred.id)}" title="Editar entrada">
+            ${this.iconSvg("Pencil", 14)}
           </button>
-          <button class="btn btn-secondary action-copy-pass" data-id="${this.escapeHtml(cred.id)}" title="Copiar contrasenya">
+          <button class="btn btn-secondary action-copy" data-id="${this.escapeHtml(cred.id)}" title="Copiar">
             ${this.iconSvg("Copy", 14)}
           </button>
         </div>
         <div class="cred-actions">
-          <button class="btn btn-primary action-fill" data-id="${this.escapeHtml(cred.id)}" ${autofillAllowed ? "" : 'disabled title="L\'ompliment només està disponible per a aquest lloc"'}>
+          <button class="btn btn-primary action-fill" data-id="${this.escapeHtml(cred.id)}">
             ${this.iconSvg("Sparkles", 14)}
             Omplir formulari
           </button>
@@ -397,31 +571,33 @@ class PopupController {
   }
 
   attachCardActions() {
-    document.querySelectorAll(".action-copy-user").forEach((btn) => {
-      btn.addEventListener("click", (e) => {
-        e.stopPropagation();
-        const user = btn.getAttribute("data-user");
-        if (user) {
-          navigator.clipboard.writeText(user);
-          this.showToast("Usuari copiat!");
-        }
+    document.querySelectorAll(".action-edit").forEach((btn) => {
+      btn.addEventListener("click", (event) => {
+        event.stopPropagation();
+        const credential = this.state.credentials.find(
+          (item) => item.id === btn.getAttribute("data-id"),
+        );
+        if (credential) this.showEditCredential(credential);
       });
     });
 
-    document.querySelectorAll(".action-copy-pass").forEach((btn) => {
-      btn.addEventListener("click", (e) => {
-        e.stopPropagation();
-        const id = btn.getAttribute("data-id");
+    document.querySelectorAll(".action-copy").forEach((btn) => {
+      btn.addEventListener("click", (event) => {
+        event.stopPropagation();
         const credential = this.state.credentials.find(
-          (item) => item.id === id,
+          (item) => item.id === btn.getAttribute("data-id"),
         );
-        if (credential)
-          this.loadCredential(credential).then((full) => {
-            if (!full?.password)
-              return this.showToast("No s'ha pogut obtenir la contrasenya");
-            navigator.clipboard.writeText(full.password);
-            this.showToast("Contrasenya copiada!");
-          });
+        if (credential) this.showCopyMenu(btn, credential);
+      });
+    });
+
+    document.querySelectorAll(".cred-card").forEach((card) => {
+      card.addEventListener("click", (event) => {
+        if (event.target.closest("button")) return;
+        const credential = this.state.credentials.find(
+          (item) => item.id === card.getAttribute("data-id"),
+        );
+        if (credential) this.showCredentialDetails(credential);
       });
     });
 
@@ -429,12 +605,482 @@ class PopupController {
       btn.addEventListener("click", () => {
         const id = btn.getAttribute("data-id");
         const cred = this.state.credentials.find((c) => c.id === id);
-        if (cred)
-          this.loadCredential(cred, this.state.domain).then(
-            (full) => full && this.autofillCredential(full),
-          );
+        if (!cred) return;
+        if (!this.state.domain) {
+          this.showToast("Obre una pestanya web per omplir les dades");
+          return;
+        }
+        if (this.baseHost(cred.site) !== this.baseHost(this.state.domain)) {
+          this.showFillChoice(cred);
+        } else {
+          this.fillCredential(cred);
+        }
       });
     });
+  }
+
+  fillCredential(credential, addCurrentSite = false) {
+    this.loadCredential(credential).then((full) => {
+      if (!full) {
+        this.showToast("No s'ha pogut obtenir aquesta entrada");
+        return;
+      }
+      if (addCurrentSite) {
+        this.saveCredentialForCurrentSite(full).then((saved) => {
+          if (saved) this.refreshCredentials();
+          this.autofillCredential(full);
+        });
+        return;
+      }
+      this.autofillCredential(full);
+    });
+  }
+
+  saveCredentialForCurrentSite(credential) {
+    return new Promise((resolve) => {
+      const site = this.baseHost(this.state.domain);
+      chrome.runtime.sendMessage(
+        {
+          action: "saveCredentials",
+          data: {
+            site,
+            username: credential.username || "",
+            password: credential.password || "",
+            notes: "",
+            force_new: false,
+          },
+        },
+        (response) => {
+          if (chrome.runtime.lastError || !response?.success) {
+            this.showToast(
+              response?.error
+                ? `No s'ha pogut afegir el lloc: ${response.error}`
+                : "No s'ha pogut afegir el lloc",
+            );
+            resolve(false);
+            return;
+          }
+          this.showToast("Accés afegit per a aquest lloc");
+          resolve(true);
+        },
+      );
+    });
+  }
+
+  showFillChoice(credential) {
+    document.getElementById("fillPrompt")?.remove();
+    const overlay = document.createElement("div");
+    overlay.id = "fillPrompt";
+    overlay.className = "fill-prompt";
+    const card = document.createElement("div");
+    card.className = "fill-prompt-card";
+    const title = document.createElement("h3");
+    title.textContent = "Afegir aquest lloc?";
+    const message = document.createElement("p");
+    message.textContent = `Aquest accés està desat per a ${this.baseHost(credential.site)}. Vols afegir també ${this.baseHost(this.state.domain)} i omplir, o només omplir?`;
+    const actions = document.createElement("div");
+    actions.className = "fill-prompt-actions";
+
+    const close = () => {
+      overlay.remove();
+      document.removeEventListener("keydown", onKeyDown);
+    };
+    const onKeyDown = (event) => {
+      if (event.key === "Escape") close();
+    };
+    document.addEventListener("keydown", onKeyDown);
+
+    const addButton = document.createElement("button");
+    addButton.type = "button";
+    addButton.className = "btn btn-primary";
+    addButton.textContent = "Afegir i omplir";
+    addButton.addEventListener("click", () => {
+      close();
+      this.fillCredential(credential, true);
+    });
+
+    const fillButton = document.createElement("button");
+    fillButton.type = "button";
+    fillButton.className = "btn btn-secondary";
+    fillButton.textContent = "Només omplir";
+    fillButton.addEventListener("click", () => {
+      close();
+      this.fillCredential(credential);
+    });
+
+    const cancelButton = document.createElement("button");
+    cancelButton.type = "button";
+    cancelButton.className = "btn btn-secondary";
+    cancelButton.textContent = "Cancel·la";
+    cancelButton.addEventListener("click", close);
+
+    actions.append(addButton, fillButton, cancelButton);
+    card.append(title, message, actions);
+    overlay.append(card);
+    overlay.addEventListener("click", (event) => {
+      if (event.target === overlay) close();
+    });
+    document.body.append(overlay);
+    addButton.focus();
+  }
+
+  closeCopyMenu() {
+    if (this._copyMenuClose) this._copyMenuClose();
+  }
+
+  showCopyMenu(button, credential) {
+    this.closeCopyMenu();
+    const menu = document.createElement("div");
+    menu.id = "sherlock-copy-menu";
+    menu.className = "copy-menu";
+    const copyUser = document.createElement("button");
+    copyUser.type = "button";
+    copyUser.textContent = "Copiar usuari";
+    const copyPass = document.createElement("button");
+    copyPass.type = "button";
+    copyPass.textContent = "Copiar contrasenya";
+    menu.append(copyUser, copyPass);
+
+    const close = () => {
+      menu.remove();
+      document.removeEventListener("pointerdown", onPointerDown, true);
+      document.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("scroll", close, true);
+      window.removeEventListener("resize", close);
+      this._copyMenuClose = null;
+    };
+    const onPointerDown = (event) => {
+      if (!menu.contains(event.target)) close();
+    };
+    const onKeyDown = (event) => {
+      if (event.key === "Escape") close();
+    };
+    this._copyMenuClose = close;
+
+    const rect = button.getBoundingClientRect();
+    const width = 190;
+    const left = Math.max(
+      8,
+      Math.min(rect.right - width, window.innerWidth - width - 8),
+    );
+    menu.style.left = `${left}px`;
+    menu.style.top = `${rect.bottom + 6}px`;
+    document.body.append(menu);
+    const menuRect = menu.getBoundingClientRect();
+    if (menuRect.bottom > window.innerHeight - 8) {
+      menu.style.top = `${Math.max(8, rect.top - menuRect.height - 6)}px`;
+    }
+
+    document.addEventListener("pointerdown", onPointerDown, true);
+    document.addEventListener("keydown", onKeyDown);
+    window.addEventListener("scroll", close, true);
+    window.addEventListener("resize", close);
+
+    copyUser.addEventListener("click", () => {
+      close();
+      if (credential.username) {
+        navigator.clipboard.writeText(credential.username);
+        this.showToast("Usuari copiat!");
+      }
+    });
+    copyPass.addEventListener("click", () => {
+      close();
+      this.loadCredential(credential).then((full) => {
+        if (!full?.password) {
+          this.showToast("No s'ha pogut obtenir la contrasenya");
+          return;
+        }
+        navigator.clipboard.writeText(full.password);
+        this.showToast("Contrasenya copiada!");
+      });
+    });
+  }
+
+  async showCredentialDetails(credential) {
+    const full = await this.loadCredential(credential);
+    if (!full) {
+      this.showToast("No s'ha pogut obtenir aquesta entrada");
+      return;
+    }
+
+    const overlay = document.createElement("div");
+    overlay.id = "credDetailsPrompt";
+    overlay.className = "fill-prompt";
+    const card = document.createElement("div");
+    card.className = "fill-prompt-card cred-details-card";
+    const title = document.createElement("h3");
+    title.textContent = this.baseHost(full.site);
+    const list = document.createElement("div");
+    list.className = "cred-details-list";
+
+    const addRow = (label, value) => {
+      const row = document.createElement("div");
+      row.className = "cred-details-row";
+      const name = document.createElement("span");
+      name.className = "cred-details-label";
+      name.textContent = label;
+      const content = document.createElement("span");
+      content.className = "cred-details-value";
+      content.textContent = value || "—";
+      row.append(name, content);
+      list.append(row);
+      return content;
+    };
+
+    addRow("Lloc web", this.baseHost(full.site));
+    addRow("Usuari", full.username || "Sense usuari");
+    const passwordValue = addRow("Contrasenya", "••••••••");
+    const passwordRow = list.lastElementChild;
+    passwordRow.classList.add("cred-details-password");
+    let passwordVisible = false;
+    passwordValue.dataset.visible = "false";
+    const togglePassword = document.createElement("button");
+    togglePassword.type = "button";
+    togglePassword.className = "btn btn-secondary cred-details-eye";
+    togglePassword.title = "Mostrar contrasenya";
+    togglePassword.innerHTML = this.iconSvg("Eye", 14);
+    togglePassword.addEventListener("click", () => {
+      passwordVisible = !passwordVisible;
+      passwordValue.textContent = passwordVisible ? full.password : "••••••••";
+      passwordValue.dataset.visible = String(passwordVisible);
+      togglePassword.innerHTML = this.iconSvg(
+        passwordVisible ? "EyeOff" : "Eye",
+        14,
+      );
+      togglePassword.title = passwordVisible
+        ? "Amagar contrasenya"
+        : "Mostrar contrasenya";
+    });
+    passwordRow.append(togglePassword);
+    addRow("Notes", full.notes || "Sense notes");
+
+    const actions = document.createElement("div");
+    actions.className = "cred-details-actions";
+    const copyUser = document.createElement("button");
+    copyUser.type = "button";
+    copyUser.className = "btn btn-secondary";
+    copyUser.textContent = "Copiar usuari";
+    copyUser.addEventListener("click", () => {
+      navigator.clipboard.writeText(full.username || "");
+      this.showToast("Usuari copiat!");
+    });
+    const copyPass = document.createElement("button");
+    copyPass.type = "button";
+    copyPass.className = "btn btn-secondary";
+    copyPass.textContent = "Copiar contrasenya";
+    copyPass.addEventListener("click", () => {
+      navigator.clipboard.writeText(full.password || "");
+      this.showToast("Contrasenya copiada!");
+    });
+    const edit = document.createElement("button");
+    edit.type = "button";
+    edit.className = "btn btn-primary";
+    edit.textContent = "Editar";
+    const deleteButton = document.createElement("button");
+    deleteButton.type = "button";
+    deleteButton.className = "btn btn-danger";
+    deleteButton.textContent = "Eliminar";
+    const closeButton = document.createElement("button");
+    closeButton.type = "button";
+    closeButton.className = "btn btn-secondary cred-details-close";
+    closeButton.textContent = "Tancar";
+    actions.append(copyUser, copyPass, edit, deleteButton, closeButton);
+
+    const close = () => {
+      overlay.remove();
+      document.removeEventListener("keydown", onKeyDown);
+    };
+    const onKeyDown = (event) => {
+      if (event.key === "Escape") close();
+    };
+    document.addEventListener("keydown", onKeyDown);
+    closeButton.addEventListener("click", close);
+    edit.addEventListener("click", () => {
+      close();
+      this.showEditCredential(full);
+    });
+    deleteButton.addEventListener("click", () => {
+      close();
+      this.confirmDeleteCredential(full);
+    });
+    overlay.addEventListener("click", (event) => {
+      if (event.target === overlay) close();
+    });
+
+    card.append(title, list, actions);
+    overlay.append(card);
+    document.body.append(overlay);
+  }
+
+  confirmDeleteCredential(credential) {
+    const overlay = document.createElement("div");
+    overlay.id = "credDeletePrompt";
+    overlay.className = "fill-prompt";
+    const card = document.createElement("div");
+    card.className = "fill-prompt-card";
+    const title = document.createElement("h3");
+    title.textContent = "Eliminar entrada?";
+    const message = document.createElement("p");
+    message.textContent = `Vols eliminar l'accés de ${this.baseHost(credential.site)} (${credential.username || "sense usuari"})? Aquesta acció no es pot desfer.`;
+    const actions = document.createElement("div");
+    actions.className = "fill-prompt-actions";
+    const cancel = document.createElement("button");
+    cancel.type = "button";
+    cancel.className = "btn btn-secondary";
+    cancel.textContent = "Cancel·la";
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "btn btn-danger";
+    remove.textContent = "Eliminar";
+    actions.append(cancel, remove);
+
+    const close = () => {
+      overlay.remove();
+      document.removeEventListener("keydown", onKeyDown);
+    };
+    const onKeyDown = (event) => {
+      if (event.key === "Escape") close();
+    };
+    document.addEventListener("keydown", onKeyDown);
+    cancel.addEventListener("click", close);
+    overlay.addEventListener("click", (event) => {
+      if (event.target === overlay) close();
+    });
+    remove.addEventListener("click", () => {
+      remove.disabled = true;
+      chrome.runtime.sendMessage(
+        { action: "deleteCredential", id: credential.id },
+        (response) => {
+          if (chrome.runtime.lastError || !response?.success) {
+            remove.disabled = false;
+            this.showToast(
+              response?.error
+                ? `No s'ha pogut eliminar: ${response.error}`
+                : "No s'ha pogut eliminar l'entrada",
+            );
+            return;
+          }
+          close();
+          this.refreshCredentials();
+          this.showToast("Entrada eliminada");
+        },
+      );
+    });
+
+    card.append(title, message, actions);
+    overlay.append(card);
+    document.body.append(overlay);
+    cancel.focus();
+  }
+
+  async showEditCredential(credential) {
+    const full = await this.loadCredential(credential);
+    if (!full) {
+      this.showToast("No s'ha pogut obtenir aquesta entrada");
+      return;
+    }
+
+    const overlay = document.createElement("div");
+    overlay.id = "credEditPrompt";
+    overlay.className = "fill-prompt";
+    const card = document.createElement("div");
+    card.className = "fill-prompt-card";
+    const title = document.createElement("h3");
+    title.textContent = "Editar entrada";
+
+    const form = document.createElement("div");
+    form.className = "cred-edit-form";
+    const createField = (labelText, value, type = "text") => {
+      const label = document.createElement("label");
+      label.className = "form-label";
+      label.textContent = labelText;
+      const input = document.createElement("input");
+      input.className = "form-control";
+      input.type = type;
+      input.value = value || "";
+      form.append(label, input);
+      return input;
+    };
+    const siteInput = createField("Lloc web", full.site);
+    const userInput = createField("Usuari", full.username);
+    const passInput = createField("Contrasenya", full.password, "password");
+    const notesLabel = document.createElement("label");
+    notesLabel.className = "form-label";
+    notesLabel.textContent = "Notes";
+    const notesInput = document.createElement("textarea");
+    notesInput.className = "form-control";
+    notesInput.rows = 3;
+    notesInput.value = full.notes || "";
+    form.append(notesLabel, notesInput);
+
+    const actions = document.createElement("div");
+    actions.className = "fill-prompt-actions";
+    const cancel = document.createElement("button");
+    cancel.type = "button";
+    cancel.className = "btn btn-secondary";
+    cancel.textContent = "Cancel·la";
+    const save = document.createElement("button");
+    save.type = "button";
+    save.className = "btn btn-primary";
+    save.textContent = "Desar canvis";
+    actions.append(cancel, save);
+
+    const close = () => {
+      overlay.remove();
+      document.removeEventListener("keydown", onKeyDown);
+    };
+    const onKeyDown = (event) => {
+      if (event.key === "Escape") close();
+    };
+    document.addEventListener("keydown", onKeyDown);
+    cancel.addEventListener("click", close);
+    overlay.addEventListener("click", (event) => {
+      if (event.target === overlay) close();
+    });
+
+    save.addEventListener("click", () => {
+      const site = siteInput.value.trim();
+      const username = userInput.value.trim();
+      const password = passInput.value;
+      const notes = notesInput.value;
+      if (!site || !password) {
+        this.showToast("El lloc i la contrasenya són obligatoris");
+        return;
+      }
+      save.disabled = true;
+      chrome.runtime.sendMessage(
+        {
+          action: "saveCredentials",
+          data: {
+            id: full.id,
+            site,
+            username,
+            password,
+            notes,
+            force_new: false,
+          },
+        },
+        (response) => {
+          save.disabled = false;
+          if (chrome.runtime.lastError || !response?.success) {
+            this.showToast(
+              response?.error
+                ? `No s'ha pogut desar: ${response.error}`
+                : "No s'ha pogut desar l'entrada",
+            );
+            return;
+          }
+          close();
+          this.refreshCredentials();
+          this.showToast("Entrada actualitzada");
+        },
+      );
+    });
+
+    card.append(title, form, actions);
+    overlay.append(card);
+    document.body.append(overlay);
+    siteInput.focus();
   }
 
   loadCredential(credential, domain = credential.site) {
@@ -479,27 +1125,33 @@ class PopupController {
 
     slider?.addEventListener("input", (e) => {
       if (lengthVal) lengthVal.textContent = e.target.value;
-      this.clearGeneratedPassword();
+      this.runGenerator();
     });
 
     ["chkUpper", "chkLower", "chkNumbers", "chkSymbols"].forEach((id) => {
-      document
-        .getElementById(id)
-        ?.addEventListener("change", () => this.clearGeneratedPassword());
+      document.getElementById(id)?.addEventListener("change", () => {
+        this.syncGeneratorMinimums();
+        this.runGenerator();
+      });
+    });
+
+    ["minNumbersInput", "minSymbolsInput"].forEach((id) => {
+      document.getElementById(id)?.addEventListener("input", () => {
+        this.runGenerator();
+      });
+      document.getElementById(id)?.addEventListener("change", (e) => {
+        e.target.value = String(
+          Math.min(20, Math.max(0, parseInt(e.target.value, 10) || 0)),
+        );
+        this.runGenerator();
+      });
     });
 
     document
       .getElementById("regenBtn")
       ?.addEventListener("click", () => this.runGenerator());
     document
-      .getElementById("generatePasswordBtn")
-      ?.addEventListener("click", () => this.runGenerator());
-
-    document
       .getElementById("copyGenBtn")
-      ?.addEventListener("click", () => this.copyGenerated());
-    document
-      .getElementById("copyGenAction")
       ?.addEventListener("click", () => this.copyGenerated());
 
     document.getElementById("saveGenAction")?.addEventListener("click", () => {
@@ -521,41 +1173,133 @@ class PopupController {
       }
     });
 
-    document.getElementById("fillGenAction")?.addEventListener("click", () => {
-      if (!this.state.generatedPassword) return;
-      if (!this.state.activeTabId) {
-        this.showToast("Obre una pàgina per omplir la contrasenya");
-        return;
+    this.syncGeneratorMinimums();
+    this.runGenerator();
+  }
+
+  syncGeneratorMinimums() {
+    const numbers = document.getElementById("chkNumbers")?.checked ?? true;
+    const symbols = document.getElementById("chkSymbols")?.checked ?? true;
+    const minNumbers = document.getElementById("minNumbersInput");
+    const minSymbols = document.getElementById("minSymbolsInput");
+    if (minNumbers) minNumbers.disabled = !numbers;
+    if (minSymbols) minSymbols.disabled = !symbols;
+  }
+
+  readGeneratorOptions() {
+    const slider = document.getElementById("lengthSlider");
+    const lengthVal = document.getElementById("lengthVal");
+    const uppercase = document.getElementById("chkUpper")?.checked ?? true;
+    const lowercase = document.getElementById("chkLower")?.checked ?? true;
+    const numbers = document.getElementById("chkNumbers")?.checked ?? true;
+    const symbols = document.getElementById("chkSymbols")?.checked ?? true;
+    let length = Math.min(
+      64,
+      Math.max(8, parseInt(slider?.value || "18", 10) || 18),
+    );
+    const minNumbers = numbers
+      ? Math.min(
+          20,
+          Math.max(
+            0,
+            parseInt(document.getElementById("minNumbersInput")?.value, 10) ||
+              0,
+          ),
+        )
+      : 0;
+    const minSymbols = symbols
+      ? Math.min(
+          20,
+          Math.max(
+            0,
+            parseInt(document.getElementById("minSymbolsInput")?.value, 10) ||
+              0,
+          ),
+        )
+      : 0;
+
+    const minimumLength = Math.max(8, minNumbers + minSymbols);
+    if (length < minimumLength) {
+      length = minimumLength;
+      if (slider) slider.value = String(length);
+      if (lengthVal) lengthVal.textContent = String(length);
+    }
+
+    return {
+      length,
+      uppercase,
+      lowercase,
+      numbers,
+      symbols,
+      minNumbers,
+      minSymbols,
+      selected: uppercase || lowercase || numbers || symbols,
+    };
+  }
+
+  randomInt(max) {
+    const cryptoObject = globalThis.crypto;
+    const limit = Math.floor(0x100000000 / max) * max;
+    const buffer = new Uint32Array(1);
+    do {
+      cryptoObject.getRandomValues(buffer);
+    } while (buffer[0] >= limit);
+    return buffer[0] % max;
+  }
+
+  generatePasswordLocal(options) {
+    const pools = [];
+    if (options.uppercase) pools.push("ABCDEFGHIJKLMNOPQRSTUVWXYZ");
+    if (options.lowercase) pools.push("abcdefghijklmnopqrstuvwxyz");
+    if (options.numbers) pools.push("0123456789");
+    if (options.symbols) pools.push("!@#$%^&*()_+-=[]{}|;:,.<>?");
+    if (!pools.length) return "";
+
+    const numbersPool = "0123456789";
+    const symbolsPool = "!@#$%^&*()_+-=[]{}|;:,.<>?";
+    const all = pools.join("");
+    const characters = [];
+
+    for (let index = 0; index < options.minNumbers; index += 1) {
+      characters.push(numbersPool[this.randomInt(numbersPool.length)]);
+    }
+    for (let index = 0; index < options.minSymbols; index += 1) {
+      characters.push(symbolsPool[this.randomInt(symbolsPool.length)]);
+    }
+    while (characters.length < options.length) {
+      characters.push(all[this.randomInt(all.length)]);
+    }
+    for (let index = characters.length - 1; index > 0; index -= 1) {
+      const swapIndex = this.randomInt(index + 1);
+      [characters[index], characters[swapIndex]] = [
+        characters[swapIndex],
+        characters[index],
+      ];
+    }
+    return characters.slice(0, options.length).join("");
+  }
+
+  renderGeneratedPassword(password) {
+    const output = document.getElementById("genOutput");
+    if (!output) return;
+    const fragment = document.createDocumentFragment();
+    for (const character of password) {
+      const span = document.createElement("span");
+      span.textContent = character;
+      if (/[0-9]/.test(character)) {
+        span.className = "gen-number";
+      } else if (/[^A-Za-z0-9]/.test(character)) {
+        span.className = "gen-symbol";
       }
-      const savePassInput = document.getElementById("savePass");
-      if (savePassInput) savePassInput.value = this.state.generatedPassword;
-
-      chrome.tabs.sendMessage(
-        this.state.activeTabId,
-        {
-          action: "fillGeneratedPassword",
-          password: this.state.generatedPassword,
-        },
-        { frameId: 0 },
-        (res) => {
-          if (chrome.runtime.lastError || !res || !res.success) {
-            this.showToast(
-              res?.error || "No s'ha trobat cap camp de contrasenya",
-            );
-          } else {
-            this.showToast("Contrasenya inserida! Pots desar-la a 'Desar'");
-          }
-        },
-      );
-    });
-
-    this.clearGeneratedPassword();
+      fragment.append(span);
+    }
+    output.replaceChildren(fragment);
   }
 
   clearGeneratedPassword() {
     this.state.generatedPassword = "";
     const outputEl = document.getElementById("genOutput");
-    if (outputEl) outputEl.textContent = "Tria les opcions i prem Generar";
+    if (outputEl) outputEl.textContent = "La contrasenya apareixerà aquí";
     const strengthBar = document.getElementById("strengthBar");
     if (strengthBar) {
       strengthBar.style.width = "0%";
@@ -566,76 +1310,33 @@ class PopupController {
       strengthLabel.textContent = "Encara no s'ha generat";
       strengthLabel.style.color = "var(--text-muted)";
     }
-    [
-      "regenBtn",
-      "copyGenBtn",
-      "copyGenAction",
-      "fillGenAction",
-      "saveGenAction",
-    ].forEach((id) => {
+    ["regenBtn", "copyGenBtn", "saveGenAction"].forEach((id) => {
       const button = document.getElementById(id);
       if (button) button.disabled = true;
     });
-    this.updateGenerateButtonState();
-  }
-
-  updateGenerateButtonState() {
-    const selected = ["chkUpper", "chkLower", "chkNumbers", "chkSymbols"].some(
-      (id) => document.getElementById(id)?.checked,
-    );
-    const button = document.getElementById("generatePasswordBtn");
-    if (button) button.disabled = !selected;
-    const hint = document.getElementById("generatorHint");
-    if (hint) {
-      hint.textContent = selected
-        ? "Tria les opcions que vulguis i genera quan estiguis a punt."
-        : "Selecciona com a mínim un tipus de caràcter.";
-    }
   }
 
   runGenerator() {
-    const selected = ["chkUpper", "chkLower", "chkNumbers", "chkSymbols"].some(
-      (id) => document.getElementById(id)?.checked,
-    );
-    if (!selected) {
+    const options = this.readGeneratorOptions();
+    if (!options.selected) {
       this.clearGeneratedPassword();
       this.showToast("Marca almenys una opció de caràcters");
       return;
     }
 
-    const length = parseInt(
-      document.getElementById("lengthSlider")?.value || 18,
-      10,
-    );
-    const uppercase = document.getElementById("chkUpper")?.checked ?? true;
-    const lowercase = document.getElementById("chkLower")?.checked ?? true;
-    const numbers = document.getElementById("chkNumbers")?.checked ?? true;
-    const symbols = document.getElementById("chkSymbols")?.checked ?? true;
+    const password = this.generatePasswordLocal(options);
+    if (!password) {
+      this.clearGeneratedPassword();
+      return;
+    }
 
-    chrome.runtime.sendMessage(
-      {
-        action: "generatePassword",
-        options: { length, uppercase, lowercase, numbers, symbols },
-      },
-      (res) => {
-        if (res && res.password) {
-          this.state.generatedPassword = res.password;
-          const outputEl = document.getElementById("genOutput");
-          if (outputEl) outputEl.textContent = res.password;
-          this.updateStrength(res.password);
-          [
-            "regenBtn",
-            "copyGenBtn",
-            "copyGenAction",
-            "fillGenAction",
-            "saveGenAction",
-          ].forEach((id) => {
-            const button = document.getElementById(id);
-            if (button) button.disabled = false;
-          });
-        }
-      },
-    );
+    this.state.generatedPassword = password;
+    this.renderGeneratedPassword(password);
+    this.updateStrength(password);
+    ["regenBtn", "copyGenBtn", "saveGenAction"].forEach((id) => {
+      const button = document.getElementById(id);
+      if (button) button.disabled = false;
+    });
   }
 
   updateStrength(password) {
@@ -750,7 +1451,6 @@ class PopupController {
 
     document.getElementById("genForSaveBtn")?.addEventListener("click", () => {
       this.switchTab("generator");
-      this.showToast("Tria les opcions i prem Generar");
     });
 
     document.getElementById("submitSaveBtn")?.addEventListener("click", () => {
@@ -827,6 +1527,33 @@ class PopupController {
         this.applyTheme(theme);
         this.showToast("Tema actualitzat");
       });
+    });
+
+    const fontSizeSlider = document.getElementById("fontSizeSlider");
+    fontSizeSlider?.addEventListener("input", (e) => {
+      const size = this.clampFontSize(e.target.value);
+      const output = document.getElementById("fontSizeVal");
+      if (output) output.textContent = `${size} px`;
+      this.applyFontSize(size);
+    });
+    fontSizeSlider?.addEventListener("change", (e) => {
+      const size = this.clampFontSize(e.target.value);
+      chrome.storage.local.set({ sherlock_font_size: size });
+      this.applyFontSize(size);
+      chrome.runtime.sendMessage(
+        { action: "setUiFontSize", size },
+        (response) => {
+          if (chrome.runtime.lastError || !response?.success) {
+            this.showToast("Mida del text actualitzada");
+            return;
+          }
+          this.showToast("Mida del text sincronitzada");
+        },
+      );
+    });
+
+    document.getElementById("detachBtn")?.addEventListener("click", () => {
+      this.openDetachedWindow();
     });
 
     document.getElementById("reconnectBtn")?.addEventListener("click", () => {

@@ -7,6 +7,8 @@ import {
   USERNAME_FORMATS,
   generateUsername,
   generateValue,
+  GENERATOR_MAX_MIN_COUNT,
+  generatorMinimumLength,
   passphraseEntropyBits,
   passwordMeetsRequirements,
   passwordOptions,
@@ -114,7 +116,7 @@ describe("master password requirements", () => {
 });
 
 describe("generateValue passphrase", () => {
-  it("retorna 6 paraules separades per '-' de la llista EFF", () => {
+  it("retorna 6 paraules catalanes separades per '-'", () => {
     const value = generateValue("passphrase", {
       words: 6,
       separator: "-",
@@ -123,9 +125,38 @@ describe("generateValue passphrase", () => {
     const parts = value.split("-");
     assert.strictEqual(parts.length, 6);
     for (const part of parts) {
-      assert.ok(EFF_WORDLIST.includes(part), `${part} no esta a la llista EFF`);
+      assert.ok(
+        DICEWARE_USERNAME_WORDLISTS.Català.includes(part.toLowerCase()),
+        `${part} no és a la llista catalana`,
+      );
     }
   });
+
+  it("respecta l'idioma seleccionat (castellà i anglès)", () => {
+    const spanish = generateValue(
+      "passphrase",
+      { words: 6, separator: "-", includeNumber: false },
+      "Castellà",
+    );
+    for (const part of spanish.split("-")) {
+      assert.ok(
+        DICEWARE_USERNAME_WORDLISTS.Castellà.includes(part.toLowerCase()),
+        `${part} no és a la llista castellana`,
+      );
+    }
+    const english = generateValue(
+      "passphrase",
+      { words: 6, separator: "-", includeNumber: false },
+      "Anglès",
+    );
+    for (const part of english.split("-")) {
+      assert.ok(
+        EFF_WORDLIST.includes(part.toLowerCase()),
+        `${part} no és a la llista anglesa`,
+      );
+    }
+  });
+
   it("respecte el nombre de paraules sol·licitat (dins del rang)", () => {
     const value6 = generateValue("passphrase", {
       words: 6,
@@ -134,6 +165,7 @@ describe("generateValue passphrase", () => {
     });
     assert.strictEqual(value6.split(" ").length, 6);
   });
+
   it("aplica mínim 5 i màxim 12 paraules", () => {
     const v5 = generateValue("passphrase", {
       words: 2,
@@ -148,6 +180,7 @@ describe("generateValue passphrase", () => {
     });
     assert.strictEqual(v12.split(" ").length, 12);
   });
+
   it("afegix un dígit quan includeNumber és true", () => {
     const value = generateValue("passphrase", {
       words: 5,
@@ -157,10 +190,12 @@ describe("generateValue passphrase", () => {
     const parts = value.split(" ");
     assert.strictEqual(parts.length, 5);
     assert.ok(/\d$/.test(value), "l'últim caràcter ha de ser un número");
-    for (const part of parts.slice(0, -1)) {
+    for (const part of parts) {
       assert.ok(
-        EFF_WORDLIST.includes(part.replace(/\d+$/, "")),
-        `${part} no esta a la llista EFF`,
+        DICEWARE_USERNAME_WORDLISTS.Català.includes(
+          part.replace(/\d+$/, "").toLowerCase(),
+        ),
+        `${part} no és a la llista catalana`,
       );
     }
   });
@@ -193,14 +228,80 @@ describe("passphraseOptions", () => {
     });
     assert.ok(html.includes('value="12"'));
   });
-  it("explica que les paraules no es repeteixen i són de la llista EFF en anglès", () => {
+  it("amaga les opcions d'accents quan l'idioma és anglès", () => {
+    const english = passphraseOptions(
+      { words: 6, separator: "-", includeNumber: false },
+      "Anglès",
+    );
+    assert.ok(!english.includes("Treure accents"));
+    assert.ok(!english.includes("Només paraules sense accents"));
+    const catalan = passphraseOptions(
+      { words: 6, separator: "-", includeNumber: false },
+      "Català",
+    );
+    assert.ok(catalan.includes("Treure accents"));
+    assert.ok(catalan.includes("Només paraules sense accents"));
+  });
+
+  it("explica que les paraules no es repeteixen i són de la llista de l'idioma", () => {
     const html = passphraseOptions({
       words: 6,
       separator: "-",
       includeNumber: false,
     });
-    assert.ok(html.includes("llista EFF"));
+    assert.ok(html.includes("llista de l'idioma seleccionat"));
     assert.ok(html.includes("sense repetir-se"));
+    assert.ok(!html.includes("llista EFF"));
+  });
+});
+
+describe("generateValue password", () => {
+  const options = {
+    length: 20,
+    uppercase: true,
+    lowercase: true,
+    numbers: true,
+    symbols: true,
+    minNumbers: 3,
+    minSymbols: 2,
+  };
+
+  it("respects exact length and minimum numbers/symbols", () => {
+    assert.equal(generatorMinimumLength(options), 7);
+    for (let index = 0; index < 30; index += 1) {
+      const value = generateValue("password", options);
+      assert.equal([...value].length, 20);
+      assert.ok(/[A-Z]/.test(value));
+      assert.ok(/[a-z]/.test(value));
+      assert.ok((value.match(/[0-9]/g) || []).length >= 3);
+      assert.ok((value.match(/[^A-Za-z0-9]/g) || []).length >= 2);
+    }
+  });
+
+  it("expands the length when the minimums do not fit", () => {
+    const value = generateValue("password", {
+      length: 8,
+      uppercase: false,
+      lowercase: true,
+      numbers: true,
+      symbols: true,
+      minNumbers: 5,
+      minSymbols: 5,
+    });
+    assert.equal(
+      generatorMinimumLength({
+        uppercase: false,
+        lowercase: true,
+        numbers: true,
+        symbols: true,
+        minNumbers: 5,
+        minSymbols: 5,
+      }),
+      11,
+    );
+    assert.equal([...value].length, 11);
+    assert.ok((value.match(/[0-9]/g) || []).length >= 5);
+    assert.ok((value.match(/[^A-Za-z0-9]/g) || []).length >= 5);
   });
 });
 
@@ -215,6 +316,36 @@ describe("passwordOptions", () => {
     });
     assert.ok(html.includes('min="8"'));
     assert.ok(!html.includes('min="5"'));
+    assert.ok(html.includes('id="generator-length-input"'));
+    assert.ok(html.includes('id="generator-min-numbers"'));
+    assert.ok(html.includes('id="generator-min-symbols"'));
+  });
+
+  it("els mínims per defecte de números i símbols són 2", () => {
+    const options = {
+      length: 20,
+      uppercase: true,
+      lowercase: true,
+      numbers: true,
+      symbols: true,
+    };
+    const html = passwordOptions(options);
+    assert.ok(
+      html.includes(
+        `id="generator-min-numbers" type="number" min="0" max="${GENERATOR_MAX_MIN_COUNT}" value="2"`,
+      ),
+    );
+    assert.ok(
+      html.includes(
+        `id="generator-min-symbols" type="number" min="0" max="${GENERATOR_MAX_MIN_COUNT}" value="2"`,
+      ),
+    );
+    assert.equal(generatorMinimumLength(options), 6);
+    for (let index = 0; index < 30; index += 1) {
+      const value = generateValue("password", options);
+      assert.ok((value.match(/[0-9]/g) || []).length >= 2);
+      assert.ok((value.match(/[^A-Za-z0-9]/g) || []).length >= 2);
+    }
   });
 });
 

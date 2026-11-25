@@ -10,7 +10,7 @@ export function bottomNavComponent(activeTab = "vault") {
   return `
     <footer class="bottom-nav">
       <button class="nav ${activeTab === "vault" ? "active" : ""}" id="nav-vault">
-        ${icon("ShieldCheck", 21)}
+        ${icon("Vault", 21)}
         <span>SherLock</span>
       </button>
       <button class="nav" id="nav-new">
@@ -62,11 +62,14 @@ export function sidebarComponent(state) {
       </div>
       <nav class="folders">
         <button class="folder ${!state.activeFolderId ? "active" : ""}" data-folder="">
-          <span class="folder-icon blue">${icon("ShieldCheck", 17)}</span>
+          <span class="folder-icon blue">${icon("Vault", 17)}</span>
           <span>Tots els elements</span>
           <b class="count">${state.entries.length}</b>
         </button>
-        ${state.folders.map((folder) => folderItem(folder, state)).join("")}
+        ${state.folders
+          .filter((folder) => folder.id !== "default")
+          .map((folder) => folderItem(folder, state))
+          .join("")}
       </nav>
     </aside>
   `;

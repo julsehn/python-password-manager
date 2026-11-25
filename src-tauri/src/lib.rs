@@ -50,6 +50,45 @@ pub(crate) fn vault_path() -> PathBuf {
         .unwrap_or_else(|| config_dir().join("vault.json"))
 }
 
+pub(crate) fn ui_preferences_path() -> PathBuf {
+    config_dir().join("ui_preferences.json")
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct UiPreferences {
+    font_size: u8,
+}
+
+fn clamp_ui_font_size(size: u8) -> u8 {
+    size.clamp(14, 24)
+}
+
+#[tauri::command]
+fn get_ui_font_size() -> Result<Option<u8>, String> {
+    let path = ui_preferences_path();
+    let raw = match std::fs::read_to_string(&path) {
+        Ok(raw) => raw,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(format!("No s'ha pogut llegir la configuració: {}", error)),
+    };
+    let preferences: UiPreferences = match serde_json::from_str(&raw) {
+        Ok(preferences) => preferences,
+        Err(_) => return Ok(None),
+    };
+    Ok(Some(clamp_ui_font_size(preferences.font_size)))
+}
+
+#[tauri::command]
+fn set_ui_font_size(size: u8) -> Result<(), String> {
+    if !(14..=24).contains(&size) {
+        return Err("La mida del text ha d'estar entre 14 i 24 px.".to_string());
+    }
+    let preferences = UiPreferences { font_size: size };
+    let contents = serde_json::to_vec(&preferences)
+        .map_err(|error| format!("No s'ha pogut serialitzar la configuració: {}", error))?;
+    atomic_write(&ui_preferences_path(), &contents)
+}
+
 pub(crate) const MIN_MASTER_PASSWORD_LENGTH: usize = 12;
 
 /// The frontend shows the same checklist, but the backend is authoritative:
@@ -349,25 +388,29 @@ pub(crate) struct VaultFile {
 const VAULT_FORMAT_VERSION: &str = "1";
 
 pub(crate) fn parse_vault_file(content: &str) -> Result<VaultFile, String> {
-    let vault_file: VaultFile = serde_json::from_str(content)
-        .map_err(|e| format!("Failed to parse vault structure: {}", e))?;
+    let vault_file: VaultFile = serde_json::from_str(content).map_err(|e| {
+        format!(
+            "No s'ha pogut interpretar l'estructura de la caixa forta: {}",
+            e
+        )
+    })?;
     if vault_file.version != VAULT_FORMAT_VERSION {
         return Err(format!(
-            "Unsupported vault version '{}' (expected '{}').",
+            "Versió de caixa forta no compatible: '{}' (s'esperava '{}').",
             vault_file.version, VAULT_FORMAT_VERSION
         ));
     }
     let salt = security::decode_base64(&vault_file.salt, "salt")?;
     if salt.len() != 16 {
-        return Err("Vault salt has an invalid length".to_string());
+        return Err("La sal de la caixa forta té una longitud no vàlida".to_string());
     }
     let nonce = security::decode_base64(&vault_file.nonce, "nonce")?;
     if nonce.len() != 12 {
-        return Err("Vault nonce has an invalid length".to_string());
+        return Err("El nonce de la caixa forta té una longitud no vàlida".to_string());
     }
     let ciphertext = security::decode_base64(&vault_file.ciphertext, "ciphertext")?;
     if ciphertext.len() < 17 {
-        return Err("Vault ciphertext is too short".to_string());
+        return Err("El text xifrat de la caixa forta és massa curt".to_string());
     }
     Ok(vault_file)
 }
@@ -413,6 +456,8 @@ pub fn run() {
             hide_main_window,
             get_vault_info,
             get_vault_entries,
+            get_ui_font_size,
+            set_ui_font_size,
             update_entry,
             sync_upload_vault,
             sync_download_vault,
@@ -420,6 +465,7 @@ pub fn run() {
             sync_resolve_conflict,
             auth_official_cloud,
             register_official_cloud,
+            cloud_password_matches_master,
             check_railway_username,
             revoke_official_cloud_session,
             delete_cloud_account,
@@ -468,7 +514,7 @@ async fn init_empty_vault(
     let salt = security::generate_salt().map_err(|e| format!("Failed to generate salt: {}", e))?;
 
     let key = security::derive_key_from_password(&password, &salt)
-        .map_err(|e| format!("Failed to derive key: {}", e))?;
+        .map_err(|e| format!("No s'ha pogut derivar la clau: {}", e))?;
 
     let nonce_bytes =
         security::generate_nonce().map_err(|e| format!("Failed to generate nonce: {}", e))?;
@@ -561,22 +607,23 @@ fn unlock_vault(
 
     let salt_bytes = security::decode_base64(&vault_file.salt, "salt")?;
     let key = security::derive_key_from_password(&master_password, &salt_bytes)
-        .map_err(|e| format!("Failed to derive key from password: {}", e))?;
+        .map_err(|e| format!("No s'ha pogut derivar la clau de la contrasenya: {}", e))?;
 
     let nonce_bytes = security::decode_base64(&vault_file.nonce, "nonce")?;
     let ciphertext_bytes = security::decode_base64(&vault_file.ciphertext, "ciphertext")?;
 
-    let decrypted =
-        security::decrypt_aes_gcm(&key, &nonce_bytes, &ciphertext_bytes).map_err(|e| {
-            format!(
-                "Failed to decrypt vault: {}. Please verify your master password is correct.",
-                e
-            )
+    let decrypted = security::decrypt_aes_gcm(&key, &nonce_bytes, &ciphertext_bytes)
+        .map_err(|_| {
+            "No s'ha pogut desxifrar la caixa forta. Comprova que la contrasenya mestra sigui correcta.".to_string()
         })?;
 
     let data: String = String::from_utf8_lossy(&decrypted).into();
-    let vault_data: VaultData = serde_json::from_str(&data)
-        .map_err(|e| format!("Failed to parse decrypted vault data: {}", e))?;
+    let vault_data: VaultData = serde_json::from_str(&data).map_err(|e| {
+        format!(
+            "No s'ha pogut interpretar les dades desxifrades de la caixa forta: {}",
+            e
+        )
+    })?;
 
     server_state.set_unlocked_with_cloud_session(
         master_password.to_string(),
@@ -705,7 +752,7 @@ async fn save_vault(
     let salt = security::generate_salt().map_err(|e| format!("Failed to generate salt: {}", e))?;
 
     let key = security::derive_key_from_password(&master_password, &salt)
-        .map_err(|e| format!("Failed to derive key: {}", e))?;
+        .map_err(|e| format!("No s'ha pogut derivar la clau: {}", e))?;
 
     let nonce_bytes =
         security::generate_nonce().map_err(|e| format!("Failed to generate nonce: {}", e))?;
@@ -931,17 +978,14 @@ async fn do_upload_vault(
 
     let salt_bytes = security::decode_base64(&vault_file.salt, "salt")?;
     let key = security::derive_key_from_password(&master_password, &salt_bytes)
-        .map_err(|e| format!("Failed to derive key: {}", e))?;
+        .map_err(|e| format!("No s'ha pogut derivar la clau: {}", e))?;
 
     let nonce_bytes = security::decode_base64(&vault_file.nonce, "nonce")?;
     let ciphertext_bytes = security::decode_base64(&vault_file.ciphertext, "ciphertext")?;
 
-    let decrypted =
-        security::decrypt_aes_gcm(&key, &nonce_bytes, &ciphertext_bytes).map_err(|e| {
-            format!(
-                "Failed to decrypt vault: {}. Please verify your master password.",
-                e
-            )
+    let decrypted = security::decrypt_aes_gcm(&key, &nonce_bytes, &ciphertext_bytes)
+        .map_err(|_| {
+            "No s'ha pogut desxifrar la caixa forta. Comprova que la contrasenya mestra sigui correcta.".to_string()
         })?;
 
     let _data: String = String::from_utf8_lossy(&decrypted).into();
@@ -1003,17 +1047,14 @@ async fn do_download_vault(
 
     let salt_bytes = security::decode_base64(&vault_file.salt, "salt")?;
     let key = security::derive_key_from_password(master_password, &salt_bytes)
-        .map_err(|e| format!("Failed to derive key: {}", e))?;
+        .map_err(|e| format!("No s'ha pogut derivar la clau: {}", e))?;
 
     let nonce_bytes = security::decode_base64(&vault_file.nonce, "nonce")?;
     let ciphertext_bytes = security::decode_base64(&vault_file.ciphertext, "ciphertext")?;
 
-    let decrypted =
-        security::decrypt_aes_gcm(&key, &nonce_bytes, &ciphertext_bytes).map_err(|e| {
-            format!(
-                "Failed to decrypt downloaded vault: {}. Please verify your master password.",
-                e
-            )
+    let decrypted = security::decrypt_aes_gcm(&key, &nonce_bytes, &ciphertext_bytes)
+        .map_err(|_| {
+            "No s'ha pogut desxifrar la caixa forta descarregada. Comprova que la contrasenya mestra sigui correcta.".to_string()
         })?;
 
     let data: String = String::from_utf8_lossy(&decrypted).into();
@@ -1279,6 +1320,13 @@ async fn register_official_cloud(
         return Err("Desbloqueja la caixa forta per desar la sessió de Railway.".to_string());
     }
 
+    if validate_master_password(&password).is_err() {
+        return Err(
+            "La contrasenya de Railway ha de tenir com a mínim 12 caràcters i incloure majúscules, minúscules, números i un caràcter especial."
+                .to_string(),
+        );
+    }
+
     if server_state.master_password_matches(&password) {
         return Err(
             "La contrasenya de Railway no pot ser la mateixa que la contrasenya mestra de la caixa forta. Tria'n una de diferent."
@@ -1309,6 +1357,17 @@ async fn register_official_cloud(
         username: auth.username,
         vault_id: auth.vault_id,
     })
+}
+
+/// Check a candidate Railway password against the unlocked vault master
+/// password. The master password never leaves Rust; only the boolean result
+/// is returned so the registration form can warn before submitting.
+#[tauri::command]
+fn cloud_password_matches_master(
+    password: String,
+    server_state: tauri::State<'_, Arc<ServerState>>,
+) -> bool {
+    server_state.master_password_matches(&password)
 }
 
 #[tauri::command]
@@ -1489,6 +1548,21 @@ mod sync_download_tests {
         let corrupt_blob = "not a valid json blob";
         let parse_result = serde_json::from_str::<VaultFile>(corrupt_blob);
         assert!(parse_result.is_err());
+    }
+
+    #[test]
+    fn decryption_failure_message_is_localized_and_hides_aead_details() {
+        let salt = vec![1u8; 16];
+        let key = security::derive_key_from_password("correct_password", &salt).unwrap();
+        let nonce = security::generate_nonce().unwrap();
+        let ciphertext = security::encrypt_aes_gcm(&key, &nonce, b"payload").unwrap();
+        let wrong_key = security::derive_key_from_password("wrong_password", &salt).unwrap();
+
+        let message = security::decrypt_aes_gcm(&wrong_key, &nonce, &ciphertext).unwrap_err();
+        assert_eq!(message, security::DECRYPTION_FAILED);
+        assert!(message.contains("No s'ha pogut desxifrar"));
+        assert!(!message.contains("aead::Error"));
+        assert!(!message.to_ascii_lowercase().contains("decryption failed"));
     }
 
     #[test]

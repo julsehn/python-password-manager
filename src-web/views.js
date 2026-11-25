@@ -10,6 +10,7 @@ import {
   pairingSecondsRemaining,
 } from "./utils.js";
 import {
+  generateValue,
   passwordOptions,
   passwordRequirementsMarkup,
   passwordStrengthMarkup,
@@ -101,8 +102,9 @@ export function createViews(state) {
               placeholder="${isNewUser ? "Mínim 12 caràcters" : "La teva contrasenya mestra"}"
               required
             />
-            <button type="button" class="reveal" id="reveal-password" title="Mostrar contrasenya">
-              ${icon("Eye", 17)}
+            <button type="button" class="reveal" id="reveal-password" title="Mostrar contrasenya" aria-label="Mostrar contrasenya" aria-pressed="false">
+              <span class="eye-open">${icon("Eye", 17)}</span>
+              <span class="eye-off">${icon("EyeOff", 17)}</span>
             </button>
           </div>
           ${
@@ -118,8 +120,9 @@ export function createViews(state) {
                 placeholder="Torna-la a escriure"
                 required
               />
-              <button type="button" class="reveal" id="reveal-password-confirm" title="Mostrar contrasenya">
-                ${icon("Eye", 17)}
+              <button type="button" class="reveal" id="reveal-password-confirm" title="Mostrar contrasenya" aria-label="Mostrar contrasenya" aria-pressed="false">
+                <span class="eye-open">${icon("Eye", 17)}</span>
+                <span class="eye-off">${icon("EyeOff", 17)}</span>
               </button>
             </div>
             <div class="password-setup-feedback" id="master-password-feedback">
@@ -151,10 +154,95 @@ export function createViews(state) {
         </p>
       </div>
     </main>
+    ${state.showSetupPreferences ? setupPreferencesModal() : ""}
     ${state.showCloudLogin ? cloudLoginModal() : ""}
     ${state.showPrivacyPolicy ? privacyPolicyModal() : ""}
     ${state.appDialog ? appDialogModal() : ""}
     ${state.showDownloadPassword ? downloadPasswordModal() : ""}
+  `;
+  }
+
+  function setupPreferencesModal() {
+    const currentSize = Number(state.settings.fontSize) || 16;
+    const currentTheme = state.settings.theme || "auto";
+    const sizes = [
+      { value: 14, label: "Petita", hint: "14 px" },
+      { value: 16, label: "Mitjana", hint: "16 px" },
+      { value: 18, label: "Gran", hint: "18 px" },
+      { value: 21, label: "Molt gran", hint: "21 px" },
+    ];
+    const selected = sizes.reduce(
+      (best, size) =>
+        Math.abs(size.value - currentSize) < Math.abs(best.value - currentSize)
+          ? size
+          : best,
+      sizes[0],
+    );
+    const themes = [
+      { value: "auto", label: "Automàtic", iconName: "Monitor" },
+      { value: "light", label: "Clar", iconName: "Sun" },
+      { value: "dark", label: "Obscur", iconName: "Moon" },
+    ];
+
+    return `
+    <div class="modal-backdrop setup-preferences-backdrop">
+      <section class="entry-modal setup-preferences-modal" role="dialog" aria-modal="true" aria-labelledby="setup-preferences-title" aria-describedby="setup-preferences-desc">
+        <header class="modal-header">
+          <h2 id="setup-preferences-title">Abans de començar</h2>
+        </header>
+        <div class="modal-scroll">
+          <p class="helper" id="setup-preferences-desc">Tria com vols veure SherLock. Ho pots canviar quan vulguis des de Configuració.</p>
+
+          <div class="setup-preferences-group">
+            <h3>Tema</h3>
+            <div class="setup-theme-options" role="group" aria-label="Tema">
+              ${themes
+                .map(
+                  (theme) => `
+                <button type="button" class="setup-theme-choice ${theme.value === currentTheme ? "selected" : ""}" data-setup-theme="${theme.value}" aria-pressed="${theme.value === currentTheme}">
+                  ${icon(theme.iconName, 20)}
+                  <span>${theme.label}</span>
+                </button>
+              `,
+                )
+                .join("")}
+            </div>
+          </div>
+
+          <div class="setup-preferences-group">
+            <div class="setup-preferences-heading">
+              <h3>Mida del text</h3>
+              <span id="font-size-preview-value">${currentSize} px</span>
+            </div>
+            <fieldset class="font-size-choices">
+              <legend class="sr-only">Mida del text</legend>
+              ${sizes
+                .map(
+                  (size) => `
+                <label class="font-size-choice">
+                  <input type="radio" name="font-size-choice" value="${size.value}" ${size === selected ? "checked" : ""} />
+                  <span class="font-size-choice-copy">
+                    <strong>${size.label}</strong>
+                    <small>${size.hint}</small>
+                  </span>
+                  <span class="font-size-choice-sample" aria-hidden="true" style="font-size: ${size.value}px">Aa</span>
+                </label>
+              `,
+                )
+                .join("")}
+            </fieldset>
+            <div class="font-size-preview" id="font-size-preview" style="font-size: ${currentSize}px">
+              <strong>La teva caixa forta, a la teva mida.</strong>
+              <span>Aquest és un exemple del text que veuràs a SherLock.</span>
+            </div>
+          </div>
+        </div>
+        <footer class="modal-footer">
+          <button type="button" class="secondary" id="skip-setup-preferences">Més tard</button>
+          <button type="button" class="primary" id="confirm-setup-preferences">Continua</button>
+        </footer>
+      </section>
+    </div>
   `;
   }
 
@@ -176,8 +264,12 @@ export function createViews(state) {
             <p class="subtitle">Tot el que necessites, protegit i a mà.</p>
           </div>
           <div class="header-actions">
+            <button class="lock-button trash-button" id="open-trash" title="Paperera (${state.trash.length})" aria-label="Obrir la paperera (${state.trash.length} elements)">
+              ${icon("Trash2", 17)}
+              ${state.trash.length ? `<span class="trash-count">${state.trash.length}</span>` : ""}
+            </button>
             <button class="lock-button" id="refresh-vault" title="Actualitzar accessos">
-              ${icon("RotateCw", 17)}
+              ${icon("RefreshCw", 17)}
             </button>
             <button class="lock-button" id="lock-vault" title="Bloquejar la SherLock">
               ${icon("LockKeyhole", 17)}
@@ -199,6 +291,19 @@ export function createViews(state) {
             ${icon("Plus", 17)} Nou accés
           </button>
         </div>
+
+        ${
+          state.showTrashHint
+            ? `
+          <div class="trash-hint" role="note" aria-label="Consell sobre la paperera">
+            ${icon("Trash2", 18)}
+            <p class="trash-hint-text"><strong>Consell:</strong> si elimines un accés, anirà a la Paperera i el podràs recuperar quan vulguis.</p>
+            <button type="button" class="secondary trash-hint-action" id="trash-hint-open">Veure la paperera</button>
+            <button type="button" class="icon-btn trash-hint-close" id="trash-hint-dismiss" title="Tancar" aria-label="Tancar el consell">${icon("X", 16)}</button>
+          </div>
+        `
+            : ""
+        }
 
         <div class="list-header">
           <span>${filtered.length} ${filtered.length === 1 ? "accés" : "accessos"}</span>
@@ -276,7 +381,7 @@ export function createViews(state) {
         </div>
 
         <section class="generated-card">
-          <output class="generated-value" draggable="true" title="Arrossega-la a un camp de text">${escapeHtml(state.generatedValue || generateValue())}</output>
+          <output class="generated-value" draggable="true" title="Arrossega-la a un camp de text">${escapeHtml(state.generatedValue || generateValue(state.generatorType, state.generatorOptions, state.generatorLanguage))}</output>
           <button class="icon-btn" id="regenerate" title="Regenerar">
             ${icon("RefreshCw", 20)}
           </button>
@@ -304,7 +409,6 @@ export function createViews(state) {
                 <option value="Català" ${currentLang === "Català" ? "selected" : ""}>Català</option>
                 <option value="Castellà" ${currentLang === "Castellà" || currentLang === "Español" ? "selected" : ""}>Castellà</option>
                 <option value="Anglès" ${currentLang === "Anglès" || currentLang === "English" ? "selected" : ""}>Anglès</option>
-                <option value="Francès" ${currentLang === "Francès" || currentLang === "Français" ? "selected" : ""}>Francès</option>
               </select>
             </label>
           </div>
@@ -435,9 +539,6 @@ export function createViews(state) {
             <button class="setting-action" id="export-vault">
               ${icon("Download", 18)} Exportar
             </button>
-            <button class="setting-action" id="open-trash">
-              ${icon("Trash2", 18)} Paperera <b>${state.trash.length}</b>
-            </button>
           </div>
           <button type="button" class="setting-action danger-btn" id="reset-vault">
             ${icon("RotateCcw", 18)} Eliminar dades locals i començar de nou
@@ -508,19 +609,20 @@ export function createViews(state) {
           </label>
           <div class="setting-row">
             <span>
-              <strong>Mida de la lletra</strong>
-              <small>Augmenta o redueix la mida del text en temps real.</small>
+              <strong>Mida del text</strong>
+              <small>Tria una mida còmoda. Es desa automàticament.</small>
             </span>
             <div class="slider-wrapper">
               <input
                 id="font-size-setting"
                 type="range"
-                min="12"
-                max="22"
+                min="14"
+                max="24"
                 step="1"
                 value="${fontSizeValue}"
+                aria-label="Mida del text"
               />
-              <output id="font-size-value">${fontSizeValue} px</output>
+              <output id="font-size-value" for="font-size-setting">${fontSizeValue} px</output>
             </div>
           </div>
           <div class="setting-row">

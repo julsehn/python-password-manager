@@ -230,12 +230,114 @@ document.documentElement.appendChild(iconHostElement);
 const iconShadow = iconHostElement.attachShadow({ mode: "closed" });
 const iconStyle = document.createElement("style");
 iconStyle.textContent = `
-  *{box-sizing:border-box}.sherlock-icon-btn{position:fixed;display:flex;align-items:center;justify-content:center;padding:0;border:0;border-radius:9px;background:transparent;cursor:pointer;opacity:.9;pointer-events:auto;transition:opacity .15s ease,transform .15s ease}.sherlock-icon-btn[hidden]{display:none}
+  *{box-sizing:border-box}
+  :host{
+    --sherlock-font-size:16px;
+    --sherlock-bg:#172b4d;
+    --sherlock-text:#ffffff;
+    --sherlock-muted:#b8c8dc;
+    --sherlock-hover:#ffffff20;
+    --sherlock-border:transparent;
+    --sherlock-shadow:0 4px 16px #0004;
+  }
+  :host([data-sherlock-theme="light"]){
+    --sherlock-bg:#ffffff;
+    --sherlock-text:#172b4d;
+    --sherlock-muted:#5b6b82;
+    --sherlock-hover:#eef4fb;
+    --sherlock-border:#d6e2f0;
+    --sherlock-shadow:0 8px 24px rgba(15,23,42,.18);
+  }
+  .sherlock-icon-btn{position:fixed;display:flex;align-items:center;justify-content:center;padding:0;border:0;border-radius:9px;background:transparent;cursor:pointer;opacity:.9;pointer-events:auto;transition:opacity .15s ease,transform .15s ease}.sherlock-icon-btn[hidden]{display:none}
   .sherlock-icon-btn:hover{opacity:1;transform:scale(1.08)}.sherlock-icon-btn:focus-visible{outline:2px solid #2471d1;outline-offset:2px}.sherlock-icon-btn img{width:100%;height:100%;object-fit:contain;border-radius:inherit}
-  .sherlock-menu,.sherlock-toast{position:fixed;z-index:2147483647;color:#fff;background:#172b4d;font:13px -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;box-shadow:0 4px 16px #0004}.sherlock-menu{min-width:210px;max-width:300px;padding:6px;border-radius:10px;pointer-events:auto}.sherlock-menu button{display:block;width:100%;padding:9px 10px;border:0;border-radius:6px;background:transparent;color:inherit;text-align:left;font:inherit;cursor:pointer}.sherlock-menu button:hover{background:#ffffff20}.sherlock-menu small{display:block;margin-top:3px;color:#b8c8dc}.sherlock-toast{left:50%;bottom:20px;transform:translateX(-50%);padding:10px 16px;border-radius:8px;pointer-events:none}
+  .sherlock-menu,.sherlock-toast{position:fixed;z-index:2147483647;color:var(--sherlock-text);background:var(--sherlock-bg);border:1px solid var(--sherlock-border);font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:var(--sherlock-font-size,16px);box-shadow:var(--sherlock-shadow)}.sherlock-menu{min-width:210px;max-width:300px;padding:6px;border-radius:10px;pointer-events:auto}.sherlock-menu button{display:block;width:100%;padding:9px 10px;border:0;border-radius:6px;background:transparent;color:inherit;text-align:left;font:inherit;cursor:pointer}.sherlock-menu button:hover{background:var(--sherlock-hover)}.sherlock-menu small{display:block;margin-top:3px;color:var(--sherlock-muted)}.sherlock-menu-title{display:block;padding:8px 10px 2px;color:var(--sherlock-text);font-size:1em}.sherlock-menu-message{margin:0;padding:0 10px 10px;color:var(--sherlock-muted);font-size:.92em;line-height:1.4}.sherlock-menu button.primary{margin-top:2px;background:#2471d1;color:#fff}.sherlock-menu button.primary:hover{background:#185cac}.sherlock-toast{left:50%;bottom:20px;transform:translateX(-50%);padding:10px 16px;border-radius:8px;pointer-events:none}
+  .sherlock-prompt{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);z-index:2147483647;width:min(360px,calc(100vw - 32px));padding:16px;border-radius:12px;background:var(--sherlock-bg);color:var(--sherlock-text);border:1px solid var(--sherlock-border);box-shadow:var(--sherlock-shadow);font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:var(--sherlock-font-size,16px);pointer-events:auto}
+  .sherlock-prompt h3{margin:0 0 6px;font-size:1.05em;line-height:1.25}
+  .sherlock-prompt p{margin:0;color:var(--sherlock-muted);line-height:1.4}
+  .sherlock-prompt-actions{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:8px;margin-top:14px}
+  .sherlock-prompt button{border:1px solid var(--sherlock-border);border-radius:7px;padding:8px 12px;background:transparent;color:inherit;font:inherit;font-weight:600;cursor:pointer}
+  .sherlock-prompt button:hover{background:var(--sherlock-hover)}
+  .sherlock-prompt button.primary{background:#2471d1;border-color:#2471d1;color:#fff}
+  .sherlock-prompt button.primary:hover{background:#185cac}
+  .sherlock-prompt button:disabled{opacity:.6;cursor:default}
   @media(prefers-reduced-motion:reduce){.sherlock-icon-btn{transition:none}}
 `;
 iconShadow.append(iconStyle);
+
+const themeMedia =
+  typeof window.matchMedia === "function"
+    ? window.matchMedia("(prefers-color-scheme: dark)")
+    : { matches: false, addEventListener: null };
+let injectedTheme = "auto";
+let resolvedInjectedTheme = themeMedia.matches ? "dark" : "light";
+
+function iconResourceForTheme() {
+  return extensionApi.runtime.getURL(
+    resolvedInjectedTheme === "dark"
+      ? "icons/icon128-dark.png"
+      : "icons/icon128.png",
+  );
+}
+
+function applyInjectedFontSize(value) {
+  const size = Number(value);
+  const clamped = Math.min(24, Math.max(14, Math.round(size) || 16));
+  if (typeof iconHostElement.style?.setProperty === "function") {
+    iconHostElement.style.setProperty("--sherlock-font-size", `${clamped}px`);
+  } else if (iconHostElement.style) {
+    iconHostElement.style["--sherlock-font-size"] = `${clamped}px`;
+  }
+}
+
+function applyInjectedTheme(theme) {
+  injectedTheme = ["light", "dark", "auto"].includes(theme) ? theme : "auto";
+  resolvedInjectedTheme =
+    injectedTheme === "auto"
+      ? themeMedia.matches
+        ? "dark"
+        : "light"
+      : injectedTheme;
+  iconHostElement.dataset.sherlockTheme = resolvedInjectedTheme;
+  try {
+    extensionApi.storage.local.set({
+      sherlock_resolved_theme: resolvedInjectedTheme,
+    });
+  } catch {
+    // Storage is optional; the injected UI still uses the resolved theme.
+  }
+  iconShadow.querySelectorAll("img[data-sherlock-icon]").forEach((img) => {
+    img.src = iconResourceForTheme();
+  });
+}
+
+applyInjectedFontSize(16);
+applyInjectedTheme("auto");
+try {
+  extensionApi.storage.local.get(
+    ["sherlock_theme", "sherlock_font_size"],
+    (data) => {
+      applyInjectedTheme((data && data.sherlock_theme) || "auto");
+      applyInjectedFontSize(data && data.sherlock_font_size);
+    },
+  );
+  extensionApi.storage.onChanged.addListener((changes, areaName) => {
+    if (areaName !== "local") return;
+    if (changes.sherlock_theme) {
+      applyInjectedTheme(changes.sherlock_theme.newValue || "auto");
+    }
+    if (changes.sherlock_font_size) {
+      applyInjectedFontSize(changes.sherlock_font_size.newValue);
+    }
+  });
+} catch {
+  // Storage is optional; keep the system theme.
+}
+if (themeMedia.addEventListener) {
+  themeMedia.addEventListener("change", () => {
+    if (injectedTheme === "auto") applyInjectedTheme("auto");
+  });
+}
+
 const iconByField = new WeakMap();
 const activeIconEntries = new Map();
 const resizeObserver = new ResizeObserver(schedulePositionUpdate);
@@ -243,6 +345,7 @@ const observedRoots = new WeakSet();
 let updateTimer;
 let toastTimer;
 let frameScheduled = false;
+let credentialSubmitCheckInFlight = false;
 
 function showToast(message) {
   iconShadow.querySelector(".sherlock-toast")?.remove();
@@ -277,16 +380,22 @@ function positionFieldIcon(field, button) {
     parent?.querySelectorAll(
       'button,[role="button"],[aria-label*="password" i]',
     ) || [];
+  const verticalCenter = rect.top + rect.height / 2;
+  const verticalTolerance = Math.min(14, rect.height * 0.3);
   for (const control of controls) {
     if (control === button || iconHostElement.contains(control)) continue;
     const r = control.getBoundingClientRect();
     if (
-      r.width &&
-      r.height &&
-      Math.abs(r.top + r.height / 2 - (rect.top + rect.height / 2)) <
-        rect.height
-    )
-      left = Math.max(rect.left + 4, Math.min(left, r.left - box.size - 4));
+      !r.width ||
+      !r.height ||
+      r.left < rect.left + rect.width / 2 ||
+      r.width > rect.width * 0.5 ||
+      r.height > rect.height * 1.2 ||
+      Math.abs(r.top + r.height / 2 - verticalCenter) > verticalTolerance
+    ) {
+      continue;
+    }
+    left = Math.max(rect.left + 4, Math.min(left, r.left - box.size - 4));
   }
   button.style.top = `${box.top}px`;
   button.style.left = `${left}px`;
@@ -306,6 +415,313 @@ function schedulePositionUpdate() {
 
 function closeCredentialMenu() {
   iconShadow.querySelector(".sherlock-menu")?.remove();
+}
+
+function closeSherlockPrompt() {
+  iconShadow.querySelector(".sherlock-prompt")?.remove();
+}
+
+function showSherlockPrompt({ title, message, actions = [] }) {
+  closeCredentialMenu();
+  closeSherlockPrompt();
+  const prompt = document.createElement("div");
+  prompt.className = "sherlock-prompt";
+  prompt.setAttribute("role", "dialog");
+  prompt.setAttribute("aria-modal", "true");
+  prompt.setAttribute("aria-label", title);
+
+  const heading = document.createElement("h3");
+  heading.textContent = title;
+  const copy = document.createElement("p");
+  copy.textContent = message;
+  const actionRow = document.createElement("div");
+  actionRow.className = "sherlock-prompt-actions";
+  const buttons = [];
+
+  for (const action of actions) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = action.label;
+    if (action.primary) button.className = "primary";
+    button.addEventListener("click", async () => {
+      if (button.disabled) return;
+      buttons.forEach((item) => {
+        item.disabled = true;
+      });
+      closeSherlockPrompt();
+      await action.onClick?.();
+    });
+    buttons.push(button);
+    actionRow.append(button);
+  }
+
+  prompt.append(heading, copy, actionRow);
+  iconShadow.append(prompt);
+  requestAnimationFrame(() =>
+    actionRow.querySelector("button.primary")?.focus(),
+  );
+}
+
+// Close the credential chooser when the user clicks outside it, presses
+// Escape, scrolls away or moves focus to the browser chrome/an iframe.
+// Events originating inside the closed shadow root are retargeted to the
+// host element, so clicks on the menu itself are not treated as outside.
+document.addEventListener(
+  "pointerdown",
+  (event) => {
+    if (!iconShadow.querySelector(".sherlock-menu,.sherlock-prompt")) return;
+    if (event.target !== iconHostElement) {
+      closeCredentialMenu();
+      closeSherlockPrompt();
+    }
+  },
+  true,
+);
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") {
+    closeCredentialMenu();
+    closeSherlockPrompt();
+  }
+});
+window.addEventListener("blur", closeCredentialMenu);
+window.addEventListener("scroll", closeCredentialMenu, true);
+
+const MULTI_LEVEL_SUFFIXES = new Set([
+  "co.uk",
+  "org.uk",
+  "ac.uk",
+  "gov.uk",
+  "com.au",
+  "net.au",
+  "org.au",
+  "co.nz",
+  "co.jp",
+  "com.br",
+  "com.mx",
+  "com.es",
+  "com.ar",
+  "com.co",
+  "co.in",
+]);
+
+function baseHostname(hostname) {
+  const host = String(hostname || "").toLowerCase();
+  if (!host || host.includes(":") || /^\d+\.\d+\.\d+\.\d+$/.test(host)) {
+    return host;
+  }
+  const parts = host.split(".");
+  if (parts.length <= 2) return host;
+  const suffix = parts.slice(-2).join(".");
+  return MULTI_LEVEL_SUFFIXES.has(suffix) ? parts.slice(-3).join(".") : suffix;
+}
+
+function siteHostname(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  try {
+    const hostname = new URL(
+      raw.includes("://") ? raw : `https://${raw}`,
+    ).hostname.replace(/^www\./, "");
+    return baseHostname(hostname);
+  } catch {
+    return "";
+  }
+}
+
+function saveCredentialData({
+  site,
+  username,
+  password,
+  forceNew = false,
+  successMessage = "Accés desat a SherLock.",
+}) {
+  return new Promise((resolve) => {
+    extensionApi.runtime.sendMessage(
+      {
+        action: "saveCredentials",
+        data: {
+          site,
+          username,
+          password,
+          notes: "",
+          force_new: Boolean(forceNew),
+        },
+      },
+      (response) => {
+        if (extensionApi.runtime.lastError) {
+          showToast("No s'ha pogut desar l'accés.");
+          resolve(null);
+          return;
+        }
+        if (response?.success) {
+          showToast(successMessage);
+          resolve(response);
+          return;
+        }
+        showToast(
+          response?.error
+            ? `No s'ha pogut desar: ${response.error}`
+            : "No s'ha pogut desar l'accés.",
+        );
+        resolve(null);
+      },
+    );
+  });
+}
+
+async function selectCredential(field, choice, button) {
+  const currentSite = siteHostname(location.hostname);
+  const storedSite = siteHostname(choice.site);
+  if (storedSite && currentSite && storedSite !== currentSite && button) {
+    showActionMenu(button, {
+      title: "Accés d'un altre lloc",
+      message: `Aquest accés està desat per a ${storedSite}. Vols afegir també ${currentSite} i omplir, o només omplir?`,
+      actions: [
+        {
+          label: "Afegir i omplir",
+          primary: true,
+          onClick: async () => {
+            const credential = await fillSelected(field, choice);
+            if (!credential) return;
+            await saveCredentialData({
+              site: currentSite,
+              username: credential.username,
+              password: credential.password,
+              successMessage: "Accés afegit per a aquest lloc.",
+            });
+          },
+        },
+        {
+          label: "Només omplir",
+          onClick: () => fillSelected(field, choice),
+        },
+        { label: "Cancel·la" },
+      ],
+    });
+    return;
+  }
+  await fillSelected(field, choice);
+}
+
+function openSaveEntry(site, username) {
+  return new Promise((resolve) => {
+    extensionApi.runtime.sendMessage(
+      { action: "openSaveEntry", site, username },
+      (response) => {
+        if (extensionApi.runtime.lastError || !response?.success) {
+          showToast("No s'ha pogut obrir SherLock.");
+          resolve(false);
+          return;
+        }
+        resolve(true);
+      },
+    );
+  });
+}
+
+function askCreateNewEntry(field, button) {
+  const fields = field.form ? findFormFields(field.form) : findFormFields();
+  const usernameEl =
+    fields.usernameEl || (field.type !== "password" ? field : null);
+  const username = usernameEl ? usernameEl.value.trim() : "";
+  const currentSite = siteHostname(location.hostname);
+  if (!button) return;
+  showActionMenu(button, {
+    title: "Cap accés desat",
+    message: `No hi ha cap accés per a ${currentSite}. Vols obrir SherLock i crear una entrada nova per a aquest lloc?`,
+    actions: [
+      {
+        label: "Crear entrada",
+        primary: true,
+        onClick: () => openSaveEntry(currentSite, username),
+      },
+      { label: "Ara no" },
+    ],
+  });
+}
+
+async function handleSubmittedCredentials(site, username, password) {
+  const result = await new Promise((resolve) => {
+    extensionApi.runtime.sendMessage(
+      {
+        action: "sherlockCheckCredential",
+        domain: site,
+        username,
+        password,
+      },
+      (response) => {
+        if (extensionApi.runtime.lastError) {
+          resolve(null);
+          return;
+        }
+        resolve(response);
+      },
+    );
+  });
+
+  if (!result?.success) {
+    showSavePrompt({ site, username, password });
+    return;
+  }
+  if (result.sameUsername && result.samePassword) {
+    showToast("Aquest accés ja està desat.");
+    return;
+  }
+  if (result.sameUsername) {
+    showSherlockPrompt({
+      title: "Credencials diferents",
+      message: `Ja existeix un accés per a ${username || "aquest usuari"} en aquest lloc. Vols actualitzar la contrasenya o crear una entrada nova?`,
+      actions: [
+        {
+          label: "Actualitza",
+          primary: true,
+          onClick: () =>
+            saveCredentialData({
+              site,
+              username,
+              password,
+              successMessage: "Accés actualitzat.",
+            }),
+        },
+        {
+          label: "Crea'n una de nova",
+          onClick: () =>
+            saveCredentialData({
+              site,
+              username,
+              password,
+              forceNew: true,
+              successMessage: "Accés nou creat.",
+            }),
+        },
+        { label: "Cancel·la" },
+      ],
+    });
+    return;
+  }
+  if (result.hasCredentials) {
+    showSherlockPrompt({
+      title: "Nou usuari en aquest lloc",
+      message: `Aquest lloc ja té accessos desats, però no per a ${username || "aquest usuari"}. Vols crear una entrada nova?`,
+      actions: [
+        {
+          label: "Crear entrada",
+          primary: true,
+          onClick: () =>
+            saveCredentialData({
+              site,
+              username,
+              password,
+              forceNew: true,
+              successMessage: "Accés nou creat.",
+            }),
+        },
+        { label: "Cancel·la" },
+      ],
+    });
+    return;
+  }
+  showSavePrompt({ site, username, password });
 }
 
 async function fillSelected(field, choice) {
@@ -339,19 +755,22 @@ async function fillSelected(field, choice) {
       return;
     }
     showToast("Credencials emplenades.");
+    return result.credential;
   } catch {
     showToast("SherLock està bloquejat. Obre l'app per desbloquejar-lo.");
+    return null;
   }
 }
 
 function showCredentialMenu(button, field, choices) {
   closeCredentialMenu();
+  closeSherlockPrompt();
   const menu = document.createElement("div");
   menu.className = "sherlock-menu";
   menu.setAttribute("role", "menu");
-  const rect = button.getBoundingClientRect();
-  menu.style.left = `${Math.max(8, Math.min(rect.left, window.innerWidth - 308))}px`;
-  menu.style.top = `${Math.min(window.innerHeight - 12, rect.bottom + 6)}px`;
+  menu.style.left = "0px";
+  menu.style.top = "0px";
+  menu.style.visibility = "hidden";
   for (const choice of choices) {
     const option = document.createElement("button");
     option.type = "button";
@@ -364,11 +783,67 @@ function showCredentialMenu(button, field, choices) {
     option.append(domain);
     option.addEventListener("click", async () => {
       closeCredentialMenu();
-      await fillSelected(field, choice);
+      await selectCredential(field, choice, button);
     });
     menu.append(option);
   }
   iconShadow.append(menu);
+  positionSherlockMenu(menu, button);
+}
+
+function positionSherlockMenu(menu, button) {
+  const rect = button.getBoundingClientRect();
+  const menuRect = menu.getBoundingClientRect();
+  const iconCenter = rect.left + rect.width / 2;
+  const left = Math.max(
+    8,
+    Math.min(
+      iconCenter - menuRect.width / 2,
+      window.innerWidth - menuRect.width - 8,
+    ),
+  );
+  let top = rect.bottom + 6;
+  if (top + menuRect.height > window.innerHeight - 8) {
+    top = Math.max(8, rect.top - menuRect.height - 6);
+  }
+  menu.style.left = `${left}px`;
+  menu.style.top = `${top}px`;
+  menu.style.visibility = "";
+}
+
+function showActionMenu(button, { title, message, actions = [] }) {
+  closeCredentialMenu();
+  closeSherlockPrompt();
+  const menu = document.createElement("div");
+  menu.className = "sherlock-menu sherlock-action-menu";
+  menu.setAttribute("role", "menu");
+  menu.style.left = "0px";
+  menu.style.top = "0px";
+  menu.style.visibility = "hidden";
+
+  const heading = document.createElement("strong");
+  heading.className = "sherlock-menu-title";
+  heading.textContent = title;
+  const copy = document.createElement("p");
+  copy.className = "sherlock-menu-message";
+  copy.textContent = message;
+  menu.append(heading, copy);
+
+  for (const action of actions) {
+    const option = document.createElement("button");
+    option.type = "button";
+    option.setAttribute("role", "menuitem");
+    if (action.primary) option.className = "primary";
+    option.textContent = action.label;
+    option.addEventListener("click", async () => {
+      closeCredentialMenu();
+      await action.onClick?.();
+    });
+    menu.append(option);
+  }
+
+  iconShadow.append(menu);
+  positionSherlockMenu(menu, button);
 }
 
 function createFieldIcon(field) {
@@ -379,11 +854,14 @@ function createFieldIcon(field) {
   button.setAttribute("tabindex", "0");
   const img = document.createElement("img");
   img.alt = "";
-  img.src = extensionApi.runtime.getURL("icons/icon128.png");
+  img.dataset.sherlockIcon = "true";
+  img.src = iconResourceForTheme();
   button.append(img);
   button.addEventListener("click", async (event) => {
     event.preventDefault();
     event.stopPropagation();
+    closeCredentialMenu();
+    closeSherlockPrompt();
     button.disabled = true;
     try {
       const result = await extensionApi.runtime.sendMessage({
@@ -400,11 +878,11 @@ function createFieldIcon(field) {
       }
       const choices = result.choices || [];
       if (!choices.length) {
-        showToast("No hi ha cap entrada per a aquest lloc.");
+        askCreateNewEntry(field, button);
         return;
       }
       if (choices.length > 1) showCredentialMenu(button, field, choices);
-      else await fillSelected(field, choices[0]);
+      else await selectCredential(field, choices[0], button);
     } catch {
       showToast("SherLock està bloquejat. Obre l'app per desbloquejar-lo.");
     } finally {
@@ -495,7 +973,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     const { usernameEl, passwordEl } = findFormFields();
     sendResponse({
       success: true,
-      site: window.location.hostname.replace(/^www\./, ""),
+      site: siteHostname(window.location.hostname),
       username: usernameEl ? usernameEl.value : "",
       password: passwordEl ? passwordEl.value : "",
     });
@@ -525,7 +1003,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       // Show save prompt so user can save immediately with 1-click
       const { usernameEl } = findFormFields();
       showSavePrompt({
-        site: window.location.hostname,
+        site: siteHostname(window.location.hostname),
         username: usernameEl ? usernameEl.value.trim() : "",
         password: request.password,
       });
@@ -549,6 +1027,18 @@ function showSavePrompt({ site, username, password }) {
   const prompt = document.createElement("div");
   prompt.id = "sherlock-save-prompt";
   prompt.className = "sherlock-save-prompt";
+
+  const lightPrompt = iconHostElement.dataset.sherlockTheme === "light";
+  const injectedSize =
+    getComputedStyle(iconHostElement)
+      .getPropertyValue("--sherlock-font-size")
+      .trim() || "16px";
+  prompt.style.setProperty("font-size", injectedSize, "important");
+  if (lightPrompt) {
+    prompt.style.setProperty("background", "#ffffff", "important");
+    prompt.style.setProperty("color", "#172b4d", "important");
+    prompt.style.setProperty("border-color", "#d6e2f0", "important");
+  }
 
   const cleanSite = site.replace(/^www\./, "");
   const title = document.createElement("span");
@@ -576,6 +1066,12 @@ function showSavePrompt({ site, username, password }) {
   closeButton.title = "Tancar";
   closeButton.textContent = "X";
   prompt.replaceChildren(title, message, saveButton, closeButton);
+  prompt.querySelectorAll("button").forEach((button) => {
+    button.style.setProperty("font-size", injectedSize, "important");
+  });
+  if (lightPrompt) {
+    closeButton.style.setProperty("color", "#5b6b82", "important");
+  }
 
   prompt.querySelector(".cf-btn-close")?.addEventListener("click", () => {
     prompt.remove();
@@ -632,16 +1128,19 @@ document.addEventListener(
       form.querySelectorAll('input[type="password"]'),
     ).filter((el) => el.value && el.value.trim().length > 0);
 
-    if (passwordInputs.length > 0) {
+    if (passwordInputs.length > 0 && !credentialSubmitCheckInFlight) {
       const password = passwordInputs[0].value;
       const usernameInput = form.querySelector(
         'input[type="email"], input[type="text"], input[name*="user" i], input[name*="login" i], input[name*="mail" i]',
       );
       const username = usernameInput ? usernameInput.value.trim() : "";
-      showSavePrompt({
-        site: window.location.hostname,
+      credentialSubmitCheckInFlight = true;
+      handleSubmittedCredentials(
+        siteHostname(window.location.hostname),
         username,
         password,
+      ).finally(() => {
+        credentialSubmitCheckInFlight = false;
       });
     }
   },
